@@ -625,7 +625,7 @@ function render(creating = false) {
   $("#hdrCtl").hidden = !E;
   document.querySelectorAll("#menuPop [data-e]").forEach(b => b.hidden = !E || creating || (b.hasAttribute("data-r") && !E.result?.bridges));
   if (state.global) {  // every engagement, or two side by side: no engagement open, so no stages and no pages
-    $("#steps").hidden = true; $("#now").hidden = true;
+    $("#steps").hidden = true; $("#now").hidden = true; $("#modelCtl").hidden = true;
     const m = $("#main");
     keepOpen(m, () => { m.innerHTML = state.global.view === "compare" ? viewCompare() : viewAll(); bindGlobal(); });
     return;

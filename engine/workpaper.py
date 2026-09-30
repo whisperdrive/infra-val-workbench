@@ -452,8 +452,11 @@ def _log(S: _Sheet, eid: int):
     S.title("The run log", "Every start, outcome, decision and escalation, oldest first.", 5)
     S.header("When", "Stage", "Event", "What", "Issue")
     for h in reversed(orchestrator.history(eid, None, None, 2000)):
+        text = h.get("text") or ""
+        if h.get("event") == "decide":  # roles, not model names: "gpt-…: ok — why" as the reviewer's or the orchestrator's
+            text = re.sub(r"^[\w.\-]+:\s*", "the reviewer: " if h.get("stage") == "review" else "the orchestrator: ", text)
         S.line(when(h.get("at")), orchestrator.LABEL.get(h.get("stage"), h.get("stage") or ""), h.get("event") or "",
-               h.get("text") or "", h.get("issue") or "", fs=[None, None, None, f["wrap"], f["muted"]])
+               text, h.get("issue") or "", fs=[None, None, None, f["wrap"], f["muted"]])
     S.ws.freeze_panes(3, 0)
 
 

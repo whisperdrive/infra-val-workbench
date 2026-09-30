@@ -447,7 +447,11 @@ def overview_check(eid: int) -> None:
 def workpaper_check(eid: int) -> None:
     import io
     import openpyxl
-    book = openpyxl.load_workbook(io.BytesIO(workpaper.build(eid)), data_only=True)
+    import zipfile
+    data = workpaper.build(eid)
+    charts = [n for n in zipfile.ZipFile(io.BytesIO(data)).namelist() if n.startswith("xl/charts/chart")]
+    assert len(charts) == 2, charts  # the bridge's waterfall and the cash flows'
+    book = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
     want = ["Summary", "Bridge", "Cash flows", "Inputs", "Reconciliation", "Key facts", "Files and roles", "Review", "Run log"]
     assert book.sheetnames == want, book.sheetnames
     cells = lambda name: [[c for c in row] for row in book[name].iter_rows(values_only=True)]
@@ -459,6 +463,7 @@ def workpaper_check(eid: int) -> None:
     fy = [r for r in cells("Cash flows") if isinstance(r[0], str) and re.fullmatch(r"FY\d{2}", r[0])]
     assert len(fy) == len(res["chart"]["years"]) == 21, len(fy)
     assert any(c and str(c).startswith(workpaper.DISCLAIMER[:40]) for r in cells("Summary") for c in r), "no disclaimer"
+    assert not any(re.match(r"gpt-", str(r[3] or "")) for r in cells("Run log")), "a model's name in the log's copy"
     rate = [r for r in cells("Inputs") if r[0] and str(r[0]).startswith("Low (at the higher rate)")]
     assert rate and abs(rate[0][1] - res["inputs"]["rate"]["ends"]["low"]["value"]) < 1e-12 and "!" in rate[0][3], rate
     e = wb.create("Asset A, nothing yet")
@@ -471,8 +476,8 @@ def workpaper_check(eid: int) -> None:
     finally:
         wb.delete(e["id"])
     assert workpaper.build(10 ** 6) is None
-    print("workpaper: ok (9 sheets; the bridge's mid ends at this year's value; 21 financial years; the disclaimer; "
-          "the rate's figure then its cell; none before the bridge)")
+    print("workpaper: ok (9 sheets and 2 charts; the bridge's mid ends at this year's value; 21 financial years; the "
+          "disclaimer; the rate's figure then its cell; roles, not model names; none before the bridge)")
 
 
 def dates_check() -> None:
