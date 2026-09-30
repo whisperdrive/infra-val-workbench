@@ -192,8 +192,67 @@ def growth_check() -> None:
           "discount rate; typed into the formula, it isn't sourced)")
 
 
+def roll_dates_check() -> None:
+    """The roll-forward moves every valuation date the discountings read. Three discountings: one reads the input
+    (Inputs!C4), one a copy of it on its own sheet (=Inputs!C4), one a date typed on its own sheet. The input and
+    the typed date are moved (the copy follows its input); on the rolled feed each discounting reads the new date,
+    where moving the most common cell alone left the one with its own date discounting to last year's."""
+    import overlay as ov
+    import xlcompile
+    from xlruntime import serial
+    out = Path(tempfile.mkdtemp(prefix="trace_roll_"))
+    vd, new, rate, years = date(2025, 6, 30), date(2026, 6, 30), 0.08, list(range(2026, 2036))
+    wb = xlsxwriter.Workbook(out / "roll.xlsx")
+    dt = wb.add_format({"num_format": "dd-mmm-yy"})
+    inp = wb.add_worksheet("Inputs")
+    inp.write(3, 0, "Valuation date")
+    inp.write_datetime(3, 2, vd, dt)
+    inp.write(4, 0, "Discount rate")
+    inp.write_number(4, 2, rate)
+    flows = [100.0 + 5 * k for k in range(len(years))]
+    for name, date_ref in (("DCF_Low", "Inputs!$C$4"), ("DCF_High", "$C$4"), ("DCF_Own", "$C$4")):
+        sh = wb.add_worksheet(name)
+        sh.write(3, 1, "Valuation date")
+        if name == "DCF_High":
+            sh.write_formula("C4", "=Inputs!C4", dt, (vd - date(1899, 12, 30)).days)
+        elif name == "DCF_Own":
+            sh.write_datetime(3, 2, vd, dt)
+        for r, label in ((5, "Period ending"), (9, "Cash flow"), (12, "Discount factor"), (13, "Present value"),
+                         (15, "Equity value")):
+            sh.write(r, 1, label)
+        total = 0.0
+        for k, y in enumerate(years):
+            c, end = COL(3 + k), date(y, 6, 30)
+            f = 1 / (1 + rate) ** ((end - vd).days / 365)
+            total += flows[k] * f
+            sh.write_datetime(5, 3 + k, end, dt)
+            sh.write_number(9, 3 + k, flows[k])
+            sh.write_formula(f"{c}13", f"=1/(1+Inputs!$C$5)^(({c}6-{date_ref})/365)", None, f)
+            sh.write_formula(f"{c}14", f"={c}10*{c}13", None, flows[k] * f)
+        sh.write_formula("C16", f"=SUM(D14:{COL(3 + len(years) - 1)}14)", None, total)
+    wb.close()
+    db = build_map.main(str(out / "roll.xlsx"), str(out / "db"))["db"]
+    sheets = ["Inputs", "DCF_Low", "DCF_High", "DCF_Own"]
+    outputs = [{"cell": f"{s}!C16"} for s in sheets[1:]]
+    move, read = ov.discount_date_cells(db, outputs, sheets)
+    assert sorted(move) == ["DCF_Own!C4", "Inputs!C4"], move
+    assert sorted(read) == ["DCF_High!C4", "DCF_Own!C4", "Inputs!C4"], read
+    src, _ = xlcompile.compile_overlay(db, sheets)
+    mod = out / "overlay.py"
+    mod.write_text(src)
+    sess = ov.Session(str(mod), db, sheets)
+    sess.configure("workbook", {ov.parse_a1(c): serial(new) for c in move})
+    want = sum(x / (1 + rate) ** ((date(y, 6, 30) - new).days / 365) for x, y in zip(flows, years))
+    got = sess.values([ov.parse_a1(o["cell"]) for o in outputs])
+    assert all(abs(g - want) < 1e-6 for g in got), (got, want)
+    assert all(round(v) == serial(new) for v in sess.values([ov.parse_a1(c) for c in read]))
+    print(f"roll dates: ok (the input and a discounting's own date moved, the copy with its input: all three "
+          f"discountings at {new:%d %B %Y}, {want:,.1f} each)")
+
+
 if __name__ == "__main__":
     main()
     mid_year_check()
     sourcing_check()
     growth_check()
+    roll_dates_check()

@@ -515,6 +515,9 @@ def verify_roles(eid: int, a: dict) -> list[str]:
                        "last year's client model's")
     if a["prior_overlay"]["id"] == a["prior_model"]["id"] and not a["prior_overlay"].get("sheets"):
         bad.append("the overlay is inside the client model but its sheets aren't named")
+    elif a["prior_overlay"]["id"] == a["prior_model"]["id"] and ovw and \
+            set(ovw.get("sheet_names") or []) <= set(a["prior_overlay"]["sheets"]):
+        bad.append("the overlay is inside the client model but takes every sheet: none is left as the client's")
     return bad
 
 
@@ -717,6 +720,7 @@ def _rows_job(eid: int, key: str):
 
 
 def _result_job(eid: int, key: str):
+    import overlay as ovmod
     import result
     sess, summary = wb.overlay_session(eid)
     wb._sync_roll(eid, sess, summary)
@@ -729,16 +733,46 @@ def _result_job(eid: int, key: str):
     wb._set("engagements", eid, result_json=json.dumps(res, default=str), updated_at=time.time())
     needs = []
     g = res["figures"].get("gaps")
+    dc = (g or {}).get("date_cells") or {}
     if g and not g["reliable"]:
+        if g.get("no_reads"):
+            needs.append({"id": "no-reads", "stage": "result", "severity": "block",
+                          "title": "This year's value is held back: the overlay reads nothing of this year's client model",
+                          "detail": "which workbook is last year's client model, and which of the overlay's sheets are its "
+                                    "own? With none of the client's sheets left to feed, this year's model can't reach the "
+                                    "value (it would be last year's figures, rolled by date alone)",
+                          "go": {"step": "workbench", "anchor": "rolesCard"}})
+        if dc.get("off"):
+            off = dc["off"]
+            needs.append({"id": "dates-roll", "stage": "result", "severity": "block",
+                          "title": "This year's value is held back: a discounting still reads another valuation date",
+                          "detail": "; ".join(f"{x['cell']} reads {x['date']}" for x in off[:4]) +
+                                    f", not {dc.get('to')}: its date isn't one the roll-forward moves",
+                          "go": {"step": "workbench", "anchor": "datesCard"}})
         rows = [x["row"] + (f" ({x['label']})" if x.get("label") else "") for x in
                 g["dcf_missing"] + g["blank_rows"] + g["weak_rows"] + g["timing_open"]]
         zero = [c for c, x in g["by_cell"].items() if not x["zero_roll"]["ok"]]
-        needs.append({"id": "rows", "stage": "result", "severity": "block",
-                      "title": "This year's value is held back: rows to find in this year's model",
-                      "detail": (f"{len(rows)} row(s): {', '.join(rows[:6])}" if rows else "") +
-                                (f"; the zero-roll check fails on {', '.join(zero)}" if zero else "") +
-                                ("; this year's valuation date isn't known" if g.get("date_check") else ""),
-                      "go": {"step": "result", "anchor": "rowsCard"}, "rows": rows})
+        if rows or zero or g.get("date_check") or not needs:
+            needs.append({"id": "rows", "stage": "result", "severity": "block",
+                          "title": "This year's value is held back: rows to find in this year's model",
+                          "detail": (f"{len(rows)} row(s): {', '.join(rows[:6])}" if rows else "") +
+                                    (f"; the zero-roll check fails on {', '.join(zero)}" if zero else "") +
+                                    ("; this year's valuation date isn't known" if g.get("date_check") else ""),
+                          "go": {"step": "result", "anchor": "rowsCard"}, "rows": rows})
+    if g and dc.get("by_label"):
+        needs.append({"id": "dates-label", "stage": "result", "severity": "check",
+                      "title": f"The valuation date moved is the one labelled so ({dc['moved'][0]})",
+                      "detail": "the discountings under the value couldn't be traced, so it isn't confirmed that they read it",
+                      "go": {"step": "workbench", "anchor": "datesCard"}})
+    moved = [(c, x["zero_roll"]["ratio"]) for c, x in ((g or {}).get("by_cell") or {}).items()
+             if x["zero_roll"]["ok"] and x["zero_roll"]["ratio"] is not None
+             and not ovmod.ZERO_ROLL_CHECK[0] <= x["zero_roll"]["ratio"] <= ovmod.ZERO_ROLL_CHECK[1]]
+    if moved:
+        needs.append({"id": "zero-roll", "stage": "result", "severity": "check",
+                      "title": f"At last year's valuation date, this year's model gives {moved[0][1]:.2f}× last year's value",
+                      "detail": "; ".join(f"{c}: {r:.2f}×" for c, r in moved) + ": a move of that size is usually the new "
+                                "forecast, but a row matched wrongly looks the same. Check the new forecast's step",
+                      "go": {"step": "result", "anchor": "bridgeCard"}})
     for r in (res.get("reconcile") or {}).get("rows") or []:
         if r.get("ok") is False:
             bad = [f"{e}: report {r['report'][e]}, Python {r['python'][e]:,.1f}" for e, ok in r["ties"].items()
@@ -869,7 +903,9 @@ PAGE = {"files": "workbench", "facts": "report", "roles": "workbench", "rebuild"
 PAGE_ANCHOR = {"workbench": "filesCard", "report": "reportCard", "rebuild": "tieCard", "result": "bridgeCard"}
 # What a need asks of a person, by its id (the first that fits): its kind, and how the page names it
 KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact", "A fact to add"),
-         ("roles", "confirm-roles", "The roles to confirm"), ("date-overlay", "check-date", "A date to check"),
+         ("roles", "confirm-roles", "The roles to confirm"), ("no-reads", "check-roles", "The roles to check"),
+         ("dates-", "check-date", "A date to check"), ("zero-roll", "check-forecast", "A move to check"),
+         ("date-overlay", "check-date", "A date to check"),
          ("date", "confirm-date", "A date to confirm"), ("equity", "pick-cells", "Cells to pick"),
          ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),
          ("rate-", "check-input", "A model input to check"), ("growth-", "check-input", "A model input to check"),

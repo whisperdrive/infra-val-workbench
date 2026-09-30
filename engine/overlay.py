@@ -563,9 +563,10 @@ def build(out_dir: Path, overlay: dict, prior: dict | None, current: dict | None
         vd_lever = next((l for l in levers if l["key"] == "valuation_date"), None)
         roll = plan_roll(sess, prior, overlay, same_file, prior_val_date, (prior or {}).get("valuation_date"),
                          current.get("valuation_date"))
-        # the date the discountings under the figures read is the one to move: a cell labelled like the valuation date
-        # elsewhere (a client inputs sheet holding the same date) would leave them discounting to last year's
-        roll["valuation_date_cell"] = discount_date_cell(overlay["db_path"], outputs) or (vd_lever["cell"] if vd_lever else None)
+        # the dates the discountings under the figures read are the ones to move, every one of them: a cell labelled
+        # like the valuation date elsewhere (a client inputs sheet holding the same date) would leave them
+        # discounting to last year's, and so would moving one discounting's date and not another's
+        roll.update(date_cells(overlay["db_path"], outputs, sheets, vd_lever))
     summary = {"module": str(module), "stats": {k: v for k, v in stats.items() if k != "not_compiled"},
                "not_compiled": stats["not_compiled"][:50], "validation": val, "levers": levers, "outputs": outputs,
                "feeds": feeds, "roll": roll, "sheets": sheets,
@@ -576,11 +577,14 @@ def build(out_dir: Path, overlay: dict, prior: dict | None, current: dict | None
     return summary, sess
 
 
-def discount_date_cell(path: str, outputs: list[dict]) -> str | None:
-    """The valuation date cell the discountings under the outputs read (dcftrace), the most common if they differ."""
+def discount_date_cells(path: str, outputs: list[dict], sheets=None) -> tuple[list[str], list[str]]:
+    """The valuation dates the discountings under the outputs read (dcftrace), and the cells to move for them: each
+    followed back through plain references (DCF_High!C3 = Inputs!C4) to the cell it's typed in, so a copy and
+    everything else reading the date move together; a discounting with a date of its own has it moved too.
+    -> (the cells to move, the cells the discountings read)."""
     import dcf
     import dcftrace
-    seen = Counter()
+    move, read = [], []
     with _ro(path) as db:
         for o in outputs[:8]:
             try:
@@ -590,9 +594,39 @@ def discount_date_cell(path: str, outputs: list[dict]) -> str | None:
             for c in cores:
                 v = (c.get("inputs") or {}).get("valuation_date")
                 r = dcf._ref(v, "") if isinstance(v, str) else None
-                if r:
-                    seen[_a1(r[0], r[1], r[2])] += 1
-    return seen.most_common(1)[0][0] if seen else None
+                if not r:
+                    continue
+                at, root = _a1(r[0], r[1], r[2]), _typed_in(db, r[0], r[1], r[2], sheets)
+                read += [at] if at not in read else []
+                move += [root] if root not in move else []
+    return move, read
+
+
+def _typed_in(db, sheet: str, row: int, col: int, sheets=None, hops: int = 8) -> str:
+    """The cell a value is typed into, following plain references back (=Inputs!C4, =$C$4) within the overlay's own
+    sheets; where a formula does more than refer (EOMONTH(...), a name, another workbook), that cell itself."""
+    import dcf
+    for _ in range(hops):
+        f = db.execute("SELECT formula FROM cells WHERE sheet=? AND row=? AND col=?", (sheet, row, col)).fetchone()
+        body = ((f[0] if f else None) or "").lstrip("=+ ").strip()
+        if not re.fullmatch(r"(?:(?:'[^'\[\]]+'|[A-Za-z0-9_.]+)!)?\$?[A-Z]{1,3}\$?\d+", body):
+            break
+        r = dcf._ref(body, sheet)
+        if not r or (sheets and r[0] not in sheets):
+            break  # a client sheet's cell is fed from the client model, not moved in the overlay
+        sheet, row, col = r[0], r[1], r[2]
+    return _a1(sheet, row, col)
+
+
+def date_cells(path: str, outputs: list[dict], sheets, lever: dict | None) -> dict:
+    """The roll's valuation date cells: {"valuation_date_cells" (to move), "valuation_date_reads" (the cells the
+    discountings read, checked on this year's feed), "valuation_date_cell" (the first, shown), "valuation_date_by_label"
+    (none traced: the cell labelled as the valuation date is moved, unconfirmed)}."""
+    move, read = discount_date_cells(path, outputs, sheets)
+    if not move and lever:
+        move = [lever["cell"]]
+    return {"valuation_date_cells": move, "valuation_date_reads": read, "valuation_date_cell": move[0] if move else None,
+            "valuation_date_by_label": bool(move) and not read}
 
 
 def horizon(prior: Workbook, current: Workbook, sheets, sheet_for=None) -> tuple[str | None, dict]:
@@ -669,6 +703,8 @@ def roll_months(sess: Session, prior: dict | None, overlay: dict, same_file: boo
 
 
 ZERO_ROLL = (0.75, 1.33)  # this year's model at last year's date, against last year's figure: about the same
+ZERO_ROLL_CHECK = (0.87, 1.15)  # inside ZERO_ROLL but outside this, the value runs and a person is asked to confirm
+                                # the move is the new forecast (a judgment call: forecasts move, a mismatched row too)
 ROLL_PLAN = 4  # the rules' version: a roll planned by older rules is planned again when a session loads
 ROLL_MAX = 24  # months: a move beyond it from the timelines isn't a roll-forward
 ROLL_SHEETS = 5  # sheets: fewer can't show how far the timelines moved
@@ -698,9 +734,10 @@ def _feed(summary: dict, mode: str, valuation_date: str | None, months: int | No
     pvd = roll.get("prior_valuation_date")
     if months is None:  # the plan's months; a date chosen on the page moves the periods as far as it moves from last year's
         months = months_between(pvd[:10], valuation_date[:10]) if chosen and pvd else roll.get("months", 12)
-    vd_cell = roll.get("valuation_date_cell")
-    defaults = {parse_a1(vd_cell): serial(date.fromisoformat(valuation_date[:10]))} if valuation_date and vd_cell else {}
-    return defaults, {"months": months, "valuation_date": valuation_date, "valuation_date_cell": vd_cell}, months
+    vd_cells = roll.get("valuation_date_cells") or ([roll["valuation_date_cell"]] if roll.get("valuation_date_cell") else [])
+    defaults = {parse_a1(c): serial(date.fromisoformat(valuation_date[:10])) for c in vd_cells} if valuation_date else {}
+    return defaults, {"months": months, "valuation_date": valuation_date, "valuation_date_cell": vd_cells[0] if vd_cells
+                      else None, "valuation_date_cells": vd_cells}, months
 
 
 def scenario(sess: Session, summary: dict, mode: str, changes: dict, valuation_date: str | None = None,

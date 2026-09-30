@@ -42,7 +42,8 @@ takes it from there:
    and what's established so far (target, client, valuation date, units, the equity value's basis). It's context for
    what a figure means, not a source of figures.
 4. **Works out which file is which.** It uses likeness, dates, links and where the report's figures sit, with a second
-   opinion. It confirms the roles only when the evidence supports it.
+   opinion. It confirms the roles only when the evidence supports it (an overlay inside the client model must leave
+   the client's sheets as the client's).
 5. **Rebuilds last year in Python.** The overlay's formulas are compiled to a module and checked cell by cell against
    Excel. The report's equity value is found in it and tied; the Python rebuild feeds it again from last year's client
    model. The inputs the report also states are sourced, not inferred (`sourced.py`): each is the cell the model's
@@ -59,10 +60,21 @@ takes it from there:
    report discloses of the value (the terminal value, the PV of the forecast and of the terminal value,
    the value of franking credits and its share) is reconciled to the same split of the overlay's discountings.
 6. **Rolls forward onto this year's client model.** Rows are found by label, history and numbers, with row agents for
-   the ones in doubt. This year's value is shown only where the rows its cash flows come from were found.
+   the ones in doubt. The valuation date moves wherever the discountings read it: each discounting's date is
+   followed back to the cell it's typed in, and every one of those moves (a copy on a DCF sheet moves with its input;
+   a DCF sheet with a date of its own has it moved too). This year's value is shown only where it can be trusted, and
+   is held back otherwise, with a need that says why:
+   - the rows its cash flows come from weren't found (or were found blank, or not surely);
+   - a discounting still reads another date than this year's valuation date;
+   - the overlay reads nothing of this year's client model (last year's figures, rolled by date alone);
+   - the zero-roll check fails: at last year's valuation date, this year's model is far from last year's value.
+
+   A move of more than about 15% at last year's date (`overlay.ZERO_ROLL_CHECK`, a judgment call) doesn't hold the
+   value but asks you to confirm it's the new forecast and not a row matched wrongly.
 7. **Bridges last year's value to this year's.** Report → rounding → rebuilt → time value → last year's cash flows paid
-   → this year's forecast → discount rate → this year, for the low and the high; the mid is their average. A chart
-   compares the undiscounted forecast cash flows, last year's and this year's.
+   → this year's forecast → discount rate → this year, for the low and the high; the mid is their average. Where a
+   discounting under the value can't be read here, the roll-forward is one step, not its unwind landed in the new
+   forecast. A chart compares the undiscounted forecast cash flows, last year's and this year's.
 8. **Has gpt-sol review the run end to end** and says what looks implausible.
 
 **The conventions:**

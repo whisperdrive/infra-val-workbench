@@ -16,6 +16,8 @@
   inside    the same run with the overlay inside a copy of the client model and the report as slides
   workpaper the Excel workpaper built from the run, in memory: its sheets, the bridge's mid ends at this year's value,
             a row for every financial year of the cash flows, the disclaimer on its summary; none before the bridge
+  gate      this year's value held, with the reason, where it can't be trusted: a discounting left on last year's
+            date, nothing of this year's model read; a big move at last year's date is a point to check
   overview  every engagement at a glance: where it is (a finished one, an empty one), its values
   facts     the code checks behind the models, on the reviewers' cases: scale and currency, the label a figure sits
             under, dates and longer numbers, names, ranges, the image's waivers, table rows and headings, a blind read
@@ -450,6 +452,79 @@ def overview_check(eid: int) -> None:
     print("overview: ok (a finished engagement with its values and what's for a person; an empty one as empty)")
 
 
+def gate_check() -> None:
+    """This year's value is held, with a need that says why, where it can't be trusted:
+    - a discounting left on last year's valuation date (its date cell not among those the roll moves);
+    - the overlay placed as last year's client model with every sheet its own: nothing of this year's model is read
+      (placed by a person, the roles stand, and the value waits);
+    and the roles check refuses that placement when it's the orchestrator's. A big move at last year's date is a
+    point to check, not a hold; a discounting that can't be read makes the roll-forward one step."""
+    import overlay as ovmod
+    import result
+    e = wb.create("Asset A, FY26 (the gate)")
+    eid = e["id"]
+    for f in PACK_A:
+        upload(eid, f)
+    wait(eid, lambda v: status(v)["result"] in orc.SETTLED and status(v)["review"] in orc.SETTLED, "the result")
+    # every discounting reads this year's date, or the value waits
+    sess, summary = wb.overlay_session(eid)
+    roll, cells = summary["roll"], orc.equity_cells(eid)
+    assert roll["valuation_date_reads"] and roll["valuation_date_cells"], roll
+    g = result.figures(sess, summary, cells)["gaps"]
+    assert g["reliable"] and not g["date_cells"]["off"] and not g["no_reads"], g["date_cells"]
+    kept = {k: roll[k] for k in ("valuation_date_cells", "valuation_date_cell")}
+    roll.update(valuation_date_cells=[], valuation_date_cell=None)
+    try:
+        g = result.figures(sess, summary, cells)["gaps"]
+        assert not g["reliable"] and g["date_cells"]["off"][0]["date"] == "2025-06-30", g["date_cells"]
+        st, _, data = orc._result_job(eid, "gate")
+        need = next(n for n in data["needs"] if n["id"] == "dates-roll")
+        assert st == "blocked" and need["severity"] == "block" and "2025-06-30" in need["detail"], data["needs"]
+    finally:
+        roll.update(kept)
+    # a big move at last year's date: a point to check, the value runs
+    band = ovmod.ZERO_ROLL_CHECK
+    ovmod.ZERO_ROLL_CHECK = (0.95, 1.05)
+    try:
+        st, _, data = orc._result_job(eid, "gate")
+        need = next(n for n in data["needs"] if n["id"] == "zero-roll")
+        assert need["severity"] == "check" and st != "blocked" and "1.10×" in need["title"], data["needs"]
+    finally:
+        ovmod.ZERO_ROLL_CHECK = band
+        orc._result_job(eid, "gate")
+    # a discounting that can't be read here: the roll-forward is one step, not its unwind in the new forecast
+    t = {"cores": [{"cell": "DCF!C9", "call": "SUMPRODUCT", "inputs": {"rate": 0.08}},
+                   {"cell": "DCF!C10", "call": "NPV", "inputs": None}]}
+    steps, note = result._steps(None, (t, t["cores"][:1]), 100.0, 130.0, "2026-06-30")
+    assert [x["key"] for x in steps] == ["roll"] and steps[0]["value"] == 30.0 and "1 of the 2" in note, (steps, note)
+    # the overlay as last year's client model, every sheet its own
+    rl = wb.roles(eid)
+    ov_id = rl["prior_overlay"]["id"]
+    every = next(w["sheet_names"] for w in wb.workbooks(eid) if w["id"] == ov_id)
+    a = {k: {"kind": r["kind"], "id": r["id"], "sheets": r["sheets"]} for k, r in rl.items()}
+    a.update(prior_model={"kind": "workbook", "id": ov_id, "sheets": None},
+             prior_overlay={"kind": "workbook", "id": ov_id, "sheets": every})
+    assert "the overlay is inside the client model but takes every sheet: none is left as the client's" in \
+        orc.verify_roles(eid, a), orc.verify_roles(eid, a)
+    # two roles placed so, the rest left to the orchestrator: it fills in the overlay's sheets, and its check refuses them
+    wb.confirm_roles(eid, {"prior_model": a["prior_model"], "prior_overlay": {**a["prior_overlay"], "sheets": None}}, "you")
+    orc.poke()
+    v = wait(eid, lambda v: status(v)["roles"] == "blocked", "the roles check")
+    assert any("takes every sheet" in (h["text"] or "") for h in v["log"] if h["stage"] == "roles"), v["log"][:5]
+    # every role placed by a person: their choice stands, and the value waits, saying why
+    wb.confirm_roles(eid, {**a, "prior_overlay": {**a["prior_overlay"], "sheets": None}}, "you")
+    orc.poke()
+    v = wait(eid, lambda v: any(n["id"] == "no-reads" for n in v["needs"]), "the no-reads hold")
+    need = next(n for n in v["needs"] if n["id"] == "no-reads")
+    assert need["severity"] == "block" and need["go"]["anchor"] == "rolesCard", need
+    assert wb.get(eid)["result"]["values"]["this_year"] is None, wb.get(eid)["result"]["values"]
+    assert all(r["by"] == "you" for k, r in wb.roles(eid).items() if k in ("prior_model", "prior_overlay"))
+    wb.delete(eid)
+    print("gate: ok (held, with the reason, where a discounting still reads last year's date or nothing of this year's "
+          "model is read; the roles check refuses the overlay taking every sheet; a big move at last year's date is a "
+          "point to check; an unreadable discounting makes the roll-forward one step)")
+
+
 def workpaper_check(eid: int) -> None:
     import io
     import openpyxl
@@ -697,6 +772,7 @@ def main() -> None:
     eid = run_check()
     workpaper_check(eid)
     overview_check(eid)
+    gate_check()
     gating_check(eid)
     roles_check()
     escalate_check()

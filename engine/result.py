@@ -140,11 +140,16 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
     return out
 
 
+FOUND_MIN = 0.9  # a figure not under a discounting: this share of its client reads found in this year's model
+
+
 def _gaps(sess, summary: dict, cells: list[str]) -> dict:
-    """Whether this year's value can be trusted, for each cell: the rows its discountings' cash flows come from are
-    found in this year's model (or picked, or kept on purpose), none of the rows read is found but blank or found
-    with little confidence, the timing rows are found or worked out, this year's valuation date is known, and the
-    zero-roll check holds (this year's model at last year's date gives about last year's value)."""
+    """Whether this year's value can be trusted, for each cell: this year's client model is read at all (an overlay
+    that reads nothing of it would give last year's figures, rolled by date alone), the rows its discountings' cash
+    flows come from are found in this year's model (or picked, or kept on purpose), none of the rows read is found
+    but blank or found with little confidence, the timing rows are found or worked out, this year's valuation date is
+    known and every discounting reads it, and the zero-roll check holds (this year's model at last year's date gives
+    about last year's value)."""
     by_fig = ov.dcf_origins(sess, summary, cells)
     origins = sorted({k for x in by_fig.values() for k in x["amounts"]})
     timing = sorted({k for x in by_fig.values() for k in x["timing"]} - {(s_, r_, "") for s_, r_ in origins})
@@ -156,7 +161,18 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
             if rule:
                 sess.derived[(s_, r_)] = rule
     keys = [ov.parse_a1(c) for c in cells]
-    this, _, _, _ = _read(sess, summary, "current", keys)
+    this, info, _, _ = _read(sess, summary, "current", keys)
+    roll = summary.get("roll") or {}
+    date_hold = bool(roll.get("date_check"))
+    # every discounting under the figures reads this year's valuation date on this year's feed (not one of them
+    # left on a date cell of its own, discounting to last year's)
+    vd_reads, vd_off = roll.get("valuation_date_reads") or [], []
+    if vd_reads and not date_hold and (info or {}).get("valuation_date"):
+        want = ov.serial(date.fromisoformat(info["valuation_date"][:10]))
+        for c, v in zip(vd_reads, sess.values([ov.parse_a1(c) for c in vd_reads])):
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or round(v) != want:
+                vd_off.append({"cell": c, "date": ov.to_date(v).isoformat() if isinstance(v, (int, float)) and v > 0
+                               else str(v)})
     by_row = Counter((s_, r_) for (s_, r_, _c) in sess.unmatched)
     read_by_row = Counter((s_, r_) for (s_, r_, _c) in sess.client_reads)
     labels = src.labels()
@@ -176,9 +192,8 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
     timing_open = [k for k in sorted(timing_rows) if k in read_by_row and k not in sess.derived
                    and (not sess.rowmap.confident(*k) or agents_kept(k))]
     reads = len(sess.client_reads)
-    share = 1 - len(sess.unmatched) / reads if reads else 1.0
-    date_hold = bool((summary.get("roll") or {}).get("date_check"))
-    pvd = (summary.get("roll") or {}).get("prior_valuation_date")
+    share = 1 - len(sess.unmatched) / reads if reads else 0.0  # nothing read of this year's model: nothing found
+    pvd = roll.get("prior_valuation_date")
     zero = this if date_hold else (_read(sess, summary, "current", keys, pvd, 0)[0] if pvd else None)
     last, _, _, _ = _read(sess, summary, "prior" if summary["wiring"].get("prior") else "workbook", keys)
     by_cell = {}
@@ -191,8 +206,8 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
               "ok": ratio is not None and ov.ZERO_ROLL[0] <= ratio <= ov.ZERO_ROLL[1], "valuation_date": pvd}
         by_cell[c] = {"basis": "dcf" if mine else "share", "dcf_rows": len(mine),
                       "missing": [f"{s_}!r{r_}" for s_, r_ in gone], "zero_roll": zr,
-                      "reliable": (not gone if mine else share >= 0.5) and not blank_rows and not weak_rows
-                      and not timing_open and not date_hold and zr["ok"]}
+                      "reliable": (not gone if mine else share >= FOUND_MIN) and reads > 0 and not blank_rows
+                      and not weak_rows and not timing_open and not date_hold and not vd_off and zr["ok"]}
 
     def why_missing(k):
         if ex(*k).get("stand_in"):
@@ -208,6 +223,9 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
     zero_off = [{"cell": c, "label": ov_labels.get(ov.parse_a1(c)[:2], "") or c, **x["zero_roll"]}
                 for c, x in by_cell.items() if not x["zero_roll"]["ok"]]
     return {"reliable": all(x["reliable"] for x in by_cell.values()), "by_cell": by_cell, "date_check": date_hold,
+            "no_reads": reads == 0,
+            "date_cells": {"moved": roll.get("valuation_date_cells") or [], "read": vd_reads, "off": vd_off,
+                           "by_label": bool(roll.get("valuation_date_by_label")), "to": (info or {}).get("valuation_date")},
             "zero_roll_off": zero_off, "read_rows": [f"{s_}!r{r_}" for s_, r_ in sorted(read_by_row)],
             "timing": [{"row": f"{s_}!r{r_}", "label": labels.get((s_, r_), ""), "why": why, "found": found((s_, r_)),
                         "derived": (sess.derived.get((s_, r_)) or {}).get("text"), "open": (s_, r_) in timing_open}
@@ -272,6 +290,11 @@ def _steps(prior_db, traced, v0: float, v2: float, vd1: str | None) -> tuple[lis
         return [{"key": "roll", "label": "Roll-forward onto this year's model", "value": v2 - v0}], \
             "no valuation date for this year"
     t, cs = traced
+    every = dcftrace.cores(t)
+    if len(cs) < len(every):  # its unwind can't be split out, and would land in the new forecast
+        return [{"key": "roll", "label": "Roll-forward onto this year's model (time, cash flows and forecast)", "value": v2 - v0}], \
+            (f"{len(every) - len(cs)} of the {len(every)} discountings under it can't be read here, so the roll-forward "
+             "is one step")
     try:
         base = {c["cell"]: dcf.compute(prior_db, **{**c["inputs"], "compare_to": None}, fix=False) for c in cs}
         again = dcftrace.recompute(prior_db, t, {k: x["total"] for k, x in base.items()})

@@ -1093,6 +1093,10 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
     roll = summary.get("roll")
     if not roll or not summary["wiring"].get("current"):
         return
+    if "valuation_date_reads" not in roll:  # built before every date the discountings read was moved: work them out
+        lever = next((l for l in summary.get("levers") or [] if l["key"] == "valuation_date"), None)
+        roll.update(ovmod.deep(ovmod.date_cells, summary["wiring"]["overlay"]["db_path"], summary.get("outputs") or [],
+                               summary.get("sheets"), lever))
     now = _dates(eid)
     d = now["dates"]
     if d != roll.get("dates") or roll.get("plan") != ovmod.ROLL_PLAN or roll.get("horizon_set") != want:
