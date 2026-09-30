@@ -723,9 +723,12 @@ def plan_roll(sess: Session, prior: dict | None, overlay: dict, same_file: bool,
             "dates": {"overlay": ov_vd, "prior_client": prior_vd, "current_client": current_vd, "this_year": this_vd}}
 
 
-def _feed(summary: dict, mode: str, valuation_date: str | None, months: int | None) -> tuple[dict, dict | None, int]:
-    """A feed's own settings, the base that a person's changes go on top of: rolled forward, the months to roll
-    and the new valuation date on its lever. -> (overrides, roll info or None, months)."""
+def _feed(summary: dict, mode: str, valuation_date: str | None, months: int | None,
+          held: bool = True) -> tuple[dict, dict | None, int]:
+    """A feed's own settings, the base that a person's changes go on top of: rolled forward, the months to roll,
+    the new valuation date on its lever, and this year's figures a person set for inputs otherwise held at last
+    year's (held.py; held=False leaves them at last year's, for the bridge's step). -> (overrides, roll info or None,
+    months)."""
     if mode != "current":
         return {}, None, 0
     roll = summary.get("roll") or {}
@@ -736,6 +739,9 @@ def _feed(summary: dict, mode: str, valuation_date: str | None, months: int | No
         months = months_between(pvd[:10], valuation_date[:10]) if chosen and pvd else roll.get("months", 12)
     vd_cells = roll.get("valuation_date_cells") or ([roll["valuation_date_cell"]] if roll.get("valuation_date_cell") else [])
     defaults = {parse_a1(c): serial(date.fromisoformat(valuation_date[:10])) for c in vd_cells} if valuation_date else {}
+    if held:
+        defaults.update({parse_a1(c): float(x["value"]) for c, x in (summary.get("held_values") or {}).items()
+                         if x.get("value") is not None})
     return defaults, {"months": months, "valuation_date": valuation_date, "valuation_date_cell": vd_cells[0] if vd_cells
                       else None, "valuation_date_cells": vd_cells}, months
 

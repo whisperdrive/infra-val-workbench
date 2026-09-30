@@ -194,6 +194,22 @@ async def workpaper_xlsx(eid: int):
                     headers={"Content-Disposition": f'attachment; filename="{workpaper.filename(g)}"', **FRESH})
 
 
+class Held(BaseModel):
+    cell: str
+    value: float | None = None
+    source: str = "typed"
+
+
+@app.post("/api/engagements/{eid}/held")
+async def set_held(eid: int, body: Held):
+    """This year's figure for an input held at last year's (value null: back to last year's)."""
+    got = await _run(workbench.set_held, eid, body.cell, body.value, body.source)
+    orchestrator.person(eid, "result", f"{got['label']}: " + (
+        f"this year's {got['value']:,.1f} ({'accepted from this year’s model' if body.source == 'suggestion' else 'typed'}), "
+        f"was {got['was']:,.1f}" if got["value"] is not None else f"back to last year's {got['was']:,.1f}"))
+    return got
+
+
 @app.post("/api/engagements/{eid}/files")
 async def upload(eid: int, file: UploadFile = File(...), role: str | None = Form(None)):
     """A file for the engagement; with role, placed in that role by you (the orchestrator fills in the others)."""

@@ -48,7 +48,7 @@ conclusion: equity_value: the concluded equity value. low_text / high_text for t
             cash flows), pv_terminal_value (present value of the terminal value), franking_credits_value (the
             value of franking credits in the equity value), franking_credits_share (that value as a % of the
             equity value)
-assumption: discount_rate (low_text / high_text for a range; basis e.g. post-tax nominal WACC, cost of equity),
+assumption: discount_rate (low_text / high_text for a range; basis e.g. cost of equity, or a post-tax nominal WACC),
             terminal_growth_rate, franking_utilisation (the franking credit utilisation rate, or gamma)
 Nothing else: no other keys."""
 KNOWN = {"target_name", "client", "valuation_date", "currency_units", "equity_value", "equity_value_cum",
@@ -59,7 +59,7 @@ CRITICAL = ("valuation_date", "equity_value", "discount_rate")  # the bridge can
 FIELDS = """- value_text: exactly as printed ("7.25%", "A$2,296.7m", "30 June 2025"); low_text / high_text for a range,
   else "". value: the number in value_text (7.25 for 7.25%, 2296.7 for A$2,296.7m, 20250630 for a date as
   YYYYMMDD) or null for text. unit: "%", "x", "date", "years", "text" or the currency units ("A$m").
-- basis: what the figure is on (e.g. "post-tax nominal WACC", "preferred", "real"), else "".
+- basis: what the figure is on (e.g. "cost of equity", "post-tax nominal WACC", "preferred", "real"), else "".
 - page: the N of the nearest "<!-- page N -->" marker above the text you used.
 - quote: copied verbatim from the document, the shortest sentence or table row that states the value
   (a table row as its cells separated by spaces, without the | characters). Never paraphrase."""

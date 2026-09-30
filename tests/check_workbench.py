@@ -16,6 +16,8 @@
   inside    the same run with the overlay inside a copy of the client model and the report as slides
   workpaper the Excel workpaper built from the run, in memory: its sheets, the bridge's mid ends at this year's value,
             a row for every financial year of the cash flows, the disclaimer on its summary; none before the bridge
+  held      inputs typed in the overlay outside its discountings: held at last year's, a suggestion from this year's
+            model checked against last year's, applied when a person sets it, a bridge step of its own
   review    the review is a decision like the others: once per result, a try again doesn't buy another
   gate      this year's value held, with the reason, where it can't be trusted: a discounting left on last year's
             date, nothing of this year's model read; a big move at last year's date is a point to check
@@ -246,6 +248,8 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     res = e["result"]
     assert res["head"]["basis"] == "ex" and abs(res["head"]["mid"] - 2507.9) < 1e-9, res["head"]
     assert res["tie"]["low"]["ok"] and res["tie"]["high"]["ok"] and res["tie"]["low"]["rebuilt_ok"], res["tie"]
+    held = {h["cell"]: h["suggestion"]["status"] for h in res.get("held") or []}  # either layout: found, and checked
+    assert held == {"Val_Inputs!C7": "checked", "Val_Inputs!C8": "checked"}, held
     v = res["values"]
     assert abs(v["rebuilt"]["mid"] - 2507.876) < 0.01 and v["this_year"]["mid"] > v["rebuilt"]["mid"], v
     steps = res["bridges"]["mid"]["steps"]
@@ -451,6 +455,57 @@ def overview_check(eid: int) -> None:
     finally:
         wb.delete(e["id"])
     print("overview: ok (a finished engagement with its values and what's for a person; an empty one as empty)")
+
+
+def held_check(eid: int) -> None:
+    """The inputs typed in the overlay outside its discountings (net debt, a declared distribution) are listed as held
+    at last year's, each with a suggestion from this year's client model found through the row that holds last year's
+    figure in last year's model (checked), and a point to check. Nothing changes until a person sets this year's
+    figure: then the bridge has a step of its own for it, and this year's value moves by exactly that; back to last
+    year's, it's the first result again."""
+    import make_pack
+    res = wb.get(eid)["result"]
+    by = {h["cell"]: h for h in res["held"]}
+    nd, dist = by["Val_Inputs!C7"], by["Val_Inputs!C8"]
+    assert (nd["value"], dist["value"]) == (make_pack.NET_DEBT, make_pack.DISTRIBUTION) and nd["held"] and dist["held"], by
+    assert nd["suggestion"]["status"] == dist["suggestion"]["status"] == "checked", (nd["suggestion"], dist["suggestion"])
+    assert (nd["suggestion"]["value"], dist["suggestion"]["value"]) == (make_pack.NET_DEBT_NEW, make_pack.DISTRIBUTION_NEW)
+    assert nd["suggestion"]["last"]["value"] == make_pack.NET_DEBT and "Less: net debt" in [x["label"] for x in nd["lines"]]
+    needs = [n for n in orc.view(eid)["needs"] if n["id"].startswith("held-")]
+    assert len(needs) == 2 and all(n["severity"] == "check" and n["go"]["anchor"] == "heldCard" for n in needs), needs
+    assert "held" not in [x["key"] for x in res["bridges"]["mid"]["steps"]]
+    mid0 = res["values"]["this_year"]["mid"]
+    finished = lambda: orc.stage(eid, "result").get("finished_at")
+    t0 = finished()
+    wb.set_held(eid, "Val_Inputs!C7", nd["suggestion"]["value"], "suggestion")
+    wb.set_held(eid, "Val_Inputs!C8", 30.0, "typed")
+    orc.poke()
+    wait(eid, lambda v: finished() != t0 and not v["busy"] and status(v)["result"] in orc.SETTLED, "the result with this year's inputs")
+    res = wb.get(eid)["result"]
+    move = -(make_pack.NET_DEBT_NEW - make_pack.NET_DEBT) - (30.0 - make_pack.DISTRIBUTION)
+    for end in ("low", "mid", "high"):
+        step = next(x for x in res["bridges"][end]["steps"] if x["key"] == "held")
+        assert abs(step["value"] - move) < 1e-6, (end, step)
+    assert abs(res["values"]["this_year"]["mid"] - (mid0 + move)) < 1e-6, (res["values"]["this_year"], mid0, move)
+    assert not [n for n in orc.view(eid)["needs"] if n["id"].startswith("held-")]
+    import io
+    import openpyxl
+    book = openpyxl.load_workbook(io.BytesIO(workpaper.build(eid)), data_only=True)
+    rows = [r for r in book["Inputs"].iter_rows(values_only=True) if r[0] == "Net debt at valuation date"]
+    assert rows and rows[0][2] == make_pack.NET_DEBT_NEW and "accepted from the model" in rows[0][3], rows
+    assert any(r[6] == "Held inputs" for r in book["Bridge"].iter_rows(values_only=True)), "no held step in the chart"
+    assert {h["cell"]: (h["held"], h["this_year"], h["from"]) for h in res["held"]} == \
+        {"Val_Inputs!C7": (False, make_pack.NET_DEBT_NEW, "suggestion"), "Val_Inputs!C8": (False, 30.0, "typed")}
+    t0 = finished()
+    for c in ("Val_Inputs!C7", "Val_Inputs!C8"):
+        wb.set_held(eid, c, None)
+    orc.poke()
+    wait(eid, lambda v: finished() != t0 and not v["busy"] and status(v)["review"] in orc.SETTLED, "the result back again")
+    res = wb.get(eid)["result"]
+    assert abs(res["values"]["this_year"]["mid"] - mid0) < 1e-9 and all(h["held"] for h in res["held"])
+    print(f"held: ok (net debt and the declared distribution held at last year's, each with a suggestion from this year's "
+          f"model checked against last year's; set, the bridge has their step ({move:+.1f}) and this year's value moves "
+          f"by it; back, the first result)")
 
 
 def review_check(eid: int) -> None:
@@ -807,6 +862,7 @@ def main() -> None:
     overview_check(eid)
     gate_check()
     review_check(eid)
+    held_check(eid)
     gating_check(eid)
     roles_check()
     escalate_check()

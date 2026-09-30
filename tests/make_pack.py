@@ -45,6 +45,9 @@ YEARS = 20
 FIRST_COL = 3  # column D
 RATES = (0.0775, 0.0725)  # the low value's rate (higher), the high value's (lower)
 GROWTH, NET_DEBT, DISTRIBUTION, UTILISATION = 0.025, 850.0, 25.0, 0.50
+# this year's client model's balances at its own valuation date: what the overlay's typed net debt and declared
+# distribution (last year's, held in the roll-forward) would be this year
+NET_DEBT_NEW, DISTRIBUTION_NEW = 880.0, 27.5
 VD, VD_NEW = date(2025, 6, 30), date(2026, 6, 30)
 
 
@@ -66,8 +69,10 @@ def client_numbers(fy0: int, volume0: float, growth: float, tariff0: float, cpi:
                 capex=cap, tax=tax, fcf=fcf)
 
 
-def write_client(wb, n: dict, inputs: dict, insurance: bool) -> dict:
-    """Inputs / Operations / CashFlow sheets. Returns {line item: (sheet, row)} (1-based rows)."""
+def write_client(wb, n: dict, inputs: dict, insurance: bool, balances: tuple[float, float] | None = None) -> dict:
+    """Inputs / Operations / CashFlow sheets, and a BalanceSheet whose first column is the opening balance at the
+    model's valuation date (net debt and the distribution payable: balances). Returns {line item: (sheet, row)}
+    (1-based rows)."""
     b = wb.add_format({"bold": True})
     pct, num, dt = wb.add_format({"num_format": "0.00%"}), wb.add_format({"num_format": "#,##0.0"}), \
         wb.add_format({"num_format": "dd-mmm-yy"})
@@ -138,6 +143,19 @@ def write_client(wb, n: dict, inputs: dict, insurance: bool) -> dict:
         cf.write_formula(f"{c}7", f"=-({at['Maintenance capex']}*(1+{at['CPI']})^{k}{major})", num, n["capex"][k])
         cf.write_formula(f"{c}8", f"=-MAX(0,({c}6+{c}7)*{at['Tax rate']})", num, n["tax"][k])
         cf.write_formula(f"{c}9", f"={c}6+{c}7+{c}8", num, n["fcf"][k])
+    if balances:
+        bs = wb.add_worksheet("BalanceSheet")
+        bs.write(0, 0, "Balance sheet (extract)", b)
+        bs.write(2, 0, "Balance at", b)
+        opening = date(n["ends"][0].year - 1, 6, 30)
+        for k, d in enumerate([opening] + n["ends"]):
+            bs.write_datetime(2, FIRST_COL - 1 + k, d, dt)
+        for r, (label, v0, step) in enumerate((("Net debt", balances[0], 0.97), ("Distribution payable", balances[1], 1.03)), 5):
+            bs.write(r, 0, label)
+            bs.write(r, 1, "A$m")
+            for k in range(YEARS + 1):
+                bs.write_number(r, FIRST_COL - 1 + k, round(v0 * step ** k, 1), num)
+            rows[label] = ("BalanceSheet", r + 1)
     return rows
 
 
@@ -476,12 +494,13 @@ def main() -> dict:
     files = {}
     p = OUT / "AssetA_BP25_client_model_Jun25.xlsx"
     wb = xlsxwriter.Workbook(p)
-    rows = write_client(wb, prior, inputs_rows(VD, **prior_in), insurance=False)
+    rows = write_client(wb, prior, inputs_rows(VD, **prior_in), insurance=False, balances=(NET_DEBT, DISTRIBUTION))
     wb.close(); files["prior client model"] = p
 
     p = OUT / "AssetA_BP26_client_model_Jun26.xlsx"
     wb = xlsxwriter.Workbook(p)
-    write_client(wb, current, inputs_rows(VD_NEW, **cur_in, insurance=4.0), insurance=True)
+    write_client(wb, current, inputs_rows(VD_NEW, **cur_in, insurance=4.0), insurance=True,
+                 balances=(NET_DEBT_NEW, DISTRIBUTION_NEW))
     wb.close(); files["current client model"] = p
 
     fcf_row, tax_row = rows["cf_fcf"][1], rows["cf_tax"][1]
@@ -496,7 +515,7 @@ def main() -> dict:
 
     p = OUT / "AssetA_BP25_with_overlay.xlsx"
     wb = xlsxwriter.Workbook(p)
-    write_client(wb, prior, inputs_rows(VD, **prior_in), insurance=False)
+    write_client(wb, prior, inputs_rows(VD, **prior_in), insurance=False, balances=(NET_DEBT, DISTRIBUTION))
     write_overlay(wb, prior, lambda c: f"=CashFlow!{c}{fcf_row}", lambda c: f"=CashFlow!{c}{tax_row}", VD)
     wb.close(); files["prior client model with overlay inside"] = p
 

@@ -31,10 +31,10 @@ ISO = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
 DISCLAIMER = ("Prepared by software from the engagement's own files. Every figure here was read, rebuilt or rolled "
               "forward by the workbench, and is for the engagement team to check before relying on it. It is not a "
               "valuation report.")
-STEPS = ("report", "rounding", "prior_feed", "rebuilt", "roll", "time", "cash", "forecast", "rate", "this_year")
+STEPS = ("report", "rounding", "prior_feed", "rebuilt", "roll", "time", "cash", "forecast", "held", "rate", "this_year")
 STEP_SHORT = {"report": "Report", "rounding": "Rounding", "prior_feed": "Client file", "rebuilt": "Rebuilt",
               "time": "Time value", "cash": "Cash flows paid", "forecast": "New forecast", "roll": "Roll-forward",
-              "rate": "Discount rate", "this_year": "This year"}
+              "held": "Held inputs", "rate": "Discount rate", "this_year": "This year"}
 ROLES = {"prior_report": "Last year's report", "prior_overlay": "Last year's overlay",
          "prior_model": "Last year's client model", "current_model": "This year's client model"}
 INPUTS = {"rate": "Discount rate", "growth": "Terminal growth rate", "franking": "Franking credit utilisation"}
@@ -134,7 +134,8 @@ def _formats(book) -> dict:
             "tot": F(num_format=num, bold=True, top=1), "totl": F(bold=True, top=1, text_wrap=True),
             "pct": F(num_format=pct), "pct1": F(num_format="0.0%"), "ok": F(font_color="#1e7b3c", bold=True, align="center"),
             "bad": F(font_color="#b3261e", bold=True, align="center"), "unk": F(font_color="#888888", align="center"),
-            "disc": F(italic=True, text_wrap=True, border=1, border_color="#bbbbbb", bg_color="#f4f8fc")}
+            "disc": F(italic=True, text_wrap=True, border=1, border_color="#bbbbbb", bg_color="#f4f8fc"),
+            "warn": F(text_wrap=True, bold=True, font_color="#8a5a00", bg_color="#fff4d6")}
 
 
 def _okf(f: dict, ok):
@@ -198,6 +199,16 @@ def _summary(S: _Sheet, g: dict, res: dict, review: dict):
                    "couldn't check" if X.get("error") else "✓ checked" if X.get("ok") is True else "to look at",
                    fs=[f["wrap"], f["pct"], None, f["pct"], _okf(f, None if X.get("error") else X.get("ok") is True or False)])
         S.text("The low is at the higher discount rate. Each input's cell and every check on it: the Inputs sheet.", f["muted"], 5)
+        S.gap()
+    H = res.get("held") or []
+    if H:
+        still = [h for h in H if h["held"]]
+        S.head("Inputs held at last year's")
+        S.text(f"{len(still)} of {len(H)} still at last year's figure: " + ", ".join(h["label"] for h in still) if still else
+               f"All {len(H)} set for this year: " + ", ".join(f"{h['label']} {h['this_year']:,.1f}" for h in H),
+               f["warn"] if still else f["wrap"], 5)
+        S.text("Typed into the overlay outside its discountings; the Inputs sheet has each, with this year's model's figure.",
+               f["muted"], 5)
         S.gap()
 
     S.head("The valuation dates")
@@ -335,6 +346,24 @@ def _inputs(S: _Sheet, res: dict):
                    " → ".join(s.get("chain") or []), checks,
                    fs=[f["b"], f["pct"], _okf(f, r.get("ties")), f["mono"], f["wrap"], f["wrap"], f["wrap"], f["mono"], f["wrap"]],
                    height=max(15, 13 * (len(r["checks"]) + checks.count("\n") // 3 + 1)))
+        S.gap()
+
+    H = res.get("held") or []
+    if H:
+        S.head("Inputs held at last year's")
+        S.text("Typed into the overlay outside its discountings, these stay at last year's figures in the roll-forward "
+               "until a person sets this year's. The suggestion is from this year's client model, found through the row "
+               "that holds last year's figure in last year's model. Figures as typed in the overlay.", f["muted"], 9)
+        S.header("Input", "Last year", "This year", "Status", "This year's model", "How found", "Cell", "Feeds")
+        for h in H:
+            sg = h.get("suggestion") or {}
+            status = "held at last year's" if h["held"] else \
+                f"this year's, {'accepted from the model' if h.get('from') == 'suggestion' else 'typed'} by a person"
+            S.line(h["label"], h["value"], h.get("this_year") if not h["held"] else None, status, sg.get("value"),
+                   ("checked: " if sg.get("status") == "checked" else "") + (sg.get("text") or ""), h["cell"],
+                   ", ".join(dict.fromkeys(x["label"] for x in h.get("lines") or [])),
+                   fs=[f["bwrap"], f["num"], f["num"], f["warn"] if h["held"] else f["wrap"], f["num"], f["wrap"], f["mono"],
+                       f["wrap"]], height=45)
         S.gap()
 
     A = res.get("assumptions") or {}

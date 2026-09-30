@@ -20,6 +20,7 @@ from datetime import date
 
 import dcf
 import dcftrace
+import held
 import keyfacts
 import linkmap
 import overlay as ov
@@ -109,8 +110,9 @@ def _pair(ms: list[dict]) -> dict | None:
 
 # ---- values on each feed, and whether this year's can be trusted -------------------------------------------------
 
-def _read(sess, summary: dict, feed: str, cells: list[tuple], vd: str | None = None, months: int | None = None):
-    defaults, roll, months = ov._feed(summary, feed, vd, months)
+def _read(sess, summary: dict, feed: str, cells: list[tuple], vd: str | None = None, months: int | None = None,
+          held: bool = True):
+    defaults, roll, months = ov._feed(summary, feed, vd, months, held)
     sess.configure(feed, defaults, months or 0)
     return dict(zip(cells, sess.values(cells))), roll, defaults, months
 
@@ -131,6 +133,9 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
         out["gaps"] = _gaps(sess, summary, cells)
         got, out["roll"], _, _ = _read(sess, summary, "current", keys)
         out["this_year"] = {c: ov._show(got[k]) for c, k in zip(cells, keys)}
+        if any(x.get("value") is not None for x in (summary.get("held_values") or {}).values()):
+            got, _, _, _ = _read(sess, summary, "current", keys, held=False)  # the inputs a person set, left at last year's
+            out["this_year_held"] = {c: ov._show(got[k]) for c, k in zip(cells, keys)}
         if out["roll"]:
             tl = sess.rolled_timeline(out["roll"]["months"] or 0)
             firsts = sorted(tl.values())
@@ -312,7 +317,7 @@ def _steps(prior_db, traced, v0: float, v2: float, vd1: str | None) -> tuple[lis
         years = dcf.yearfrac(next(iter(base.values()))["valuation_date"], vd1d, "actual/actual")
         streams = f" (all {len(cs)} discounted streams)" if len(cs) > 1 else ""
         return [{"key": "time", "label": f"Time value: {years:.2f} years of unwind at the discount rate on the discounted "
-                                         f"cash flows{streams}; net debt held", "value": vu - v0},
+                                         f"cash flows{streams}", "value": vu - v0},
                 {"key": "cash", "label": f"Last year's forecast cash flows{streams} up to {vd1[:10]}", "value": v1 - vu},
                 {"key": "forecast", "label": "This year's client model (new forecast, rolled forward)", "value": v2 - v1}], None
     except (ValueError, ZeroDivisionError, OverflowError) as e:
@@ -344,8 +349,14 @@ def bridges(sess, summary: dict, head: dict, where: dict, figs: dict) -> dict:
             need = _need(db, *traced) if traced and traced[1] else set()
             prior_db = _patched(sess, summary, db, figs["feeds"]["rebuilt"], need)
             # the steps in the overlay's units, then shown in the report's
-            raw, note = _steps(prior_db, traced, figs["rebuilt"][cell], figs["this_year"][cell], vd1)
+            before = (figs.get("this_year_held") or figs["this_year"])[cell]  # the inputs a person set: a step of their own
+            raw, note = _steps(prior_db, traced, figs["rebuilt"][cell], before, vd1)
             steps += [{**x, "value": unit(x["value"])} for x in raw]
+            if figs.get("this_year_held"):
+                names = ", ".join(x.get("label") or c for c, x in (summary.get("held_values") or {}).items()
+                                  if x.get("value") is not None)
+                steps.append({"key": "held", "label": f"This year's figures for inputs held at last year's ({names})",
+                              "value": v2 - unit(before)})
             steps.append({"key": "rate", "label": "Discount rate: last year's, unchanged", "value": 0.0})
             steps.append({"key": "this_year", "label": f"This year, rolled forward{f' to {vd1[:10]}' if vd1 else ''}",
                           "value": v2, "total": True})
@@ -423,8 +434,8 @@ def _discrete_rows(core: dict) -> tuple[list[str], list[str]]:
 def chart(sess, summary: dict, where: dict, figs: dict, fy_end: int) -> dict:
     """The undiscounted discrete forecast cash flows under the value, by financial year: last year's (rebuilt on
     last year's client model, periods after last year's valuation date) and this year's (rolled forward, after the
-    new date). The discounting with the largest value under the low's cell (the enterprise value, rather than a
-    side stream like franking credits), its terminal value left out."""
+    new date). The discounting with the largest value under the low's cell (the main cash flows, to equity or free
+    cash flows, rather than a side stream like franking credits), its terminal value left out."""
     path = summary["wiring"]["overlay"]["db_path"]
     db = rodb.connect(path)
     traced = _traced(db, where["low"])
@@ -462,7 +473,7 @@ def chart(sess, summary: dict, where: dict, figs: dict, fy_end: int) -> dict:
 # ---- the report's disclosures, reconciled ------------------------------------------------------------------------
 # What the report discloses of the value (the terminal value, the present values of the forecast and of the
 # terminal value, the value of franking credits and its share of the equity value), against the same split of the
-# overlay's own discountings: the one with the largest value (the enterprise value) split into its terminal value
+# overlay's own discountings: the one with the largest value (the main cash flows) split into its terminal value
 # part and the rest, the others that are franking credits by their label. Each end separately; the mid their
 # average, the convention for the equity value too. A figure ties when it's within half a unit of the report's
 # last printed digit.
@@ -625,6 +636,27 @@ def assumptions(summary: dict, where: dict) -> dict:
     return out
 
 
+# ---- the inputs held at last year's ------------------------------------------------------------------------------
+
+def held_list(sess, summary: dict, where: dict, figs: dict) -> list[dict]:
+    """The inputs typed in the overlay outside its discountings (held.py), each with this year's figure where a person
+    set it, else held at last year's, and the suggestion from this year's client model (checked against last
+    year's). In the overlay's units, as typed."""
+    cells = [(e, where[e]) for e in ("low", "high") if where.get(e)]
+    with rodb.connect(summary["wiring"]["overlay"]["db_path"]) as db:
+        items = held.find(db, cells, summary.get("sheets"))
+    roll, set_ = figs.get("roll") or {}, summary.get("held_values") or {}
+    prior_vd = (summary.get("roll") or {}).get("prior_valuation_date")
+    out = []
+    for it in items:
+        mine = set_.get(it["cell"]) or {}
+        out.append({**it, "suggestion": held.suggest(sess, it, prior_vd, roll.get("valuation_date")),
+                    "this_year": mine.get("value"), "by": mine.get("by"), "from": mine.get("from"),
+                    "held": mine.get("value") is None})
+    sess.configure("workbook")
+    return out
+
+
 # ---- all of it --------------------------------------------------------------------------------------------------
 
 def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, override: dict | None = None) -> dict:
@@ -665,8 +697,9 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
     with rodb.connect(summary["wiring"]["overlay"]["db_path"]) as db:
         traced = {e: (_traced(db, where[e]) or (None, []))[1] for e in ("low", "high")}
     inputs = ov.deep(sourced.check, sess, summary, where, facts, asm, traced, unit)
+    held_inputs = ov.deep(held_list, sess, summary, where, figs)
     return {"head": head, "where": where, "tie": tie, "figures": figs, "bridges": br, "chart": ch, "reconcile": rec,
-            "assumptions": asm, "inputs": inputs,
+            "assumptions": asm, "inputs": inputs, "held": held_inputs,
             "values": {"report": {e: head[e] for e in ("low", "mid", "high")},
                        "rebuilt": {"low": tie["low"]["rebuilt"], "high": tie["high"]["rebuilt"],
                                    "mid": (tie["low"]["rebuilt"] + tie["high"]["rebuilt"]) / 2

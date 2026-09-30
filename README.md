@@ -71,6 +71,12 @@ takes it from there:
 
    A move of more than about 15% at last year's date (`overlay.ZERO_ROLL_CHECK`, a judgment call) doesn't hold the
    value but asks you to confirm it's the new forecast and not a row matched wrongly.
+   Inputs typed into the overlay outside its discountings (a net debt, a cash balance, a declared distribution, an
+   adjustment) aren't fed by this year's model, so they stay at last year's figures: **held**, and shown so, highlighted
+   on the Result page and in the workpaper until you set this year's. Each comes with a suggestion from this year's
+   client model, checked first against last year's: the row of last year's model that holds last year's figure at
+   last year's valuation date (its label agreeing) is the row read in this year's model at this year's date. A
+   suggestion is only applied when you use it, or type your own figure; the bridge then has a step of its own for it.
 7. **Bridges last year's value to this year's.** Report → rounding → rebuilt → time value → last year's cash flows paid
    → this year's forecast → discount rate → this year, for the low and the high; the mid is their average. Where a
    discounting under the value can't be read here, the roll-forward is one step, not its unwind landed in the new
@@ -80,6 +86,8 @@ takes it from there:
    again, with the earlier points in view so the ones that still stand keep their titles).
 
 **The conventions:**
+- The primary approach is an **equity DCF**: cash flows to equity discounted at the cost of equity (an overlay that
+  discounts free cash flows at a WACC and deducts net debt works the same way here).
 - The conclusion is the **equity value**, low / mid / high, where the mid is the midpoint of the low and the high.
 - **Ex-distribution** by default, unless the report is overwhelmingly cum-distribution or only the cum-distribution
   figure is in the model.

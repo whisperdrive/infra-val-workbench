@@ -1082,6 +1082,43 @@ def _dates(eid: int) -> dict:
     return {"dates": out, "confirmed": confirmed}
 
 
+def held_file(eid: int) -> Path:
+    return OUT / "overlays" / f"e{eid}" / "held.json"
+
+
+def held_values(eid: int) -> dict:
+    """This year's figures a person set for the inputs held at last year's: {cell: {"value", "label", "by", "from",
+    "was", "at"}}."""
+    try:
+        return json.loads(held_file(eid).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def set_held(eid: int, cell: str, value: float | None, source: str = "typed") -> dict:
+    """This year's figure for an input held at last year's (value None: back to last year's). Only an input the
+    result lists as held; source: "suggestion" (accepted from this year's model) or "typed"."""
+    res = (get(eid) or {}).get("result") or {}
+    item = next((x for x in res.get("held") or [] if x["cell"] == cell), None)
+    if not item:
+        raise ValueError(f"{cell} isn't an input held at last year's")
+    if source not in ("suggestion", "typed"):
+        raise ValueError("source is suggestion or typed")
+    vals = held_values(eid)
+    if value is None:
+        vals.pop(cell, None)
+    else:
+        vals[cell] = {"value": float(value), "label": item["label"], "by": "you", "from": source, "was": item["value"],
+                      "at": time.time()}
+    f = held_file(eid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(vals, indent=1), encoding="utf-8")
+    if eid in _SESSIONS:
+        _SESSIONS[eid][1]["held_values"] = vals
+    _touch(eid)  # the result's inputs changed: the orchestrator works it out again
+    return {"cell": cell, "label": item["label"], "value": value, "was": item["value"], "from": source}
+
+
 def _sync_roll(eid: int, sess, summary: dict) -> None:
     """The roll-forward from the dates as they are now (a file's valuation date can be corrected after the build),
     and last year's valuation date set on the session."""
@@ -1090,6 +1127,7 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
     if getattr(sess, "horizon_set", None) != want:
         sess.horizon_set = want
         sess._pshift.clear()
+    summary["held_values"] = held_values(eid)  # this year's figures a person set, on this year's feed
     roll = summary.get("roll")
     if not roll or not summary["wiring"].get("current"):
         return

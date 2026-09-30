@@ -149,6 +149,7 @@ th { text-align: left; font-size: 12px; color: var(--muted); padding: 7px 10px; 
 td { padding: 8px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
 tr:last-child td { border-bottom: 0; }
 tr.click { cursor: pointer; }
+tr.held > td { background: var(--warn-bg); }
 table.cmp th { white-space: normal; } table.cmp th .linkbtn { text-align: right; } table.cmp td:first-child { min-width: 110px; }
 tr.click:hover td { background: var(--raised); }
 tr.tot td { font-weight: 600; border-top: 1px solid var(--ink); }
@@ -1459,7 +1460,7 @@ function bindRebuild() {
 
 // ---- the result: the bridge and the cash flows -------------------------------------------------------------------
 const STEP_SHORT = {report: "Report", rounding: "Rounding", prior_feed: "Client file", rebuilt: "Rebuilt", time: "Time value", cash: "Cash flows paid",
-  forecast: "New forecast", roll: "Roll-forward", rate: "Discount rate", this_year: "This year"};  // "Last year" when the rebuild ties
+  forecast: "New forecast", roll: "Roll-forward", held: "Held inputs", rate: "Discount rate", this_year: "This year"};  // "Last year" when the rebuild ties
 function bridgeSpec(steps, title, units, tied, step) {
   // where the rebuild ties to the report (low and high), one "last year" bar: two identical bars say nothing
   const keep = steps.filter(s => s.value != null && (s.total || Math.abs(s.value) >= 0.05 || ["time", "cash", "forecast", "roll"].includes(s.key)))
@@ -1484,12 +1485,13 @@ function viewResult() {
     return `<tr class="${x.total ? "tot" : ""}"><td class="${x.total ? "" : "step"}">${esc(x.label)}</td><td class="num">${x.total ? "" : signed(x.value)}</td><td class="num"><b>${vN(run)}</b></td></tr>`; }).join("");
   const tots = steps.filter(x => x.total && x.value != null), from = tots[0]?.value, to = tots[tots.length - 1]?.value;
   return `<div class="card" id="bridgeCard"><div class="row" style="justify-content:space-between;align-items:flex-start">
-      <div><h2>Last year to this year</h2><p class="sub" style="margin:0">${esc(u)} · equity value, ${R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution"} · at last year's discount rate${B.valuation_date ? ` · to ${esc(B.valuation_date)}` : ""}</p></div>
+      <div><h2>Last year to this year</h2><p class="sub" style="margin:0">${esc(u)} · equity value, ${R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution"} · at last year's discount rate${B.valuation_date ? ` · to ${esc(B.valuation_date)}` : ""}${heldNote(R)}</p></div>
       <div class="row">${state.hl?.step ? hlNote(STEP_SHORT[state.hl.step] || state.hl.step) : ""}<a class="btn small" href="${workpaperUrl()}" download title="The result, the bridge, the cash flows, the inputs and their checks, the facts, the review and the run log, as an Excel file">Export workpaper</a><div class="seg" role="group" aria-label="Which end">${["low", "mid", "high"].map(k => `<button type="button" data-end="${k}" class="${end === k ? "on" : ""}" aria-pressed="${end === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div></div></div>
     ${from != null && to != null && !B.held ? `<div class="move"><span class="from">${vN(from)}</span><span class="muted">→</span><span class="to">${vN(to)}</span><span class="${to - from >= 0 ? "okt" : "warnt"}">${signed(to - from)}</span><span class="small muted">the ${end}${end === "mid" ? ", the midpoint of the low and the high" : ""}</span></div>` : ""}
     ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until the rows below are found: the bridge stops at last year's rebuilt value.</div>` : ""}
     <div class="grid2" style="margin-top:10px"><div id="brChart"></div><div class="scroll"><table class="bridge"><thead><tr><th>Step</th><th class="num">Change</th><th class="num">Value</th></tr></thead><tbody>${rows}</tbody></table>
     ${(B.notes || []).length ? `<p class="small muted">${esc(B.notes.join("; "))}</p>` : ""}</div></div></div>
+  ${heldCard(R)}
   ${rowsCard(R)}
   <div class="card" id="cfCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">The forecast cash flows</h2>${state.hl?.years?.length ? hlNote(yearsText(state.hl.years)) : ""}</div><p class="sub">Undiscounted, by financial year, the terminal value left out${R.chart?.left_out?.length ? ` (${esc(R.chart.left_out.join(", "))})` : ""}: last year's model against this year's.</p>
     ${R.chart?.years?.length ? `<div id="cfChart"></div>` : `<p class="muted small">${esc(R.chart?.why || "No cash flows found under the value.")}</p>`}</div>
@@ -1508,6 +1510,37 @@ function reviewCard() {
       ${p.years?.length || p.step ? `<div class="row small">${p.years?.length ? `<button class="btn small" type="button" data-hl-years="${esc(p.years.join(","))}">Show ${esc(yearsText(p.years))} on the chart</button>` : ""}${p.step ? `<button class="btn small" type="button" data-hl-step="${esc(p.step)}">Show it on the bridge</button>` : ""}</div>` : ""}</div>`).join("")}
     ${!pts.length && said ? `<p style="margin:10px 0 0">${esc(said)}</p>` : ""}
     <p class="small muted" style="margin:10px 0 0">By the reviewer (${esc(E.reviewer_model)}), reading the facts, the tie, the bridge, the cash flows and the run log end to end.</p></div>`;
+}
+// The inputs typed in the overlay outside its discountings (net debt, a cash balance, a declared distribution): held at
+// last year's until you set this year's, each with a suggestion from this year's client model, checked against last
+// year's. Highlighted while held.
+const heldNote = R => { const n = (R.held || []).filter(h => h.held).length;
+  return n ? ` · <button class="linkbtn warnt" type="button" data-jump-held>${n} input${n > 1 ? "s" : ""} held at last year's</button>` : ""; };
+function heldCard(R) {
+  const H = R.held; if (!H?.length) return "";
+  const still = H.filter(h => h.held).length;
+  const row = h => { const sg = h.suggestion || {}, ok = sg.status === "checked", now = h.this_year ?? sg.value ?? "";
+    return `<tr class="${h.held ? "held" : ""}"><td><b>${esc(h.label)}</b> ${h.held ? `<span class="pill warn">held at last year's</span>` : `<span class="pill ok">this year's · ${h.from === "suggestion" ? "accepted" : "typed"} by you</span>`}
+        <div class="small muted">feeds ${esc([...new Set(h.lines.map(l => l.label))].join(", "))} · <span class="mono">${esc(h.cell)}</span></div></td>
+      <td class="num">${vN(h.value)}</td>
+      <td class="num"><input type="text" inputmode="decimal" data-held-in="${esc(h.cell)}" value="${esc(now)}" aria-label="This year's ${esc(h.label)}" style="width:96px;text-align:right">
+        <div class="row small" style="justify-content:flex-end;gap:6px;margin-top:6px">${sg.value != null && h.this_year !== sg.value ? `<button class="btn small primary" type="button" data-held-use="${esc(h.cell)}" data-v="${sg.value}">Use ${vN(sg.value)}</button>` : ""}<button class="btn small" type="button" data-held-set="${esc(h.cell)}">Set</button>${h.held ? "" : `<button class="linkbtn" type="button" data-held-clear="${esc(h.cell)}">Back to last year's</button>`}</div></td>
+      <td class="small">${sg.value != null ? `<span class="${ok ? "okt" : "warnt"}">${ok ? "✓ checked" : "check it"}</span> ` : `<span class="muted">no suggestion:</span> `}${esc(sg.text || "")}</td></tr>`; };
+  return `<div class="card" id="heldCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Inputs held at last year's</h2>${still ? `<span class="pill warn">${still} held</span>` : `<span class="pill ok">all set for this year</span>`}</div>
+    <p class="sub">Typed into the overlay outside its discountings, these stay at last year's figures in the roll-forward until you set this year's. The suggestion comes from this year's client model, found through the row that holds last year's figure in last year's model; nothing is applied until you use it or set your own. Figures as typed in the overlay.</p>
+    <div class="scroll"><table class="stack-sm"><thead><tr><th>Input</th><th class="num">Last year</th><th class="num">This year</th><th>From this year's model</th></tr></thead><tbody>${H.map(row).join("")}</tbody></table></div></div>`;
+}
+function bindHeld() {
+  const post = (cell, value, source) => act(async () => {
+    const r = await api(`/api/engagements/${E.id}/held`, {method: "POST", body: {cell, value, source}});
+    toast(value == null ? `${r.label}: back to last year's ${vN(r.was)}` : `${r.label}: this year's ${vN(value)}: the bridge runs again`); });
+  document.querySelectorAll("[data-held-use]").forEach(b => b.onclick = () => post(b.dataset.heldUse, +b.dataset.v, "suggestion"));
+  document.querySelectorAll("[data-held-set]").forEach(b => b.onclick = () => {
+    const v = parseFloat((document.querySelector(`[data-held-in="${CSS.escape(b.dataset.heldSet)}"]`)?.value || "").replace(/,/g, ""));
+    if (!isFinite(v)) { toast("Type this year's figure as a number"); return; }
+    post(b.dataset.heldSet, v, "typed"); });
+  document.querySelectorAll("[data-held-clear]").forEach(b => b.onclick = () => post(b.dataset.heldClear, null, "typed"));
+  document.querySelectorAll("[data-jump-held]").forEach(b => b.onclick = () => jumpTo("result", "heldCard"));
 }
 function rowsCard(R) {
   const g = R.figures?.gaps; if (!g) return "";
@@ -1534,6 +1567,7 @@ async function rowPicker(row) {
   box.querySelector("[data-rowkeep]").onclick = () => act(async () => { await api(`/api/engagements/${E.id}/overlay/rowpick`, {method: "POST", body: {prior: row, current: "-"}}); toast("Last year's values kept for that row"); });
 }
 function bindResult() {
+  bindHeld();
   document.querySelectorAll("[data-end]").forEach(b => b.onclick = () => { state.bridgeEnd = b.dataset.end; render(); });
   document.querySelectorAll("[data-rowinfo]").forEach(b => b.onclick = () => rowPicker(b.dataset.rowinfo));
   const R = E.result; if (!R?.bridges) return;
@@ -1734,7 +1768,7 @@ function mountCharts(root) {
 // #all: where each engagement is and its value, a click to open it, two ticked to compare; #compare=A,B: their
 // equity values, inputs and dates, bridges (the mid, step by step) and this year's cash flows side by side.
 let OV = null, ovAt = 0, ovBusy = false, ovTimer = null, ovFail = 0, CMP = null, cmpBusy = false;
-const STEP_ORDER = ["report", "rounding", "prior_feed", "rebuilt", "roll", "time", "cash", "forecast", "rate", "this_year"];
+const STEP_ORDER = ["report", "rounding", "prior_feed", "rebuilt", "roll", "time", "cash", "forecast", "held", "rate", "this_year"];
 const globalOf = h => h.has("all") ? {view: "all"} : h.get("compare") ? {view: "compare", ids: h.get("compare").split(",").map(Number).filter(Boolean).slice(0, 2)} : null;
 function leave() { E = null; clearTimeout(pollTimer); }  // off an engagement: nothing of it polled
 function goGlobal(g) {
@@ -1850,7 +1884,7 @@ function bindGlobal() {
   if (state.global?.view !== "compare" || !CMP?.data) return;
   const [A, B] = CMP.data, u = A.result?.bridges?.units || A.result?.head?.units || "";
   const steps = X => Object.fromEntries((X.result?.bridges?.mid?.steps || []).filter(s => !s.total).map(s => [s.key, s.value]));
-  const moved = k => ["time", "cash", "forecast", "roll"].includes(k) || [SA[k], SB[k]].some(v => Math.abs(v ?? 0) >= 0.05);
+  const moved = k => ["time", "cash", "forecast", "roll", "held"].includes(k) || [SA[k], SB[k]].some(v => Math.abs(v ?? 0) >= 0.05);
   const SA = steps(A), SB = steps(B), keys = STEP_ORDER.filter(k => (k in SA || k in SB) && moved(k));
   if (keys.length) $("#cmpBridgeChart")?.append(chartCard({title: "What moved the value: the mid's steps", kind: "bar", units: u, labels: keys.map(k => STEP_SHORT[k] || k),
     series: [{name: A.name, data: keys.map(k => SA[k] ?? null)}, {name: B.name, data: keys.map(k => SB[k] ?? null)}]}));

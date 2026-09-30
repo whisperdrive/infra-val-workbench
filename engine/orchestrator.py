@@ -147,7 +147,8 @@ def inputs(eid: int, name: str, snap: dict, holds: bool = True) -> str:
     if name == "rows":
         return _h(rows)
     res = [rows, equity_pick(eid), (snap.get("profile") or {}).get("fy_end_month"),
-           sorted([f["key"], f.get("value_text"), f.get("status")] for f in snap["facts"])]
+           sorted([f["key"], f.get("value_text"), f.get("status")] for f in snap["facts"]),
+           _file_state(wb.held_file(eid))]  # this year's figures a person set for held inputs
     return _h(res) if name == "result" else _h(["review", result_digest(eid)])
 
 
@@ -602,8 +603,8 @@ def _roles_job(eid: int, key: str):
 TIE_PROMPT = """You are the orchestrator of a recurring infrastructure valuation, rebuilding last year's valuation in Python.
 The report concludes an equity value as a range (low and high; the mid is their midpoint), and we need the overlay
 cells holding the low and the high. Code found the cells below whose saved values equal the report's figures, but
-couldn't pair a low with a high on its own. Pick the pair: the cells that are the equity value (after net debt and
-any distribution), on the report's basis (ex-distribution unless the model only gives cum-distribution), low and
+couldn't pair a low with a high on its own. Pick the pair: the cells that are the equity value (cash flows to equity
+at the cost of equity, or free cash flows at a WACC less net debt; after any distribution), on the report's basis (ex-distribution unless the model only gives cum-distribution), low and
 high of the same range. Or escalate if none is right.
 
 The report's equity value: {head}
@@ -798,6 +799,13 @@ def _result_job(eid: int, key: str):
                           "title": f"{r['label']} doesn't reconcile to the report",
                           "detail": "; ".join(bad) or "Python couldn't split the value this way",
                           "go": {"step": "rebuild", "anchor": "reconcileCard"}})
+    for i, h in enumerate(x for x in res.get("held") or [] if x["held"]):
+        sg = h.get("suggestion") or {}
+        needs.append({"id": f"held-{i}", "stage": "result", "severity": "check",
+                      "title": f"{h['label']}: {h['value']:,.1f} held at last year's" + (
+                          f"; {sg['value']:,.1f} in this year's model" + (", checked" if sg["status"] == "checked" else "")
+                          if sg.get("value") is not None else ""),
+                      "detail": sg.get("text") or "", "go": {"step": "result", "anchor": "heldCard"}})
     names = {"rate": "discount rate", "growth": "terminal growth rate", "franking": "franking credit utilisation"}
     for key, what in names.items():
         for end, r in (((res.get("inputs") or {}).get(key) or {}).get("ends") or {}).items():
@@ -846,12 +854,14 @@ concerns (title, detail, severity: "check" for something a person should look at
 financial years it's about, as cash_flows_by_year labels them (FY45), else empty; step: the bridge step it's about,
 one of {steps}, else "").
 
-How the bridge is built, so you don't flag what follows from it: every discounting under the equity value moves (the
-unlevered free cash flows with the terminal value, and any other stream the overlay discounts, such as franking
-credits); net debt and a declared distribution are held as they were. So the time value is about the discount rate
-times the discounted streams (not the equity value) over the years between the dates, and the cash flows paid are
-the first year of every stream, not the free cash flow alone. The discount rate is last year's unless a person set
-another.
+How the bridge is built, so you don't flag what follows from it: the primary approach discounts cash flows to equity
+at the cost of equity (some overlays discount free cash flows at a WACC and deduct net debt). Every discounting under
+the equity value moves (the main cash flows with the terminal value, and any other stream the overlay discounts, such
+as franking credits). The inputs typed in the overlay outside the discountings (a net debt, a cash balance, a declared
+distribution, an adjustment) stay at last year's figures unless a person set this year's: see held_inputs, and the
+"held" step of the bridge where they were set. So the time value is about the discount rate times the discounted
+streams (not the equity value) over the years between the dates, and the cash flows paid are the first year of every
+stream. The discount rate is last year's unless a person set another.
 
 The run:
 {run}"""
@@ -876,6 +886,9 @@ def _review_job(eid: int, key: str):
                                "this_year": (res.get("bridges") or {}).get("valuation_date")},
            "cash_flows_by_year": ch.get("series"), "this_year_gaps_reliable": ((res.get("figures") or {}).get("gaps") or {}).get("reliable"),
            "assumptions": res.get("assumptions"),
+           "held_inputs": [{"input": h["label"], "last_year": h["value"], "this_year": h.get("this_year"),
+                            "still_held": h["held"], "suggested_from_this_years_model": (h.get("suggestion") or {}).get("value")}
+                           for h in res.get("held") or []],
            "run_log": [f"{h['stage']}: {h['event']}: {h['text']}" for h in history(eid, limit=40)][::-1]}
     import llm
     model = e.get("reviewer_model") or wb.DEFAULT_REVIEWER
@@ -934,6 +947,7 @@ PAGE_ANCHOR = {"workbench": "filesCard", "report": "reportCard", "rebuild": "tie
 KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact", "A fact to add"),
          ("roles", "confirm-roles", "The roles to confirm"), ("no-reads", "check-roles", "The roles to check"),
          ("dates-", "check-date", "A date to check"), ("zero-roll", "check-forecast", "A move to check"),
+         ("held-", "check-held", "An input held at last year's"),
          ("date-overlay", "check-date", "A date to check"),
          ("date", "confirm-date", "A date to confirm"), ("equity", "pick-cells", "Cells to pick"),
          ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),
