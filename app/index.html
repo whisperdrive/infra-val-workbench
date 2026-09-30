@@ -149,6 +149,7 @@ th { text-align: left; font-size: 12px; color: var(--muted); padding: 7px 10px; 
 td { padding: 8px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
 tr:last-child td { border-bottom: 0; }
 tr.click { cursor: pointer; }
+table.cmp th { white-space: normal; } table.cmp th .linkbtn { text-align: right; } table.cmp td:first-child { min-width: 110px; }
 tr.click:hover td { background: var(--raised); }
 tr.tot td { font-weight: 600; border-top: 1px solid var(--ink); }
 .bar { height: 5px; border-radius: 3px; background: var(--rule); overflow: hidden; margin-top: 5px; min-width: 120px; }
@@ -354,7 +355,7 @@ dialog#uploadDlg { border: 1px solid var(--rule-strong); border-radius: 10px; ba
 <body>
 <header>
   <div class="hbar">
-    <div class="brandwrap"><a class="brand" href="#" id="brand"><img class="logo" id="brandLogo" src="/brand/logo" alt=""><span><span class="name">Infra Val Workbench</span><br><span class="sub">Last year's valuation, rebuilt and rolled forward</span></span></a>
+    <div class="brandwrap"><a class="brand" href="#all" id="brand" title="All engagements"><img class="logo" id="brandLogo" src="/brand/logo" alt=""><span><span class="name">Infra Val Workbench</span><br><span class="sub">Last year's valuation, rebuilt and rolled forward</span></span></a>
       <button class="logo-edit" id="logoEdit" type="button" aria-haspopup="true" aria-expanded="false" title="Change the logo" aria-label="Change the logo">✎</button></div>
     <div class="hsp"></div>
     <div class="hctl">
@@ -365,6 +366,7 @@ dialog#uploadDlg { border: 1px solid var(--rule-strong); border-radius: 10px; ba
     </div>
     <div class="hctl"><button class="hbtn" id="menuBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More: new engagement, models, call log, delete">⋯</button></div>
     <div class="popover menu-list" id="menuPop" hidden role="menu">
+      <button type="button" role="menuitem" id="allBtn">All engagements</button>
       <button type="button" role="menuitem" id="newEng">New engagement</button>
       <button type="button" role="menuitem" id="modelsBtn" data-e aria-haspopup="true" aria-expanded="false" title="Which Azure models extract, review and decide">Models…</button>
       <button type="button" role="menuitem" id="callsBtn" data-e>Tokens and the call log</button>
@@ -483,7 +485,8 @@ let uploads = [], pollTimer = null;
 async function boot() {
   CFG = await api("/api/config");
   for (const id of ["mSel", "rSel", "aSel"]) $("#" + id).innerHTML = CFG.models.map(m => `<option>${esc(m)}</option>`).join("");
-  const h = new URLSearchParams(location.hash.slice(1));
+  const h = new URLSearchParams(location.hash.slice(1)), g = globalOf(h);
+  if (g) { state.global = g; await loadList(null, false); $("#engSel").value = "all"; render(); return; }
   state.step = pageOf(h.get("s"));  // none given: where the engagement is decides (landing)
   await loadList(+h.get("e") || null);
 }
@@ -495,21 +498,25 @@ function landing() {
   return ["done", "attention"].includes(stageOf("result").status) && E.result?.values ? "result" : "workbench";
 }
 window.addEventListener("popstate", async () => {  // Back, Forward, or a link to another page or engagement
-  const h = new URLSearchParams(location.hash.slice(1)), eid = +h.get("e") || null;
+  const h = new URLSearchParams(location.hash.slice(1)), eid = +h.get("e") || null, g = globalOf(h);
+  if (g) { leave(); state.global = g; $("#engSel").value = "all"; render(); return; }
+  state.global = null;
   state.step = pageOf(h.get("s"));
   if (eid && eid !== E?.id) { $("#engSel").value = eid; await open(eid); }
   else { state.step ||= "workbench"; render(); }
 });
 async function loadList(select, openOne = true) {
   const list = await api("/api/engagements");
-  $("#engSel").innerHTML = list.length ? list.map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join("") : `<option value="">No engagements yet</option>`;
+  $("#engSel").innerHTML = list.length ? `<option value="all">All engagements</option>` + list.map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join("") : `<option value="">No engagements yet</option>`;
   if (!openOne) { if (list.length) { $("#engSel").insertAdjacentHTML("afterbegin", `<option value="">Choose one…</option>`); $("#engSel").value = ""; } return; }
   const id = select && list.some(e => e.id === select) ? select : list[0]?.id;
   if (id) { $("#engSel").value = id; await open(id); } else { E = null; render(); }
 }
 async function open(id) {
   if (E?.id !== id) state.hl = null;
-  E = await api(`/api/engagements/${id}`); E._fetched = Date.now();
+  const got = await api(`/api/engagements/${id}`);
+  if (state.global) return;  // gone to every engagement meanwhile
+  E = got; E._fetched = Date.now();
   if (!state.step) { state.step = landing(); history.replaceState(null, "", `#e=${id}&s=${state.step}`); }
   render(); schedule(); spend();
 }
@@ -520,7 +527,9 @@ function editing() {
 async function refresh(force = false) {
   if (!E) return;
   const before = JSON.stringify([E.run?.stages, E.run?.needs?.length, E.run?.log?.[0]?.id, E.updated_at]);
-  E = await api(`/api/engagements/${E.id}`); E._fetched = Date.now();
+  const got = await api(`/api/engagements/${E.id}`);
+  if (state.global || got.id !== E?.id) return;  // left it while this was on its way
+  E = got; E._fetched = Date.now();
   const after = JSON.stringify([E.run?.stages, E.run?.needs?.length, E.run?.log?.[0]?.id, E.updated_at]);
   if (!force && editing()) { renderTabs(); renderNow(); }
   else if (force || before !== after || filesMoving()) render();
@@ -543,8 +552,9 @@ async function spend() {
     $("#spend").textContent = `$${(s.cost_usd || 0).toFixed(3)} · ${((s.input_tokens || 0) + (s.output_tokens || 0)).toLocaleString()} tokens`;
     $("#spend").title = `Azure model spend for this engagement: ${s.calls || 0} calls (list prices). Click for the call log.`; } catch {}
 }
-$("#engSel").onchange = e => { if (e.target.value) { state.step = null; open(+e.target.value); } };
-$("#newEng").onclick = () => { menu(false); E = null; state.step = "workbench"; render(true); };
+$("#engSel").onchange = e => { const v = e.target.value; if (v === "all") goGlobal({view: "all"}); else if (v) openFromList(+v); };
+$("#newEng").onclick = () => { menu(false); E = null; state.global = null; state.step = "workbench"; render(true); };
+$("#allBtn").onclick = () => { menu(false); goGlobal({view: "all"}); };
 $("#delEng").onclick = () => {
   if (!E) return;
   menu(false);
@@ -611,8 +621,15 @@ function renderTabs() {
   el.querySelectorAll("button").forEach(b => b.onclick = () => go(b.dataset.s));
 }
 function render(creating = false) {
+  if (creating) state.global = null;
   $("#hdrCtl").hidden = !E;
   document.querySelectorAll("#menuPop [data-e]").forEach(b => b.hidden = !E || creating || (b.hasAttribute("data-r") && !E.result?.bridges));
+  if (state.global) {  // every engagement, or two side by side: no engagement open, so no stages and no pages
+    $("#steps").hidden = true; $("#now").hidden = true;
+    const m = $("#main");
+    keepOpen(m, () => { m.innerHTML = state.global.view === "compare" ? viewCompare() : viewAll(); bindGlobal(); });
+    return;
+  }
   if (!E) $("#modelCtl").hidden = true;
   if (E) { $("#mSel").value = E.model || CFG.default_model; $("#rSel").value = E.reviewer_model || CFG.default_reviewer;
     $("#aSel").value = E.arbiter_model || CFG.default_arbiter; }
@@ -1708,6 +1725,134 @@ function mountCharts(root) {
   });
 }
 
+// ---- every engagement, and two side by side ------------------------------------------------------------------
+// #all: where each engagement is and its value, a click to open it, two ticked to compare; #compare=A,B: their
+// equity values, inputs and dates, bridges (the mid, step by step) and this year's cash flows side by side.
+let OV = null, ovAt = 0, ovBusy = false, ovTimer = null, CMP = null, cmpBusy = false;
+const STEP_ORDER = ["report", "rounding", "prior_feed", "rebuilt", "roll", "time", "cash", "forecast", "rate", "this_year"];
+const globalOf = h => h.has("all") ? {view: "all"} : h.get("compare") ? {view: "compare", ids: h.get("compare").split(",").map(Number).filter(Boolean).slice(0, 2)} : null;
+function leave() { E = null; clearTimeout(pollTimer); }  // off an engagement: nothing of it polled
+function goGlobal(g) {
+  leave(); state.global = g;
+  if (g.view === "all") OV_stale();
+  const h = g.view === "all" ? "#all" : `#compare=${g.ids.join(",")}`;
+  if (location.hash !== h) history.pushState(null, "", h);
+  $("#engSel").value = "all"; render(); window.scrollTo({top: 0});
+}
+function openFromList(id) {  // Back comes to where it was opened from
+  state.global = null; state.step = null;
+  history.pushState(null, "", `#e=${id}`); $("#engSel").value = id; open(id);
+}
+const OV_stale = () => { ovAt = 0; };
+async function loadOverview() {
+  clearTimeout(ovTimer); ovBusy = true;
+  try { OV = await api("/api/overview"); ovAt = Date.now(); } catch (e) { toast(e.message); }
+  ovBusy = false;
+  if (state.global?.view !== "all") return;
+  render();
+  ovTimer = setTimeout(() => state.global?.view === "all" && loadOverview(), OV?.some(x => ["running"].includes(x.state)) ? 2000 : 10000);
+}
+const STATE_PILL = {finished: "ok", "needs you": "bad", running: "info", waiting: "", empty: ""};
+const dayOf = t => t ? new Date(t * 1000).toISOString().slice(0, 10) : "";
+function viewAll() {
+  if (!ovBusy && Date.now() - ovAt > 4000) loadOverview();
+  if (!OV) return `<div class="card"><p class="muted" style="margin:0">Loading the engagements…</p></div>`;
+  state.pick = (state.pick || []).filter(id => OV.some(x => x.id === id && x.values?.this_year));
+  const pick = state.pick, can = x => !!x.values?.this_year;
+  const row = x => { const v = x.values, t = v?.this_year, r = v?.report, on = pick.includes(x.id);
+    return `<tr class="click" tabindex="0" data-open="${x.id}">
+      <td class="nowrap" data-no-open><input type="checkbox" data-pick="${x.id}" ${on ? "checked" : ""} ${can(x) && (on || pick.length < 2) ? "" : "disabled"} aria-label="Compare ${esc(x.name)}" title="${can(x) ? (on || pick.length < 2 ? "Tick two to compare" : "Two are ticked already") : "No value this year yet"}"></td>
+      <td><b>${esc(x.name)}</b><div class="small muted">${x.files} of 4 files · changed ${esc(dayOf(x.updated_at))}</div></td>
+      <td><span class="pill ${STATE_PILL[x.state] ?? ""}">${esc(x.state[0].toUpperCase() + x.state.slice(1))}</span><div class="small muted">${esc(cut(x.note || "", 70))}</div></td>
+      <td class="num">${t ? `<span class="muted">${vN(r?.mid)} →</span> <b>${vN(t.mid)}</b>` : r ? `<span class="muted">${vN(r.mid)}</span>` : "–"}<div class="small muted">${esc(x.units || "")}${x.basis ? ` · ${x.basis === "cum" ? "cum" : "ex"}-distribution` : ""}</div></td>
+      <td class="num">${t ? `${vN(t.low)} – ${vN(t.high)}` : "–"}</td>
+      <td class="num">${t && r?.mid != null ? `<span class="${t.mid - r.mid >= 0 ? "okt" : "warnt"}">${signed(t.mid - r.mid)}</span>` : "–"}</td>
+      <td class="nowrap">${esc(x.valuation_date || "–")}</td></tr>`; };
+  return `<div class="lede"><div><h1><b>All engagements</b></h1><p>Where each one is, what's for you, and its equity value: last year per the report to this year, the mid (the midpoint of the low and the high). Tick two to compare them.</p></div></div>
+    <div class="card" id="allCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">${OV.length} engagement${OV.length === 1 ? "" : "s"}</h2>
+      <div class="row"><span class="small muted" aria-live="polite">${pick.length === 2 ? "Two ticked" : pick.length ? "Tick one more" : "Tick two to compare"}</span><button class="btn primary small" type="button" id="cmpGo" ${pick.length === 2 ? "" : "disabled"}>Compare</button><button class="btn small" type="button" id="allNew">New engagement</button></div></div>
+    ${OV.length ? `<div class="scroll" style="margin-top:10px"><table class="stack-sm"><thead><tr><th><span class="sr-only">Compare</span></th><th>Engagement</th><th>Where it is</th><th class="num">Equity value, mid</th><th class="num">This year, low – high</th><th class="num">Move</th><th>Valuation date</th></tr></thead>
+      <tbody>${OV.map(row).join("")}</tbody></table></div>` : `<p class="muted">No engagements yet.</p>`}</div>`;
+}
+async function loadCompare(ids) {
+  cmpBusy = true;
+  try { CMP = {key: ids.join(","), data: await Promise.all(ids.map(i => api(`/api/engagements/${i}`)))}; }
+  catch (e) { CMP = {key: ids.join(","), error: e.message}; }
+  cmpBusy = false;
+  if (state.global?.view === "compare") render();
+}
+const ppDiff = (a, b) => a == null || b == null ? "–" : `${b - a > 0.000005 ? "+" : ""}${((b - a) * 100).toFixed(2)} pp`;
+function viewCompare() {
+  const ids = state.global.ids, back = `<button class="btn small" type="button" data-all>← All engagements</button>`;
+  if (ids.length !== 2) return `<div class="card"><p>Tick two engagements to compare them.</p>${back}</div>`;
+  if (!CMP || CMP.key !== ids.join(",")) { if (!cmpBusy) loadCompare(ids); return `<div class="card"><p class="muted" style="margin:0">Loading the two engagements…</p></div>`; }
+  if (CMP.error) return `<div class="card"><div class="callout bad">${esc(CMP.error)}</div><p>${back}</p></div>`;
+  const [A, B] = CMP.data, RA = A.result || {}, RB = B.result || {};
+  const uA = RA.bridges?.units || RA.head?.units || "", uB = RB.bridges?.units || RB.head?.units || "", same = uA === uB;
+  const name = X => `<button class="linkbtn" type="button" data-open="${X.id}" title="Open it">${esc(X.name)}</button>`;
+  const head = `<thead><tr><th></th><th class="num">${name(A)}</th><th class="num">${name(B)}</th><th class="num" title="The second less the first">Difference</th></tr></thead>`;
+  const diff = (a, b) => !same || a == null || b == null ? "–" : signed(b - a);
+  const tr = (label, a, b, d, cls = "") => `<tr class="${cls}"><td>${label}</td><td class="num">${a}</td><td class="num">${b}</td><td class="num">${d}</td></tr>`;
+  const V = X => X.result?.values || {}, mv = X => V(X).this_year?.mid != null && V(X).report?.mid != null ? V(X).this_year.mid - V(X).report.mid : null;
+  const lh = X => V(X).this_year ? `${vN(V(X).this_year.low)} – ${vN(V(X).this_year.high)}` : "–";
+  const values = [
+    tr("Last year, per the report", vN(V(A).report?.mid), vN(V(B).report?.mid), diff(V(A).report?.mid, V(B).report?.mid)),
+    tr("Last year, rebuilt in Python", vN(V(A).rebuilt?.mid), vN(V(B).rebuilt?.mid), diff(V(A).rebuilt?.mid, V(B).rebuilt?.mid)),
+    tr("This year, rolled forward", vN(V(A).this_year?.mid), vN(V(B).this_year?.mid), diff(V(A).this_year?.mid, V(B).this_year?.mid), "tot"),
+    tr("This year, low – high", lh(A), lh(B), ""),
+    tr("The move: this year less last year per the report", mv(A) == null ? "–" : signed(mv(A)), mv(B) == null ? "–" : signed(mv(B)), diff(mv(A), mv(B))),
+  ].join("");
+  const basis = X => X.result?.head?.basis === "cum" ? "cum-distribution" : "ex-distribution";
+  // the inputs, each end; one row where both ends are the same in both
+  const inp = (X, k, e) => X.result?.inputs?.[k]?.ends?.[e]?.value ?? null;
+  const NAMES = {rate: "Discount rate", growth: "Terminal growth rate", franking: "Franking credit utilisation"};
+  const inputs = Object.entries(NAMES).map(([k, n]) => {
+    const one = [A, B].every(X => inp(X, k, "low") === inp(X, k, "high"));
+    return (one ? [["", "low"]] : [[k === "rate" ? ", the low (the higher rate)" : ", the low", "low"], [k === "rate" ? ", the high (the lower rate)" : ", the high", "high"]])
+      .map(([sfx, e]) => tr(n + sfx, vPct(inp(A, k, e)), vPct(inp(B, k, e)), ppDiff(inp(A, k, e), inp(B, k, e)))).join("");
+  }).join("");
+  const day = (X, step) => (X.dates || []).find(d => d.step === step)?.date || null;
+  const dates = [["The report's valuation date", "The report"], ["This year's, the roll-forward runs to", "The roll-forward runs to"]]
+    .map(([label, step]) => tr(label, esc(day(A, step) || "–"), esc(day(B, step) || "–"), day(A, step) && day(B, step) ? (day(A, step) === day(B, step) ? "the same" : "differ") : "–")).join("");
+  // the bridges: the mid's steps by key, in the bridge's order; a dash where one hasn't that step
+  const steps = X => Object.fromEntries((X.result?.bridges?.mid?.steps || []).map(s => [s.key, s]));
+  const SA = steps(A), SB = steps(B), keys = [...STEP_ORDER.filter(k => SA[k] || SB[k]), ...Object.keys({...SA, ...SB}).filter(k => !STEP_ORDER.includes(k))];
+  const cell = (s, tot) => s?.value == null ? "–" : tot ? vN(s.value) : signed(s.value);
+  const bridgeRows = keys.map(k => { const a = SA[k], b = SB[k], tot = (a || b).total;
+    return tr(`${esc(STEP_SHORT[k] || (a || b).label)}${!tot && (a || b).label ? `<div class="small muted">${esc(cut((a || b).label, 90))}</div>` : ""}`, cell(a, tot), cell(b, tot), diff(a?.value, b?.value), tot ? "tot" : ""); }).join("");
+  const unitsNote = same ? `${esc(uA)}` : `<span class="warnt">different units (${esc(uA || "none")} and ${esc(uB || "none")}): the differences aren't worked out</span>`;
+  return `<div class="lede"><div><h1><b>Side by side</b></h1><p>${esc(A.name)} and ${esc(B.name)}: the equity value (the mid, the midpoint of the low and the high), the inputs and dates, the bridges step by step and this year's cash flows.</p></div><div style="margin-left:auto">${back}</div></div>
+    ${same ? "" : `<div class="callout warn" style="margin-bottom:12px">The two are in different units (${esc(uA || "none")} and ${esc(uB || "none")}): the figures are shown, the differences aren't worked out.</div>`}
+    <div class="card" id="cmpValues"><h2>The equity value</h2><p class="sub">The mid. ${unitsNote} · ${esc(basis(A))}${basis(A) === basis(B) ? "" : ` and ${esc(basis(B))}`}.</p>
+      <div class="scroll"><table class="cmp">${head}<tbody>${values}</tbody></table></div></div>
+    <div class="card" id="cmpInputs"><h2>The inputs and the dates</h2><p class="sub">Each input as sourced from its model and checked; the difference in percentage points.</p>
+      <div class="scroll"><table class="cmp">${head}<tbody>${inputs}${dates}</tbody></table></div></div>
+    <div class="card" id="cmpBridge"><h2>The bridges, step by step</h2><p class="sub">The mid of each, step by step: a total is the value at that point, the other rows are the change. A dash where one bridge hasn't that step (a roll-forward that couldn't be split is one step).</p>
+      <div class="grid2"><div class="scroll"><table class="cmp">${head}<tbody>${bridgeRows}</tbody></table></div><div id="cmpBridgeChart"></div></div></div>
+    <div class="card" id="cmpFlows"><h2>This year's cash flows</h2><p class="sub">Each one's forecast from this year's client model, undiscounted, by financial year, the terminal value left out.</p><div id="cmpFlowsChart"></div></div>`;
+}
+function bindGlobal() {
+  document.querySelectorAll("[data-all]").forEach(b => b.onclick = () => goGlobal({view: "all"}));
+  document.querySelectorAll("main [data-open]").forEach(el => el.onclick = e => { if (e.target.closest("[data-no-open]")) return; openFromList(+el.dataset.open); });
+  document.querySelectorAll("[data-pick]").forEach(c => c.onchange = () => {
+    const id = +c.dataset.pick; state.pick = c.checked ? [...new Set([...(state.pick || []), id])].slice(0, 2) : (state.pick || []).filter(x => x !== id); render(); });
+  const go2 = $("#cmpGo"); if (go2) go2.onclick = () => goGlobal({view: "compare", ids: state.pick});
+  const nw = $("#allNew"); if (nw) nw.onclick = () => { state.global = null; history.pushState(null, "", "#s=workbench"); render(true); };
+  if (state.global?.view !== "compare" || !CMP?.data) return;
+  const [A, B] = CMP.data, u = A.result?.bridges?.units || A.result?.head?.units || "";
+  const steps = X => Object.fromEntries((X.result?.bridges?.mid?.steps || []).filter(s => !s.total).map(s => [s.key, s.value]));
+  const moved = k => ["time", "cash", "forecast", "roll"].includes(k) || [SA[k], SB[k]].some(v => Math.abs(v ?? 0) >= 0.05);
+  const SA = steps(A), SB = steps(B), keys = STEP_ORDER.filter(k => (k in SA || k in SB) && moved(k));
+  if (keys.length) $("#cmpBridgeChart")?.append(chartCard({title: "What moved the value: the mid's steps", kind: "bar", units: u, labels: keys.map(k => STEP_SHORT[k] || k),
+    series: [{name: A.name, data: keys.map(k => SA[k] ?? null)}, {name: B.name, data: keys.map(k => SB[k] ?? null)}]}));
+  const fy = X => X.result?.chart?.series?.this_year || {}, FA = fy(A), FB = fy(B);
+  const years = [...new Set([...Object.keys(FA), ...Object.keys(FB)])].sort((a, b) => (+a.replace(/\D/g, "") || 0) - (+b.replace(/\D/g, "") || 0));
+  if (years.length) $("#cmpFlowsChart")?.append(chartCard({title: "This year's forecast cash flows", kind: "line", units: u, labels: years, period_labels: years, frequency: "annual", sign: 1,
+    series: [{name: A.name, data: years.map(y => FA[y] ?? null)}, {name: B.name, data: years.map(y => FB[y] ?? null)}]}));
+  else $("#cmpFlowsChart")?.insertAdjacentHTML("beforeend", `<p class="small muted">Neither has this year's cash flows yet.</p>`);
+  mountCharts($("#main"));
+}
+
 // ---- what each page binds after it's drawn ---------------------------------------------------------------------
 const bind = {
   workbench() { bindNeeds(); bindFiles(); bindRoles(); },
@@ -1736,7 +1881,7 @@ $("#logoFile").onchange = async e => {
 $("#logoReset").onclick = async () => { try { await api("/api/brand/logo", {method: "DELETE"}); logoRefresh(); logoPanel(true); toast("Back to the mascot"); } catch (err) { toast(err.message, 6000); } };
 document.addEventListener("click", e => { if (!$("#logoCtl").hidden && !e.target.closest("#logoCtl, #logoEdit")) logoPanel(false); });
 $("#brandLogo").onerror = () => { $("#brandLogo").onerror = null; $("#brandLogo").src = "/brand/logo?fallback"; };
-$("#brand").onclick = e => { e.preventDefault(); if (E) go("workbench"); };
+$("#brand").onclick = e => { e.preventDefault(); goGlobal({view: "all"}); };
 
 // ---- theme: light or dark, as chosen here (remembered in this browser), else as the system has it ----------------
 const THEME_KEY = "ivw-theme";

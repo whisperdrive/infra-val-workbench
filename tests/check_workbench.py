@@ -16,6 +16,7 @@
   inside    the same run with the overlay inside a copy of the client model and the report as slides
   workpaper the Excel workpaper built from the run, in memory: its sheets, the bridge's mid ends at this year's value,
             a row for every financial year of the cash flows, the disclaimer on its summary; none before the bridge
+  overview  every engagement at a glance: where it is (a finished one, an empty one), its values
   ranges    a dash between two figures is a range in the fact checks ("7.25% - 7.75%"), not a minus; a bracket
             or a dash after a word still is
 
@@ -427,6 +428,22 @@ def place_check() -> None:
           "wrong kind for its role is refused before it's stored)")
 
 
+def overview_check(eid: int) -> None:
+    """The list of every engagement: where each is, and the value the result page shows."""
+    e = wb.create("Asset A, nothing yet")
+    try:
+        ov = {x["id"]: x for x in orc.overview()}
+        x, empty = ov[eid], ov[e["id"]]
+        want = wb.get(eid)["result"]["values"]
+        assert x["state"] == "finished" and x["values"] == want and x["units"] and x["basis"] == "ex" and \
+            x["valuation_date"], x
+        assert x["needs"] == len([n for n in wb.get(eid)["run"]["needs"] if n["severity"] != "info"]), x
+        assert empty["state"] == "empty" and empty["values"] is None and empty["files"] == 0, empty
+    finally:
+        wb.delete(e["id"])
+    print("overview: ok (a finished engagement with its values and what's for a person; an empty one as empty)")
+
+
 def workpaper_check(eid: int) -> None:
     import io
     import openpyxl
@@ -575,6 +592,7 @@ def main() -> None:
     orc.start()
     eid = run_check()
     workpaper_check(eid)
+    overview_check(eid)
     gating_check(eid)
     roles_check()
     escalate_check()

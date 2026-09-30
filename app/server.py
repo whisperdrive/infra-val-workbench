@@ -154,6 +154,12 @@ def list_engagements():
     return workbench.all_engagements()
 
 
+@app.get("/api/overview")
+async def overview():
+    """Every engagement at a glance: where it is, what's for a person, its equity value."""
+    return await _run(orchestrator.overview)
+
+
 @app.post("/api/engagements")
 async def new_engagement(body: NewEngagement):
     return await _run(workbench.create, body.name)

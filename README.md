@@ -104,8 +104,14 @@ decided. Once a run is finished the app opens on the Result.
   from and every check on it, the reconciliation, the key facts, the files and their roles, the review and the run
   log. Figures are values, not links back to the files; it carries a disclaimer that it's for the team to check.
 
-Evidence is folded away, never removed. New engagement, Models, the call log, the workpaper and Delete are in the ⋯
-menu; Delete asks for the engagement's name.
+**All engagements** (the logo, the top of the engagement list, or the ⋯ menu) lists every engagement: where it is
+(finished, needs you, running, waiting, no files yet), what's for you, and its equity value, last year per the report
+to this year, the mid. A click opens one; tick two to compare them side by side: the equity value, the inputs and the
+dates, the bridges step by step (the mid, the same steps matched; a dash where one hasn't a step) and this year's cash
+flows. Differences aren't worked out between engagements in different units.
+
+Evidence is folded away, never removed. All engagements, New engagement, Models, the call log, the workpaper and
+Delete are in the ⋯ menu; Delete asks for the engagement's name.
 
 ## Running it
 

@@ -396,7 +396,7 @@ def role_fits(role: str, filename: str) -> None:
     want = REPORT_TYPES if role == "prior_report" else library.SUPPORTED
     if Path(filename).suffix.lower() not in want:
         what = "last year's report" if role == "prior_report" else "a model"
-        raise ValueError(f"{filename}: {what} goes in as {' or '.join(x.lstrip('.').upper() for x in want)}")
+        raise ValueError(f"{what} goes in as {' or '.join(x.lstrip('.').upper() for x in want)}")
 
 
 def add_upload(eid: int, tmp: Path, filename: str, sha: str, role: str | None = None) -> dict:

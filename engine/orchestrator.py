@@ -941,6 +941,46 @@ def view(eid: int) -> dict:
             "busy": bool(running) or any(s["status"] in MOVING for s in stages)}
 
 
+def overview() -> list[dict]:
+    """Every engagement at a glance, for the list: where it is (empty, needs you, running, finished, waiting), a word
+    on it, how many things are for a person, and its equity value (the saved result's few fields the list shows, read
+    by SQLite rather than the whole result). Reading it starts nothing."""
+    pick = {"values": "$.values", "units": "$.bridges.units", "head_units": "$.head.units", "basis": "$.head.basis",
+            "rolled_to": "$.bridges.valuation_date", "held": "$.bridges.held"}
+    cols = ", ".join(f"json_extract(result_json, '{path}') AS \"{k}\"" for k, path in pick.items())
+    saved = {r["id"]: r for r in wb._q(f"SELECT id, {cols} FROM engagements WHERE result_json IS NOT NULL")}
+    out = []
+    for e in wb.all_engagements():
+        eid = e["id"]
+        v = view(eid)
+        st = {s["stage"]: s for s in v["stages"]}
+        needs = [n for n in v["needs"] if n["severity"] != "info"]
+        blocks = [n for n in needs if n["severity"] == "block"]
+        moving = next((s for s in v["stages"] if s["status"] == "running"), None) or \
+            next((s for s in v["stages"] if s["status"] == "queued"), None)
+        r = saved.get(eid) or {}
+        values = json.loads(r["values"]) if r.get("values") else None
+        files = e["n_docs"] + e["n_workbooks"]
+        if not files:
+            state, note = "empty", "no files yet"
+        elif blocks:
+            state, note = "needs you", blocks[0]["title"]
+        elif moving:
+            state, note = "running", f"{LABEL[moving['stage']]}: {moving['note'] or 'in line'}"
+        elif (values or {}).get("this_year") and st["result"]["status"] in SETTLED:
+            state, note = "finished", f"{len(needs)} to check" if needs else "up to date with the files"
+        else:
+            waiting = next((s for s in v["stages"] if s["status"] not in SETTLED), None)
+            state = "waiting"
+            note = f"{files} of 4 files in" if files < 4 else \
+                f"{LABEL[waiting['stage']]}: {waiting['note'] or 'waiting for the step before it'}" if waiting else "up to date"
+        out.append({"id": eid, "name": e["name"], "updated_at": e["updated_at"], "files": files, "state": state,
+                    "note": note, "needs": len(needs), "blocks": len(blocks), "values": values,
+                    "units": r.get("units") or r.get("head_units"), "basis": r.get("basis"),
+                    "valuation_date": r.get("rolled_to"), "held": bool(r.get("held"))})
+    return out
+
+
 def retry(eid: int, name: str) -> dict:
     """A person's "try again": the stage forgets its inputs, so it runs on the next look."""
     if name not in STAGES:
