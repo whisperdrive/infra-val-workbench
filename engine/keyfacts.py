@@ -192,7 +192,9 @@ def select(markdown: str, limit: int = MAX_CHARS) -> str:
     if len(markdown) <= limit:
         return markdown
     pg = pages(markdown)
-    score = {n: len(KEYWORDS.findall(t)) for n, t in pg.items()}
+    import context
+    around = set(context.pages_for(context.find(markdown)))  # the letter, the scope, definitions: always in
+    score = {n: len(KEYWORDS.findall(t)) + (1000 if n in around else 0) for n, t in pg.items()}
     keep, used = set(), 0
     for n in sorted(pg, key=lambda n: (n > 3, -score[n], n)):
         if used + len(pg[n]) > limit:
@@ -352,10 +354,13 @@ def review(markdown: str, facts: list[dict], model: str, on_usage=None) -> dict:
 # ---- the review and remediation loop --------------------------------------------------------------------------
 
 def cited_pages(markdown: str, page_numbers, limit: int = LOOP_CHARS) -> str:
-    """The pages the open facts cite, with their neighbours (then without them, if that's too long)."""
+    """The pages the open facts cite, with their neighbours (then without them, if that's too long), and the report's
+    letter, scope and definitions (context.py): what the figures mean depends on them."""
+    import context
     pg = pages(markdown)
     cited = {n for n in page_numbers if n in pg}
-    for want in ({m for n in cited for m in (n - 1, n, n + 1)}, cited):
+    around = {n for n in context.pages_for(context.find(markdown)) if n in pg}
+    for want in ({m for n in cited for m in (n - 1, n, n + 1)} | around, cited | around, cited):
         keep = sorted(n for n in want if n in pg)
         text = "\n\n".join(f"<!-- page {n} -->\n{pg[n]}" for n in keep)
         if keep and len(text) <= limit:

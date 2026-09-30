@@ -26,6 +26,11 @@ takes it from there:
    the image reading differs, the reviewer looks at the image with both. A correction stands when two reads of the
    image agree; what doesn't settle goes to a person, with the image. Slides' own text and tables are exact, so they
    aren't looked at again.
+
+   Every model that reads a table or judges a figure is also given what the report says around it (`context.py`): the
+   text on its page, the transmittal letter (else the executive summary), the scope of the engagement, any definitions,
+   and what's established so far (target, client, valuation date, units, the equity value's basis). It's context for
+   what a figure means, not a source of figures.
 4. **Works out which file is which.** It uses likeness, dates, links and where the report's figures sit, with a second
    opinion. It confirms the roles only when the evidence supports it.
 5. **Rebuilds last year in Python.** The overlay's formulas are compiled to a module and checked cell by cell against
@@ -102,6 +107,7 @@ uv run python tests/check_xlruntime.py  # Excel functions in the Python runtime
   - `workbench.py`: the store and the steps.
   - `keyfacts.py`: the report's key facts.
   - `visual.py`: the key tables read from their images, and each fact checked on its image.
+  - `context.py`: what the report says around a figure (the page, the letter, the scope, definitions).
   - `result.py`: the tie, the bridge and the cash flows.
   - The rest came from the Valuation Desk: the workbook library and row map, the roles, the Python overlay
     (`xlcompile.py`, `xlruntime.py`, `overlay.py`), the DCF tracer, row finding and the map.

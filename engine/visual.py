@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import calllog
+import context
 import docingest
 import keyfacts
 
@@ -37,13 +38,18 @@ the single figure (the preferred value, or the midpoint where the report gives o
 a year), or "" in running text; row: the row's label, or what the sentence is about. Only what you can see in this
 image: found false if the item isn't in it.
 
+{context}
+
 Items:
 {items}"""
 VERDICT_PROMPT = """You are the reviewer. Two readings of last year's valuation report disagree on the items below: the
 extraction from the report's text layer (a layout with columns or merged headings can scramble it) and a reading of
 this image of {where}. Look at the image yourself. For each item: choice "extracted" if the extraction is right,
 "image" if the image reading is right, "neither" if both are wrong (then give the figures as the image shows them),
-"not shown" if the image doesn't show the item. Figures exactly as printed; say why in one sentence.
+"not shown" if the image doesn't show the item. Figures exactly as printed; say why in one sentence, using the context
+below (the entity, the interest, the basis, the date, the units) where it decides what a figure is.
+
+{context}
 
 Items:
 {items}"""
@@ -86,11 +92,16 @@ def read_tables(doc: dict, out_dir: str | Path, reader, progress=None, arbiter_m
     out_dir = Path(out_dir)
     done = [0]
 
+    around = context.find(doc.get("markdown") or docingest.render(doc))
+
     def one(t):
+        token = docingest.CONTEXT.set(context.block(doc["markdown"], around, page=t["page"], table_id=t["id"]))
         try:
             t.update(docingest.read_and_check(reader, t, (out_dir / t["png"]).read_bytes(), t.get("text_lines")))
         except Exception as e:  # the table keeps the page's own text; the facts still see it
             t.update(status="unread", read_error=f"{type(e).__name__}: {e}")
+        finally:
+            docingest.CONTEXT.reset(token)
         t["read_for"] = "key figures"
         done[0] += 1
         progress(done[0] / len(todo), f"Read {done[0]} of {len(todo)} key tables from their images")
@@ -195,14 +206,17 @@ def confirm(doc: dict, facts: list[dict], reader, out_dir: str | Path, source_pa
         groups.setdefault(img[0], []).append(f)
         where[img[0]] = img[1]
     n = {"looked": 0, "confirmed": 0, "corrected": 0, "escalated": 0, "images": len(groups)}
+    around = context.find(doc["markdown"])
     for i, (rel, fs) in enumerate(groups.items(), 1):
+        tid = rel.split("/", 1)[1].removesuffix(".png") if rel.startswith("tables/") else None
+        ctx = context.block(doc["markdown"], around, page=fs[0].get("page"), table_id=tid, facts=facts)
         progress(i / max(1, len(groups)), f"Checking {len(fs)} fact(s) on {where[rel]} ({i} of {len(groups)} images)")
         png = (out_dir / rel).read_bytes()
         items = [{"id": k, "item": f.get("label") or f["key"], "key": f["key"],
                   "kind": "a range (low and high)" if f.get("low_text") or f.get("high_text") else "one figure"}
                  for k, f in enumerate(fs)]
         reads = {r["id"]: r for r in reader._call(reader.model, BLIND_PROMPT.format(
-            where=where[rel], items=json.dumps(items, indent=1)), png, BLIND_SCHEMA, "visual-read")["reads"]}
+            where=where[rel], context=ctx, items=json.dumps(items, indent=1)), png, BLIND_SCHEMA, "visual-read")["reads"]}
         disputed = []
         for k, f in enumerate(fs):
             n["looked"] += 1
@@ -222,7 +236,7 @@ def confirm(doc: dict, facts: list[dict], reader, out_dir: str | Path, source_pa
                   "image_reading": fs[k]["visual"]["read"] if fs[k]["visual"]["found"] else "not found in the image"}
                  for k in disputed]
         verdicts = {v["id"]: v for v in reader._call(reader.reviewer_model, VERDICT_PROMPT.format(
-            where=where[rel], items=json.dumps(brief, indent=1, ensure_ascii=False)), png, VERDICT_SCHEMA,
+            where=where[rel], context=ctx, items=json.dumps(brief, indent=1, ensure_ascii=False)), png, VERDICT_SCHEMA,
             "visual-verdict")["verdicts"]}
         for k in disputed:
             f, v = fs[k], verdicts.get(k) or {"choice": "not shown", "reason": "the reviewer gave no verdict"}
@@ -248,4 +262,5 @@ def confirm(doc: dict, facts: list[dict], reader, out_dir: str | Path, source_pa
                     f"on the image of {where[rel]}: " + (v.get("reason") or "the reads don't agree")), "correction": None,
                     "image": rel})
                 n["escalated"] += 1
+    n["context"] = {k: v["pages"] for k, v in around.items()}
     return n

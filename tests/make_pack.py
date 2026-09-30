@@ -293,6 +293,19 @@ def report_content(v: dict, n: dict) -> dict:
         "title": "Asset A Pty Ltd",
         "subtitle": f"Independent valuation as at {VD:%-d %B %Y}  |  Project Alpha",
         "client": "Holdco A Pty Ltd",
+        "letter": [
+            "Private and confidential",
+            "The Directors, Holdco A Pty Ltd",
+            "Dear Directors",
+            "You have asked us to assess the fair market value of 100% of the ordinary equity in Asset A Pty Ltd as at",
+            "30 June 2025, on an ex-distribution basis, for the purposes of financial reporting. Our conclusion is set",
+            "out in the executive summary, and this letter should be read with the full report.",
+        ],
+        "scope": [
+            "Our work covered the Company's FY25 business plan model and the valuation assumptions in section 2.",
+            "We relied on information provided by management and have not audited it. Values are in Australian",
+            "dollars, millions (A$m), unless stated otherwise.",
+        ],
         "summary": [
             "We have been engaged by Holdco A Pty Ltd to assess the fair market value of 100% of the ordinary",
             f"equity in Asset A Pty Ltd (the Company) as at {VD:%-d %B %Y} (the Valuation Date).",
@@ -372,13 +385,21 @@ def write_pdf(path: Path, c: dict) -> None:
         fig.text(0.08, 0.1, "Synthetic test document: every name and number in it is fictional.", fontsize=8)
         pdf.savefig(fig); plt.close(fig)
 
-        fig = page("1. Executive summary", 2)
+        # the transmittal letter, with the scope of the work: context for every figure after it
+        fig = page("Letter of transmittal", 2)
+        y = text(fig, c["letter"], 0.88)
+        fig.text(0.08, y - 0.02, "Scope of our work", fontsize=10.5, weight="bold")
+        y = text(fig, c["scope"], y - 0.05)
+        text(fig, ["Yours faithfully", "The engagement team"], y - 0.03)
+        pdf.savefig(fig); plt.close(fig)
+
+        fig = page("1. Executive summary", 3)
         y = text(fig, c["summary"], 0.88)
         fig.text(0.08, y - 0.02, "Table 1: Valuation summary", fontsize=10, weight="bold")
         table(fig, c["summary_table"], y - 0.035, 0.2)
         pdf.savefig(fig); plt.close(fig)
 
-        fig = page("2. Valuation approach", 3)
+        fig = page("2. Valuation approach", 4)
         y = text(fig, c["method"], 0.88)
         fig.text(0.08, y - 0.02, "Table 2: Key valuation assumptions", fontsize=10, weight="bold")
         # pasted as a picture: the discount rate is only here, so it has to be read from the image
@@ -407,6 +428,13 @@ def write_pptx(path: Path, c: dict) -> None:
         for r, row in enumerate(rows):
             for k, val in enumerate(row):
                 t.cell(r, k).text = val
+
+    sl = slide("Letter of transmittal")
+    tb = sl.shapes.add_textbox(Inches(0.6), Inches(1.3), Inches(12), Inches(4)).text_frame
+    tb.word_wrap = True
+    for i, ln in enumerate(c["letter"] + ["Scope of our work"] + c["scope"] + ["Yours faithfully", "The engagement team"]):
+        p = tb.paragraphs[0] if i == 0 else tb.add_paragraph()
+        p.text, p.font.size = ln, Pt(12)
 
     sl = slide("Executive summary")
     tb = sl.shapes.add_textbox(Inches(0.6), Inches(1.3), Inches(12), Inches(1.8)).text_frame

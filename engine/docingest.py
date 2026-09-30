@@ -18,6 +18,7 @@ images to out_dir/tables/. The Markdown has <!-- page N --> markers so extracted
     uv run python engine/docingest.py report.pdf out/docs/x [model]
 """
 import base64
+import contextvars
 import io
 import json
 import re
@@ -28,6 +29,10 @@ from pathlib import Path
 
 import calllog
 import lessons
+
+# What the report says around the table being read (context.py): the page's text, the letter, the scope, definitions.
+# Set around the reads of one table, and added to every prompt about it; context, not a source of figures.
+CONTEXT = contextvars.ContextVar("report_context", default="")
 
 DPI = 200
 MIN_IMAGE_PT = (150, 60)  # smaller embedded images are logos / icons
@@ -328,7 +333,8 @@ class Reader:
 
     def _call(self, model, prompt, png: bytes | None, schema, purpose) -> dict:
         from llm import create
-        content = [{"type": "input_text", "text": prompt}]
+        extra = CONTEXT.get()
+        content = [{"type": "input_text", "text": prompt + (f"\n\n{extra}" if extra else "")}]
         if png is not None:
             content.append({"type": "input_image", "image_url": f"data:image/png;base64,{base64.b64encode(png).decode()}",
                             "detail": "high"})
@@ -521,6 +527,18 @@ def _contradicted(v: dict) -> list[str]:
 
 
 def resolve_table(reader: Reader, t: dict, png: bytes, rounds: int = MAX_ROUNDS, doc: dict | None = None) -> dict | None:
+    """The loop on one flagged table (_resolve_table), with what the report says around it in every prompt."""
+    import context
+    token = CONTEXT.set(context.block(doc.get("markdown") or "", page=t.get("page"), table_id=t["id"])) \
+        if doc and not CONTEXT.get() else None
+    try:
+        return _resolve_table(reader, t, png, rounds, doc)
+    finally:
+        if token is not None:
+            CONTEXT.reset(token)
+
+
+def _resolve_table(reader: Reader, t: dict, png: bytes, rounds: int = MAX_ROUNDS, doc: dict | None = None) -> dict | None:
     """Run the loop on one flagged table; updates t (status "resolved" if the agents settle it) and returns the
     episode for the lessons. A table that went round before continues from its latest correction; earlier rounds
     are kept and counted. doc (the whole report) lets the loop look for the figures elsewhere in it."""

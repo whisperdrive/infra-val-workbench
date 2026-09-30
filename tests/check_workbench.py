@@ -56,7 +56,8 @@ def sandbox() -> Path:
 # ---- the models, stubbed -------------------------------------------------------------------------------------------
 
 CALLS: list[str] = []
-BEHAVIOUR = {"second_opinion": "agree", "roles_decision": "rules", "verdict": "image"}
+PROMPTS: dict[str, str] = {}  # the last prompt of each kind of call
+BEHAVIOUR = {"second_opinion": "agree", "roles_decision": "rules", "verdict": "image", "verdict_figures": {}}
 TABLES: dict[int, str] = {}  # page -> the table on it, as a reader of its image would transcribe it
 TRUTH = {"equity_value": {"value": "A$2,507.9m", "low": "A$2,345.5m", "high": "A$2,670.3m"},
          "equity_value_cum": {"value": "A$2,532.9m"}, "valuation_date": {"value": "30 June 2025"},
@@ -124,6 +125,7 @@ def fake_create(client, model, input, text=None, max_output_tokens=None, purpose
     CALLS.append(name)
     if isinstance(input, list):  # a call with an image: its prompt is the text part
         input = next(c["text"] for c in input[0]["content"] if c["type"] == "input_text")
+    PROMPTS[name] = input
     if name == "table_read":
         page = int(re.search(r"(?:page|slide) (\d+)", input)[1])
         md = TABLES.get(page, "")
@@ -134,7 +136,9 @@ def fake_create(client, model, input, text=None, max_output_tokens=None, purpose
                                  **{k: TRUTH.get(x["key"], {}).get(k, "") for k in ("value", "low", "high")}} for x in items]})
     if name == "visual_verdict":
         items = json.loads(_section(input, "Items:\n", None))
-        return Reply({"verdicts": [{"id": x["id"], "choice": BEHAVIOUR["verdict"], "value": "", "low": "", "high": "",
+        fig = BEHAVIOUR["verdict_figures"]
+        return Reply({"verdicts": [{"id": x["id"], "choice": BEHAVIOUR["verdict"], "value": fig.get("value", ""),
+                                    "low": fig.get("low", ""), "high": fig.get("high", ""),
                                     "reason": "the image shows 7.25% under Low and 7.75% under High"} for x in items]})
     if name == "identity":
         raise RuntimeError("no model in the test: identify falls back to the cells it found")
@@ -268,6 +272,10 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     assert calls.get("report_facts") == 1 and calls.get("facts_review") == 1 and not calls.get("roles_decision"), calls
     if files == PACK_A:
         assert calls.get("visual_read") == 3 and calls.get("visual_verdict") == 1, calls
+        # what the report says around the figures reached every model that read or judged one
+        for kind in ("visual_read", "visual_verdict", "table_read"):
+            assert "Dear Directors" in PROMPTS[kind] and "context only" in PROMPTS[kind], kind
+        assert "Scope of our work" in PROMPTS["visual_verdict"] and "Established so far" in PROMPTS["visual_verdict"]
     print(f"{'run' if files == PACK_A else 'inside'}: ok (the terminal value, the PV split and the franking credits "
           f"reconcile to the report; facts agreed, roles confirmed on {len(rl['current_model']['evidence']['checks'])} checks and a "
           f"second opinion; {res['where']['low']} / {res['where']['high']} tie; mid {v['report']['mid']:,.1f} -> "
@@ -339,8 +347,34 @@ def roles_check() -> None:
           "checks goes to a person)")
 
 
+def escalate_check() -> None:
+    """Where the image reading and the reviewer agree with neither each other nor the extraction, the fact goes to a
+    person: not approved, the agents' status escalated, on the needs-you list with the image."""
+    BEHAVIOUR.update(verdict="neither", verdict_figures={"low": "9.00%", "high": "9.50%"})
+    try:
+        e = wb.create("Asset A, FY26 (the image disagrees)")
+        eid = e["id"]
+        for f in PACK_A:
+            upload(eid, f)
+        v = wait(eid, lambda v: status(v)["facts"] in (*orc.SETTLED, "failed"), "the facts")
+        rate = next(f for f in wb.facts(eid) if f["key"] == "discount_rate")
+        assert rate["status"] == "pending" and rate["agent"]["status"] == "escalated" and \
+            rate["visual"]["status"] == "escalated" and rate["agent"]["open"]["image"].startswith("tables/"), rate
+        need = next(n for n in v["needs"] if n["id"] == f"fact-{rate['id']}")
+        assert need["severity"] == "check" and "on the image" in need["detail"], need
+    finally:
+        BEHAVIOUR.update(verdict="image", verdict_figures={})
+    print("escalate: ok (where the reads of the image agree with nothing, the fact goes to a person, with the image)")
+
+
 def ranges_check() -> None:
     import keyfacts
+    import context
+    import docingest
+    for kind in ("pdf", "pptx"):
+        d = docingest.process(str(PACK / f"AssetA_valuation_report_FY25.{kind}"), tempfile.mkdtemp(), read=False)
+        c = context.find(d["markdown"])
+        assert c["letter"]["pages"] == [2] and (kind == "pptx" or c["scope"]["pages"] == [2]), (kind, c)
     n = lambda t: keyfacts.numbers(keyfacts._unrange(t))
     assert n("Discount rate 7.25% - 7.75% Post-tax") == ["7.25%", "7.75%"]
     assert n("7.25%–7.75%") == ["7.25%", "7.75%"]
@@ -348,7 +382,8 @@ def ranges_check() -> None:
     assert n("Net debt at valuation - 850.0") == ["-850.0"], n("Net debt at valuation - 850.0")
     got = n("FY25 - 30.0")
     assert got == ["25", "30.0"], got  # a year then a figure reads as a range: the check only looks for the fact's own numbers
-    print("ranges: ok (a dash between figures is a range; a bracket, or a dash after a word, is a minus)")
+    print("ranges: ok (a dash between figures is a range; a bracket, or a dash after a word, is a minus; the letter and "
+          "the scope are found)")
 
 
 def upgrade_check() -> None:
@@ -379,6 +414,7 @@ def main() -> None:
     eid = run_check()
     gating_check(eid)
     roles_check()
+    escalate_check()
     other = run_check(PACK_B, "Asset A, FY26 (overlay inside)")
     a, b = (wb.get(x)["result"]["values"]["this_year"]["mid"] for x in (eid, other))
     assert abs(a - b) < 1e-6, f"the same files give different values in the two layouts: {a} vs {b}"
