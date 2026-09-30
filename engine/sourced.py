@@ -196,9 +196,10 @@ def growth(db, traced: dict, rates: dict, facts: list[dict]) -> dict:
         s = follow(db, gk, g) if gk else None
         r_in = follow(db, rk, r)["cell"] if rk else None
         own = (rates.get("ends") or {}).get(end) or {}
-        if own.get("cell") and r_in:
+        by_cell = bool(own.get("cell") and r_in)
+        if by_cell:
             at_rate = r_in == own["cell"]
-        else:
+        else:  # one of the two isn't a cell: only their values can be compared, and the card says so
             at_rate = own.get("value") is not None and abs(r - own["value"]) < 1e-12
         ties = _ties(100 * g, rep[1]) if rep else None
         form = f"{xl or xk} × (1 + {_pct(g)}) / ({_pct(r)} − {_pct(g)})" if fit["grown"] else \
@@ -207,7 +208,10 @@ def growth(db, traced: dict, rates: dict, facts: list[dict]) -> dict:
             (bool(gk), f"Sourced: the terminal value's formula ({fit['tv_cell']}) reads this cell" if gk else
              f"Not sourced: the growth rate is typed into the terminal value's formula ({fit['tv_cell']})"),
             (True, f"The terminal value recomputed as {form} = {fit['tv']:,.1f} matches the model's"),
-            (at_rate, f"The terminal value is at this end's discount rate ({own.get('cell') or _pct(r)})" if at_rate else
+            (at_rate if by_cell else None if at_rate else False,
+             f"The terminal value is at this end's discount rate ({own['cell']})" if at_rate and by_cell else
+             f"The terminal value's rate ({r_in or 'typed in'}) is {_pct(r)}, the same number as this end's discount "
+             f"rate ({own.get('cell') or 'not sourced'}), matched by value only: one of them isn't a cell" if at_rate else
              f"The terminal value uses {r_in or 'a rate typed in'} ({_pct(r)}), not the rate the discount factors read "
              f"({own.get('cell') or '?'}, {_pct(own['value']) if own.get('value') is not None else '?'})"),
             _vs_report(stated, rep, ties, "terminal growth rate")], rep[1] if rep else None, ties,
