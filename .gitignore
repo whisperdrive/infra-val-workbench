@@ -1,0 +1,26 @@
+# Local settings (Azure endpoints, tenant)
+.env
+
+# Python / tooling
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Client data: confidential workbooks and everything derived from them (every cell is in model.db)
+reference/
+uploads/
+out/
+*.xlsx
+*.xlsm
+*.xlsb
+*.xls
+*.pdf
+*.pptx
+~$*
+
+# The synthetic test pack is generated (tests/make_pack.py)
+tests/pack/
+
+# Your firm's logo for the header (brand/logo.svg or brand/logo.png): stays on this machine
+brand/

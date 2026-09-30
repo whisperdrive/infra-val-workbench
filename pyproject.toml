@@ -1,0 +1,24 @@
+[project]
+name = "infra-val-workbench"
+version = "0.1.0"
+description = "Recurring infrastructure valuations: last year's report, overlay and client models to this year's value, with an orchestrated review"
+requires-python = ">=3.12"
+dependencies = [
+    "azure-ai-projects>=2.7.0",
+    "azure-identity>=1.25.3",
+    "openai>=2.0",
+    "fastapi>=0.141.1",
+    "uvicorn>=0.54.0",
+    "python-multipart>=0.0.32",
+    "openpyxl>=3.1.5",
+    "python-calamine>=0.8.2",
+    "pdfplumber>=0.11.10",
+    "python-pptx>=1.0.2",
+    "numpy>=2.0",
+]
+
+[dependency-groups]
+dev = [
+    "matplotlib>=3.11.2",
+    "xlsxwriter>=3.2",
+]
