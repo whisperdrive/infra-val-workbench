@@ -930,6 +930,7 @@ function viewRebuild() {
     <div class="tile"><b>${esc(O.roll?.prior_valuation_date || "–")}</b><span>last year's valuation date</span></div>
   </div>
   ${R?.tie ? tieCard(R) : ""}
+  ${R?.reconcile ? reconcileCard(R) : ""}
   ${R?.assumptions ? assumptionsCard(R) : ""}
   ${equityPickCard()}
   ${off > 0 ? `<details class="card" data-k="mismatches"><summary style="font-size:14px">${off} cell(s) Python computes differently from Excel</summary><div class="scroll" style="margin-top:8px"><table><thead><tr><th>Cell</th><th>Line item</th><th class="num">Python</th><th class="num">Excel</th><th>Formula</th></tr></thead><tbody>
@@ -944,6 +945,21 @@ function tieCard(R) {
     <div class="scroll"><table><thead><tr><th></th><th class="num">The report</th><th class="num">As Excel saved</th><th class="num">Rebuilt in Python</th></tr></thead><tbody>${row("low", R.tie.low)}${row("high", R.tie.high)}
     <tr class="tot"><td>Mid</td><td class="num">${vN(R.values.report.mid)}</td><td class="num">${vN((R.tie.low.saved + R.tie.high.saved) / 2)}</td><td class="num">${vN(R.values.rebuilt.mid)}</td></tr></tbody></table></div>
     ${(R.head?.why || []).length ? `<p class="small muted" style="margin:8px 0 0">${esc(R.head.why.join("; "))}.</p>` : ""}</div>`;
+}
+function reconcileCard(R) {
+  const C = R.reconcile, u = R.head?.units || "";
+  if (C.error) return `<div class="card" id="reconcileCard"><h2>Reconciled to the report</h2><p class="small muted">${esc(C.error)}</p></div>`;
+  const f = (x, pct) => x == null ? "–" : pct ? x.toFixed(1) + "%" : vN(x);
+  const mark = ok => ok === true ? ` <span class="pill ok">✓</span>` : ok === false ? ` <span class="pill bad">✗</span>` : "";
+  const rows = C.rows.map(r => { const pct = r.unit === "%", t = r.ties || {};
+    const rep = r.report ? ["low", "mid", "high"].filter(e => r.report[e]).map(e => `${e === "mid" ? "" : e + " "}${esc(r.report[e])}`).join(" · ") : `<span class="muted">not disclosed</span>`;
+    return `<tr><td><b>${esc(r.label)}</b>${r.page ? `<div class="small muted">report p. ${esc(r.page)}</div>` : ""}</td><td class="num">${rep}</td>
+      <td class="num">${f(r.python.low, pct)}${mark(t.low)}</td><td class="num"><b>${f(r.python.mid, pct)}</b>${mark(t.mid)}</td><td class="num">${f(r.python.high, pct)}${mark(t.high)}</td>
+      <td class="num">${r.this_year ? f(r.this_year.mid, pct) : "–"}</td></tr>`; }).join("");
+  const L = C.last_year?.mid || {}, T = C.this_year?.mid;
+  return `<div class="card" id="reconcileCard"><h2>Reconciled to the report</h2><p class="sub">What the report discloses of the value, against the same split of the overlay's own discountings as Excel saved them: the largest (${esc(C.streams?.low?.main || "the cash flows")}) split into its terminal value and the discrete forecast; franking credits by their label. ${esc(u)}. The mid is the midpoint of the low and the high; a share at the mid is the mid's figure over the mid's total. Ties within half a unit of the report's last digit.</p>
+    <div class="scroll"><table><thead><tr><th></th><th class="num">The report</th><th class="num">Python, low</th><th class="num">Mid</th><th class="num">High</th><th class="num">This year, mid</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${L.tv_share != null ? `<p class="small muted" style="margin:8px 0 0">The terminal value is ${L.tv_share.toFixed(1)}% of the discounted cash flows' value last year${T?.tv_share != null ? `, ${T.tv_share.toFixed(1)}% this year` : ""}.</p>` : ""}</div>`;
 }
 function assumptionsCard(R) {
   const facts = key => E.facts.find(f => f.key === key && f.status !== "rejected");

@@ -103,7 +103,9 @@ def fake_facts(doc: str) -> list[dict]:
               "A$389.8m"),
             f("conclusion", "franking_credits_share", "Franking credits, share of equity value", "15.5% of the equity value",
               "15.5%", unit="%"),
-            f("conclusion", "terminal_value", "Terminal value", "the terminal value is A$4,968.9m", "A$4,968.9m")]
+            f("conclusion", "terminal_value", "Terminal value", "the terminal value is A$4,968.9m", "A$4,968.9m"),
+            f("conclusion", "pv_forecast", "PV of the forecast", "A$1,819.3m", "A$1,819.3m"),
+            f("conclusion", "pv_terminal_value", "PV of the terminal value", "A$1,173.7m", "A$1,173.7m")]
 
 
 def fake_create(client, model, input, text=None, max_output_tokens=None, purpose=None, **kw):
@@ -212,13 +214,21 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     assert ch["left_out"] == ["Terminal value"] and len(ch["series"]["last_year"]) == 20 and \
         len(ch["series"]["this_year"]) == 20, ch
     assert list(ch["series"]["last_year"])[0] == "FY26" and list(ch["series"]["this_year"])[0] == "FY27"
+    rec = {r["key"]: r for r in res["reconcile"]["rows"]}
+    for key in ("terminal_value", "pv_forecast", "pv_terminal_value", "franking_credits_value", "franking_credits_share"):
+        assert rec[key].get("ok") is True, (key, rec[key])
+    this = res["reconcile"]["this_year"]["mid"]
+    assert this["pv_tv"] and this["pv_forecast"] and abs(this["pv"] - (this["pv_tv"] + this["pv_forecast"])) < 1e-6, this
+    rates = {e: next(a["rate_source"] for a in res["assumptions"][e] if a.get("parts")) for e in ("low", "high")}
+    assert rates == {"low": "Val_Inputs!C5", "high": "Val_Inputs!E5"}, rates
     assert not [n for n in orc.view(eid)["needs"] if n["severity"] == "block"]
     log = orc.history(eid, limit=200)
     assert any(h["stage"] == "roles" and h["event"] == "done" for h in log) and \
         any(h["stage"] == "review" and h["event"] == "decide" for h in log)
     calls = {c: CALLS.count(c) - n0.get(c, 0) for c in set(CALLS)}
     assert calls.get("report_facts") == 1 and calls.get("facts_review") == 1 and not calls.get("roles_decision"), calls
-    print(f"{'run' if files == PACK_A else 'inside'}: ok (facts agreed, roles confirmed on {len(rl['current_model']['evidence']['checks'])} checks and a "
+    print(f"{'run' if files == PACK_A else 'inside'}: ok (the terminal value, the PV split and the franking credits "
+          f"reconcile to the report; facts agreed, roles confirmed on {len(rl['current_model']['evidence']['checks'])} checks and a "
           f"second opinion; {res['where']['low']} / {res['where']['high']} tie; mid {v['report']['mid']:,.1f} -> "
           f"{v['this_year']['mid']:,.1f}; chart {len(ch['series']['last_year'])} + {len(ch['series']['this_year'])} years; "
           f"model calls {calls})")

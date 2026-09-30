@@ -26,6 +26,7 @@ import overlay as ov
 import rodb
 
 TV_WORDS = re.compile(r"terminal|continuing value|residual|perpetuity|gordon|exit value", re.I)
+FRANKING = re.compile(r"frank|imputation|gamma", re.I)
 
 
 # ---- where the report's equity value is in the overlay ------------------------------------------------------------
@@ -354,6 +355,26 @@ def _fy(d: date, end_month: int) -> str:
     return f"FY{y % 100:02d}"
 
 
+def _tv_parts(core: dict) -> list[dict]:
+    return [p for p in core.get("parts") or []
+            if TV_WORDS.search(p.get("label") or "") or re.search(r"/\s*\(.*-.*growth", p.get("words") or "", re.I)]
+
+
+def _ranges(core: dict, parts: list[dict]) -> list[str] | None:
+    """These parts of a discounting's cash-flow row as ranges over its columns (None if a part is on another sheet)."""
+    rng = core["inputs"]["cashflow"]
+    m = re.match(r"^(.+?)!\$?([A-Z]{1,3})\$?\d+:\$?([A-Z]{1,3})\$?\d+$", rng[0]) if len(rng) == 1 else None
+    if not m:
+        return None
+    out = []
+    for p in parts:
+        pm = re.match(r"^(?:\[\d+\])?(.+)!r(\d+)$", p["row"])
+        if not pm or pm[1] != m[1].strip("'"):
+            return None
+        out.append(f"{m[1]}!{m[2]}{pm[2]}:{m[3]}{pm[2]}")
+    return out
+
+
 def _discrete_rows(core: dict) -> tuple[list[str], list[str]]:
     """The cash-flow ranges of a discounting without its terminal value: the parts of its cash-flow row that aren't
     labelled or built like a terminal value, over the same columns. -> (ranges, the parts left out)."""
@@ -412,6 +433,140 @@ def chart(sess, summary: dict, where: dict, figs: dict, fy_end: int) -> dict:
     return {"years": years, "series": series, "rows": ranges, "left_out": left_out, "core": main["cell"],
             "label": next((p.get("label") for p in (main.get("parts") or []) if p.get("label") not in left_out), None),
             "held": bool(figs.get("gaps") and not figs["gaps"]["reliable"]), "units": None}
+
+
+# ---- the report's disclosures, reconciled ------------------------------------------------------------------------
+# What the report discloses of the value (the terminal value, the present values of the forecast and of the
+# terminal value, the value of franking credits and its share of the equity value), against the same split of the
+# overlay's own discountings: the one with the largest value (the enterprise value) split into its terminal value
+# part and the rest, the others that are franking credits by their label. Each end separately; the mid their
+# average, the convention for the equity value too. A figure ties when it's within half a unit of the report's
+# last printed digit.
+
+def _split(db, core: dict) -> dict:
+    """One discounting on db: its present value, and where its cash-flow row has a terminal value part (added, not
+    subtracted), that part undiscounted and discounted, and the rest (the discrete forecast)."""
+    inputs = {**core["inputs"], "compare_to": None}
+    r = dcf.compute(db, **inputs, fix=False)
+    out = {"pv": r["pv"], "rate": r["rate"]}
+    tv = _tv_parts(core)
+    rng = _ranges(core, tv) if tv and all(p.get("sign", 1) == 1 for p in tv) else None
+    if rng:
+        t = dcf.compute(db, **{**inputs, "cashflow": rng}, fix=False)
+        flows, _ = ov._flows(db, {"cashflow": rng, "dates": inputs.get("dates")})
+        out.update(pv_tv=t["pv"], pv_forecast=r["pv"] - t["pv"], tv=sum(flows.values()))
+    return out
+
+
+def _streams(cs: list[dict]) -> tuple[dict | None, list[dict], list[dict]]:
+    """(the main discounting, the franking credit ones, the others)."""
+    if not cs:
+        return None, [], []
+    main = max(cs, key=lambda c: abs(c.get("pv") or 0.0))
+    rest = [c for c in cs if c is not main]
+    words = lambda c: " ".join([c.get("cashflow_label") or ""] + [p.get("label") or "" for p in c.get("parts") or []])
+    fr = [c for c in rest if FRANKING.search(words(c))]
+    return main, fr, [c for c in rest if c not in fr]
+
+
+def _end_split(db, cs: list[dict]) -> dict:
+    main, fr, other = _streams(cs)
+    if not main:
+        return {}
+    out = _split(db, main)
+    out["franking"] = sum(dcf.compute(db, **{**c["inputs"], "compare_to": None}, fix=False)["pv"] for c in fr) if fr else None
+    out["other"] = [{"cell": c["cell"], "label": c.get("cashflow_label"),
+                     "pv": dcf.compute(db, **{**c["inputs"], "compare_to": None}, fix=False)["pv"]} for c in other]
+    out["main_label"] = main.get("cashflow_label")
+    return out
+
+
+def _ties(python: float | None, text: str | None) -> bool | None:
+    nums = keyfacts.numbers(text or "")
+    if python is None or not nums:
+        return None
+    x = float(nums[0].rstrip("%"))
+    d = len(nums[0].rstrip("%").split(".")[1]) if "." in nums[0] else 0
+    return abs(python - x) <= 0.5 * 10 ** -d + 1e-9
+
+
+REPORTED = (("terminal_value", "Terminal value", "tv"), ("pv_forecast", "PV of the discrete forecast", "pv_forecast"),
+            ("pv_terminal_value", "PV of the terminal value", "pv_tv"),
+            ("franking_credits_value", "Value of franking credits", "franking"),
+            ("franking_credits_share", "Franking credits, % of the equity value", "franking_share"))
+
+
+def reconcile(sess, summary: dict, where: dict, facts: list[dict], figs: dict) -> dict:
+    """The report's disclosed split against Python's, last year (on the values Excel saved), with this year's split
+    beside it (rolled forward). {"rows": [...], "last_year": {end: split}, "this_year": {end: split} | None}."""
+    path = summary["wiring"]["overlay"]["db_path"]
+    db = rodb.connect(path)
+    unit = lambda v: v / (where["scale"] or 1.0) * (where["sign"] or 1) if isinstance(v, float) else None
+    traced = {e: _traced(db, where[e]) for e in ("low", "high")}
+    last, this = {}, {}
+    for e in ("low", "high"):
+        cs = (traced[e] or (None, []))[1]
+        try:
+            last[e] = _end_split(db, cs)
+        except (ValueError, ZeroDivisionError) as ex:
+            last[e] = {"error": str(ex)}
+    if figs.get("this_year") and not (figs.get("gaps") and not figs["gaps"]["reliable"]):
+        need = set()
+        for e in ("low", "high"):
+            for c in (traced[e] or (None, []))[1]:
+                need |= ov._dcf_cells(db, c["inputs"])
+                for rng in [_ranges(c, [p]) for p in c.get("parts") or []]:
+                    if rng:
+                        need |= ov._dcf_cells(db, {"cashflow": rng})
+        cur = _patched(sess, summary, db, "current", need)
+        for e in ("low", "high"):
+            try:
+                this[e] = _end_split(cur, (traced[e] or (None, []))[1])
+            except (ValueError, ZeroDivisionError) as ex:
+                this[e] = {"error": str(ex)}
+    saved = {e: figs["saved"].get(where[e]) for e in ("low", "high")}
+    thisv = {e: (figs.get("this_year") or {}).get(where[e]) for e in ("low", "high")}
+
+    def view(split: dict, equity: dict) -> dict:
+        out = {}
+        for e in ("low", "high"):
+            x = split.get(e) or {}
+            out[e] = {k: unit(x.get(k)) for k in ("pv", "pv_forecast", "pv_tv", "tv", "franking")}
+            eq = equity.get(e)
+            out[e]["franking_share"] = 100 * x["franking"] / eq if x.get("franking") is not None and isinstance(eq, float) \
+                and eq else None
+            out[e]["tv_share"] = 100 * x["pv_tv"] / x["pv"] if x.get("pv_tv") is not None and x.get("pv") else None
+        out["mid"] = {k: (out["low"][k] + out["high"][k]) / 2 if out["low"][k] is not None and out["high"][k] is not None
+                      else None for k in out["low"]}
+        # a share at the mid is the mid's figure over the mid's total (as the report works it), not the average share
+        m, eq = out["mid"], [unit(equity.get(e)) for e in ("low", "high")]
+        eq_mid = (eq[0] + eq[1]) / 2 if None not in eq else None
+        m["franking_share"] = 100 * m["franking"] / eq_mid if m["franking"] is not None and eq_mid else None
+        m["tv_share"] = 100 * m["pv_tv"] / m["pv"] if m["pv_tv"] is not None and m["pv"] else None
+        return out
+
+    L = view(last, saved)
+    T = view(this, thisv) if this else None
+    by_key = {}
+    for f in facts:
+        if f.get("status") != "rejected" and f.get("key") not in by_key:
+            by_key[f["key"]] = f
+    rows = []
+    for key, label, field in REPORTED:
+        f = by_key.get(key)
+        row = {"key": key, "label": label, "python": {e: L[e][field] for e in ("low", "mid", "high")},
+               "this_year": {e: T[e][field] for e in ("low", "mid", "high")} if T else None,
+               "unit": "%" if field.endswith("share") else None}
+        if f:
+            v = f.get("final") or f
+            texts = {"low": v.get("low_text"), "high": v.get("high_text"), "mid": v.get("value_text")}
+            checks = {e: _ties(row["python"][e], t) for e, t in texts.items() if t and keyfacts.numbers(t)}
+            row.update(report={e: t for e, t in texts.items() if t}, page=v.get("page"), ties=checks,
+                       ok=all(checks.values()) if checks else None, basis=v.get("basis"))
+        rows.append(row)
+    return {"rows": rows, "last_year": L, "this_year": T,
+            "streams": {e: {"main": last.get(e, {}).get("main_label"), "other": last.get(e, {}).get("other")}
+                        for e in ("low", "high")}}
 
 
 # ---- the model's assumptions under the value ---------------------------------------------------------------------
@@ -473,9 +628,13 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
                     "rebuilt_ok": bool((ov.tie(figs["rebuilt"].get(where[end]), text, where["scale"], where["sign"]) or {})
                                        .get("ok")) if text else False}
     br = ov.deep(bridges, sess, summary, head, where, figs)
+    try:
+        rec = ov.deep(reconcile, sess, summary, where, facts, figs)
+    except Exception as ex:  # the reconciliation is beside the value, not in its way
+        rec = {"rows": [], "error": f"{type(ex).__name__}: {ex}"}
     ch = ov.deep(chart, sess, summary, where, figs, fy_end)
     this = {e: unit((figs.get("this_year") or {}).get(where[e])) for e in ("low", "high")} if figs.get("this_year") else None
-    return {"head": head, "where": where, "tie": tie, "figures": figs, "bridges": br, "chart": ch,
+    return {"head": head, "where": where, "tie": tie, "figures": figs, "bridges": br, "chart": ch, "reconcile": rec,
             "assumptions": assumptions(summary, where),
             "values": {"report": {e: head[e] for e in ("low", "mid", "high")},
                        "rebuilt": {"low": tie["low"]["rebuilt"], "high": tie["high"]["rebuilt"],

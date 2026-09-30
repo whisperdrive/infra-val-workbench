@@ -704,6 +704,14 @@ def _result_job(eid: int, key: str):
                                 (f"; the zero-roll check fails on {', '.join(zero)}" if zero else "") +
                                 ("; this year's valuation date isn't known" if g.get("date_check") else ""),
                       "go": {"step": "result", "anchor": "rowsCard"}, "rows": rows})
+    for r in (res.get("reconcile") or {}).get("rows") or []:
+        if r.get("ok") is False:
+            bad = [f"{e}: report {r['report'][e]}, Python {r['python'][e]:,.1f}" for e, ok in r["ties"].items()
+                   if ok is False and r["python"].get(e) is not None]
+            needs.append({"id": f"reconcile-{r['key']}", "stage": "result", "severity": "check",
+                          "title": f"{r['label']} doesn't reconcile to the report",
+                          "detail": "; ".join(bad) or "Python couldn't split the value this way",
+                          "go": {"step": "rebuild", "anchor": "reconcileCard"}})
     for end in ("low", "high"):
         t = res["tie"][end]
         if not t["ok"]:

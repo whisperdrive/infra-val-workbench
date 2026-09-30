@@ -517,13 +517,18 @@ def candidate_cells(db: sqlite3.Connection, what: str, limit: int = 12) -> list[
         if not words.search(label) or (skip and skip.search(label)):
             continue
         lay = _layout(db, sheet)
+        # a date: the first to the right of its label. A rate: every one on the row, since a range sits on one row
+        # (low / mid / high): the high end's discounting reads the third cell, not the first
+        took = 0
         for col, v in db.execute("SELECT col, value FROM cells WHERE sheet=? AND row=? AND col>? ORDER BY col",
                                  (sheet, row, lay.get("units_col") or lay.get("label_col") or 0)):
             if ok(v):
                 ref = f"{sheet}!{_addr(col, row)}"
                 if ref not in seen:  # already listed under its name
                     out.append({"ref": ref, "value": v, "text": f"{ref} = {_show(v)}  ({label})"})
-                break
+                took += 1
+                if what != "rate" or took >= 6:
+                    break
         if len(out) >= limit:
             break
     return out[:limit]
