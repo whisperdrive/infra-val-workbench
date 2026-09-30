@@ -727,6 +727,13 @@ flow), a figure that doesn't tie, a key fact that doesn't fit the model, a date 
 that jumps. Be specific and brief. choice: "ok" if nothing needs a person, else "concerns", with each concern in
 concerns (title, detail, severity: "check" for something a person should look at, "info" for a note).
 
+How the bridge is built, so you don't flag what follows from it: every discounting under the equity value moves (the
+unlevered free cash flows with the terminal value, and any other stream the overlay discounts, such as franking
+credits); net debt and a declared distribution are held as they were. So the time value is about the discount rate
+times the discounted streams (not the equity value) over the years between the dates, and the cash flows paid are
+the first year of every stream, not the free cash flow alone. The discount rate is last year's unless a person set
+another.
+
 The run:
 {run}"""
 
@@ -737,7 +744,11 @@ def _review_job(eid: int, key: str):
     if not res:
         return "done", "nothing to review yet", {}
     ch = res.get("chart") or {}
-    run = {"facts": [{k: f.get(k) for k in ("key", "value_text", "low_text", "high_text", "basis", "status", "decided_by")}
+    streams = {e: [{"stream": x.get("label"), "present_value": x.get("pv"), "rate": x.get("rate"),
+                    "undiscounted": x.get("undiscounted"), "terminal_value": x.get("terminal_value")}
+                   for x in rows if not x.get("error")] for e, rows in (res.get("assumptions") or {}).items()}
+    run = {"discounted_streams_under_the_value": streams,
+           "facts": [{k: f.get(k) for k in ("key", "value_text", "low_text", "high_text", "basis", "status", "decided_by")}
                      for f in e["facts"]],
            "equity_value": {k: (res.get("head") or {}).get(k) for k in ("basis", "low", "mid", "high", "units", "why")},
            "where_in_overlay": res.get("where"), "tie": res.get("tie"), "values": res.get("values"),

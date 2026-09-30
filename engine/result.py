@@ -285,8 +285,10 @@ def _steps(prior_db, traced, v0: float, v2: float, vd1: str | None) -> tuple[lis
         if vu is None or v1 is None:
             raise ValueError("a formula on the way up can't be evaluated here")
         years = dcf.yearfrac(next(iter(base.values()))["valuation_date"], vd1d, "actual/actual")
-        return [{"key": "time", "label": f"Time value: {years:.2f} years of unwind at the discount rate", "value": vu - v0},
-                {"key": "cash", "label": f"Last year's forecast cash flows up to {vd1[:10]}", "value": v1 - vu},
+        streams = f" (all {len(cs)} discounted streams)" if len(cs) > 1 else ""
+        return [{"key": "time", "label": f"Time value: {years:.2f} years of unwind at the discount rate on the discounted "
+                                         f"cash flows{streams}; net debt held", "value": vu - v0},
+                {"key": "cash", "label": f"Last year's forecast cash flows{streams} up to {vd1[:10]}", "value": v1 - vu},
                 {"key": "forecast", "label": "This year's client model (new forecast, rolled forward)", "value": v2 - v1}], None
     except (ValueError, ZeroDivisionError, OverflowError) as e:
         return [{"key": "roll", "label": "Roll-forward onto this year's model (time, cash flows and forecast)",
@@ -431,7 +433,7 @@ def assumptions(summary: dict, where: dict) -> dict:
                 rows.append({"cell": c["cell"], "error": str(e)})
                 continue
             tv = [p for p in (c.get("parts") or []) if TV_WORDS.search(p.get("label") or "")]
-            rows.append({"cell": c["cell"], "kind": c.get("kind"), **ov._brief(r),
+            rows.append({"cell": c["cell"], "kind": c.get("kind"), "label": c.get("cashflow_label"), **ov._brief(r),
                          "rate_source": c["inputs"].get("rate") if isinstance(c["inputs"].get("rate"), str) else
                          (c.get("method") or {}).get("rate_note") or "a constant",
                          "valuation_date_source": c["inputs"].get("valuation_date"),

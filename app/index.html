@@ -1,0 +1,1344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Infra Val Workbench</title>
+<script>try { const t = localStorage.getItem("ivw-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch {}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@300;400;600;700&family=Noto+Sans+Mono:wght@400;500&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="/charts.js"></script>
+<style>
+/* Palette: off-black #2e2e38 / #1a1a24, ground #f6f6fa, greys #c4c4cd / #747480, the accent blue #1a9afa for lines,
+   rules and borders. Solid fills that carry text or a tick (buttons, done circles) are a deeper shade of it, #1478d0,
+   with white on top: white on #1a9afa itself is under 3:1, on #1478d0 it is 4.5:1. */
+:root {
+  --ground: #f6f6fa; --surface: #ffffff; --raised: #fbfbfd; --ink: #2e2e38; --muted: #6b6b78; --rule: #e1e1e6;
+  --rule-strong: #c4c4cd; --bar: #1a1a24; --bar-ink: #ffffff; --bar-muted: #c4c4cd; --accent: #1a9afa;
+  --accent-fill: #1478d0; --on-accent: #ffffff; --link: #1270c2; --blue: #1a9afa;
+  --ok-bg: #e5f3ea; --ok: #16692f; --warn-bg: #fff3cc; --warn: #7a5200; --bad-bg: #fbe7e5; --bad: #a3261c;
+  --info-bg: #e3f1fd; --info: #0f5a9c; --code-bg: #f0f0f4;
+  --s1: #1a9afa; --s2: #747480; --s3: #2e2e38;
+  --c1: #1a9afa; --c2: #2e2e38; --c3: #d97a00; --c4: #8a8a96; --c5: #16692f; --c6: #a3261c;
+  --q1: #d6ebfd; --q2: #aed6fb; --q3: #7fbef8; --q4: #4ea5f5; --q5: #1a8ae6; --q6: #126cb8; --q7: #0b4f8a;
+  --sans: "Noto Sans", system-ui, -apple-system, sans-serif; --mono: "Noto Sans Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #1a1a24; --surface: #23232f; --raised: #2a2a36; --ink: #f0f0f5; --muted: #a8a8b5; --rule: #34343f;
+    --rule-strong: #4a4a57; --bar: #121219; --link: #4bb0fb; --blue: #1a9afa;
+    --ok-bg: #173323; --ok: #7fd49a; --warn-bg: #3a3012; --warn: #f3cf62; --bad-bg: #3d1d1b; --bad: #f4a39b;
+    --info-bg: #15304a; --info: #8cc8f7; --code-bg: #2e2e38; color-scheme: dark;
+    --s1: #1a9afa; --s2: #9a9aa8; --s3: #f0f0f5;
+    --c1: #4bb0fb; --c2: #f0f0f5; --c3: #f3a43b; --c4: #9a9aa8; --c5: #7fd49a; --c6: #f4a39b;
+    --q1: #0b2e4f; --q2: #0f3d69; --q3: #154f87; --q4: #1a63a8; --q5: #1a7fd6; --q6: #4ba3f0; --q7: #8cc8f7;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #1a1a24; --surface: #23232f; --raised: #2a2a36; --ink: #f0f0f5; --muted: #a8a8b5; --rule: #34343f;
+  --rule-strong: #4a4a57; --bar: #121219; --link: #4bb0fb; --blue: #1a9afa;
+  --ok-bg: #173323; --ok: #7fd49a; --warn-bg: #3a3012; --warn: #f3cf62; --bad-bg: #3d1d1b; --bad: #f4a39b;
+  --info-bg: #15304a; --info: #8cc8f7; --code-bg: #2e2e38; color-scheme: dark;
+  --s1: #1a9afa; --s2: #9a9aa8; --s3: #f0f0f5;
+  --c1: #4bb0fb; --c2: #f0f0f5; --c3: #f3a43b; --c4: #9a9aa8; --c5: #7fd49a; --c6: #f4a39b;
+  --q1: #0b2e4f; --q2: #0f3d69; --q3: #154f87; --q4: #1a63a8; --q5: #1a7fd6; --q6: #4ba3f0; --q7: #8cc8f7;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--ground); color: var(--ink); font: 300 15px/1.55 var(--sans); }
+b, strong, th, h1, h2, h3 { font-weight: 600; }
+a { color: var(--link); }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.small { font-size: 13px; }
+.nowrap { white-space: nowrap; }
+
+/* header */
+header { background: var(--bar); color: var(--bar-ink); position: sticky; top: 0; z-index: 10; }
+.hbar { display: flex; align-items: center; gap: 14px; padding: 10px 64px 10px 24px; max-width: 1360px; margin: 0 auto; flex-wrap: wrap; }
+.brand { display: flex; align-items: flex-end; gap: 10px; text-decoration: none; color: inherit; }
+.brand .logo { height: 36px; width: auto; max-width: 160px; display: block; object-fit: contain; }
+.brandwrap { position: relative; display: flex; align-items: center; }
+.logo-edit { position: absolute; left: -6px; top: -6px; width: 20px; height: 20px; border-radius: 50%; border: 1px solid #4a4a57;
+  background: #2e2e38; color: #fff; font-size: 11px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity .15s; padding: 0; }
+.brandwrap:hover .logo-edit, .logo-edit:focus-visible, .logo-edit[aria-expanded="true"] { opacity: 1; }
+#logoCtl { left: 24px; right: auto; width: 340px; }
+footer.disclaimer { max-width: 1360px; margin: 8px auto 0; padding: 14px 24px 22px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 12px; line-height: 1.55; }
+footer.disclaimer p { margin: 0 0 6px; max-width: 110ch; }
+footer.disclaimer b { color: var(--ink); font-weight: 600; }
+.brand .name { font-size: 18px; font-weight: 600; letter-spacing: .1px; line-height: 1; }
+.brand .sub { font-size: 12px; color: var(--bar-muted); font-weight: 400; line-height: 1; margin-left: 2px; }
+.hsp { flex: 1; }
+.hctl { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--bar-muted); flex-wrap: wrap; }
+.hctl select { background: #2e2e38; color: #fff; border: 1px solid #4a4a57; border-radius: 4px; padding: 4px 8px; font-size: 13px; max-width: 280px; }
+.chip { background: #2e2e38; border: 1px solid #4a4a57; color: #fff; border-radius: 99px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.accent-rule { height: 3px; background: var(--accent); }
+.hbtn { background: #2e2e38; color: #fff; border: 1px solid #4a4a57; border-radius: 4px; padding: 4px 10px; font-size: 13px; cursor: pointer; }
+.hbtn:hover, .hbtn[aria-expanded="true"] { border-color: var(--accent); }
+.hbtn.icon { display: inline-flex; align-items: center; justify-content: center; padding: 4px 7px; }
+.hbtn.icon svg { width: 16px; height: 16px; }
+#themeBtn { position: absolute; top: 12px; right: 14px; }
+.popover { position: absolute; right: 24px; top: 58px; z-index: 30; background: var(--surface); color: var(--ink); border: 1px solid var(--rule-strong);
+  border-radius: 6px; padding: 12px 14px; width: 260px; display: grid; gap: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+.popover label { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+/* the shell: navigation on the left, the page */
+.shell { display: grid; grid-template-columns: 210px minmax(0, 1fr); max-width: 1600px; margin: 0 auto; }
+.content { min-width: 0; }
+nav.side { position: sticky; top: 62px; align-self: start; max-height: calc(100vh - 62px); overflow-y: auto; padding: 18px 10px 30px 18px; }
+nav.side button { display: flex; width: 100%; gap: 8px; align-items: center; background: none; border: 0; border-radius: 4px; padding: 7px 8px;
+  color: var(--ink); cursor: pointer; font-size: 14px; text-align: left; }
+nav.side button:hover { background: var(--raised); }
+nav.side button.on { background: var(--surface); box-shadow: inset 3px 0 0 var(--accent); font-weight: 600; }
+nav.side button:disabled { opacity: .45; cursor: not-allowed; }
+nav.side .nm { flex: 1; }
+nav.side .cnt { background: var(--warn-bg); color: var(--warn); border-radius: 99px; font-size: 11.5px; padding: 0 7px; font-weight: 600; }
+nav.side .cnt.bad { background: var(--bad-bg); color: var(--bad); }
+@media (max-width: 900px) { .shell { grid-template-columns: minmax(0, 1fr); } nav.side { position: static; max-height: none; display: flex; flex-wrap: wrap; gap: 4px; padding: 10px 16px; }
+  nav.side button { width: auto; } }
+.dot { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #74747f; display: inline-grid; place-items: center; font-size: 11px; font-weight: 600; flex: none; }
+.dot.done { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--on-accent); }
+.dot.work { border-color: var(--blue); color: var(--blue); animation: glow 1.8s ease-out infinite; }
+.dot.done.flag, .dot.you { background: var(--warn-bg); border-color: #e0b400; color: var(--warn); }
+.dot.bad { background: var(--bad-bg); border-color: var(--bad); color: var(--bad); }
+
+main { max-width: 1360px; margin: 0; padding: 22px 24px 60px; display: grid; gap: 18px; }
+.lede { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.lede h1 { font-size: 24px !important; margin: 0; font-weight: 300; }
+.lede h1 b { font-weight: 600; }
+.lede p { margin: 4px 0 0; color: var(--muted); max-width: 820px; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px 18px; min-width: 0; }
+.card > h2, .card h2, .node .small b { font-size: 16px; margin: 0 0 2px; overflow-wrap: anywhere; }
+.card > .sub, .card .sub { font-size: 13.5px; color: var(--muted); margin: 0 0 12px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: 18px; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 14px; }
+.stack { display: grid; gap: 18px; }
+.sect { font-size: 12px; letter-spacing: .5px; text-transform: uppercase; color: var(--muted); margin: 10px 0 -8px; font-weight: 600; }
+
+.btn { background: var(--surface); border: 1px solid var(--rule-strong); border-radius: 4px; padding: 6px 14px; cursor: pointer; font-size: 14px; font-weight: 400; }
+.btn:hover { border-color: var(--ink); }
+.btn.primary { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--on-accent); font-weight: 600; }
+.btn.primary:hover { filter: brightness(.95); }
+.btn.small { padding: 3px 9px; font-size: 12.5px; }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--link); padding-left: 4px; padding-right: 4px; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+input[type=text], input[type=date], select.in, textarea { background: var(--surface); border: 1px solid var(--rule-strong); border-radius: 4px; padding: 6px 9px; font-size: 14px; }
+
+.pill { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 99px; background: var(--code-bg); color: var(--muted); white-space: nowrap; letter-spacing: .1px; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+button.pill { border: 1px solid currentColor; cursor: pointer; font-family: inherit; line-height: inherit; }
+button.pill:disabled { cursor: default; opacity: .6; }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.bad { background: var(--bad-bg); color: var(--bad); }
+.pill.info { background: var(--info-bg); color: var(--info); }
+.callout { border-radius: 4px; padding: 10px 14px; font-size: 14px; border-left: 4px solid; }
+.callout.warn { background: var(--warn-bg); color: var(--warn); border-color: #e0b400; }
+.callout.bad { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
+.callout.info { background: var(--info-bg); color: var(--info); border-color: var(--blue); }
+
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th { text-align: left; font-size: 12px; color: var(--muted); padding: 7px 10px; border-bottom: 1px solid var(--rule-strong); white-space: nowrap; font-weight: 600; }
+td { padding: 8px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+tr.click { cursor: pointer; }
+tr.click:hover td { background: var(--raised); }
+tr.tot td { font-weight: 600; border-top: 1px solid var(--ink); }
+.bar { height: 5px; border-radius: 3px; background: var(--rule); overflow: hidden; margin-top: 5px; min-width: 120px; }
+.bar i { display: block; height: 100%; background: var(--blue); transition: width .4s; }
+tr.flash > td { background: var(--info-bg); transition: background .4s; }
+.flash:not(tr) { outline: 2px solid var(--accent); outline-offset: 3px; transition: outline-color .4s; }
+
+.drop { border: 2px dashed var(--rule-strong); border-radius: 6px; padding: 22px; text-align: center; background: var(--raised); cursor: pointer; }
+.drop.over { border-color: var(--accent); background: var(--info-bg); }
+.drop b { font-size: 16px; }
+.slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 10px; margin-top: 14px; text-align: left; }
+.slot { border: 1px solid var(--rule); border-radius: 4px; padding: 9px 12px; background: var(--surface); font-size: 13px; }
+.slot b { display: block; font-size: 13.5px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.tile { border: 1px solid var(--rule); border-radius: 4px; padding: 10px 14px; background: var(--surface); }
+.tile b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.tile span { font-size: 12.5px; color: var(--muted); }
+.heads { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.head { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; }
+.head.main { box-shadow: inset 0 3px 0 var(--accent); }
+.head .k { font-size: 12.5px; color: var(--muted); }
+.head .v { font-size: 26px; font-weight: 600; margin: 2px 0; font-variant-numeric: tabular-nums; }
+.head .s { font-size: 12.5px; color: var(--muted); }
+.checks { list-style: none; padding: 0; margin: 0; font-size: 12.5px; }
+.checks li::before { content: "✓ "; color: var(--ok); font-weight: 700; }
+.checks li.no::before { content: "✗ "; color: var(--bad); }
+.checks li.unk::before { content: "? "; color: var(--warn); font-weight: 700; }
+details > summary { cursor: pointer; color: var(--link); font-size: 13px; }
+.quote { font-size: 12.5px; color: var(--muted); border-left: 3px solid var(--rule-strong); padding-left: 8px; margin-top: 4px; }
+.why { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); }
+.why li { margin: 2px 0; overflow-wrap: anywhere; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 13.5px; margin: 0; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; }
+.empty { text-align: center; padding: 40px 20px; color: var(--muted); }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--bar); color: #fff; padding: 9px 16px; border-radius: 4px; font-size: 14px; z-index: 30; border-left: 4px solid var(--accent); max-width: 90vw; }
+
+/* roles */
+.flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; align-items: stretch; }
+@media (max-width: 900px) { .flow { grid-template-columns: 1fr; } }
+.node { border: 1px solid var(--rule-strong); border-top: 4px solid var(--accent); border-radius: 4px; padding: 12px 14px; background: var(--surface); position: relative; margin-right: 26px; }
+.node:last-child { margin-right: 0; }
+.node::after { content: "→"; position: absolute; right: -22px; top: 40%; color: var(--muted); font-size: 18px; }
+.node:last-child::after { content: none; }
+@media (max-width: 900px) { .node { margin-right: 0; margin-bottom: 22px; } .node::after { content: "↓"; right: 45%; top: auto; bottom: -24px; } }
+.node h3 { margin: 0 0 6px; font-size: 14px; }
+.node select { width: 100%; }
+.sheets { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 12.5px; }
+.sheets label { display: flex; gap: 4px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--rule-strong); border-radius: 4px; overflow: hidden; flex-wrap: wrap; }
+.seg button { background: var(--surface); border: 0; border-right: 1px solid var(--rule-strong); padding: 5px 12px; font-size: 13px; cursor: pointer; }
+.seg button:last-child { border-right: 0; }
+.seg button.on { background: var(--bar); color: #fff; font-weight: 600; box-shadow: inset 0 -3px 0 var(--accent); }
+.seg button:disabled { opacity: .45; cursor: not-allowed; }
+.chart { position: relative; height: 280px; }
+.heat { border-collapse: separate; border-spacing: 2px; width: auto; font-size: 12px; }
+.heat th { border: 0; padding: 2px 6px; font-weight: 400; color: var(--ink); }
+.heat th.col { writing-mode: vertical-rl; transform: rotate(180deg); text-align: left; padding: 6px 2px; }
+.heat th.ov { font-weight: 600; box-shadow: inset 3px 0 0 var(--accent); }
+.heat th.col.ov { box-shadow: inset 0 -3px 0 var(--accent); }
+.heat td { border: 0; width: 34px; height: 26px; padding: 0; text-align: center; border-radius: 3px; font-variant-numeric: tabular-nums; }
+.heat td.z { background: var(--raised); }
+.heat td:not(.z):hover { outline: 2px solid var(--ink); }
+.legend { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-top: 10px; flex-wrap: wrap; }
+.legend i { display: inline-block; width: 22px; height: 10px; border-radius: 2px; }
+.tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 3px; background: var(--warn-bg); color: var(--warn); margin: 1px 3px 1px 0; white-space: nowrap; }
+.tag.lever { background: var(--info-bg); color: var(--info); }
+.tag.out { background: var(--ok-bg); color: var(--ok); }
+#tip { position: fixed; pointer-events: none; background: var(--bar); color: #fff; font-size: 12.5px; padding: 6px 9px; border-radius: 4px; z-index: 40; max-width: 320px; display: none; border-left: 3px solid var(--accent); }
+.chart-card { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px 12px; }
+.chart-card h4 { margin: 0 0 2px; font-size: 15px; font-weight: 600; }
+.chart-card .sub { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.chart-box { position: relative; height: 300px; }
+.chart-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+.chart-tools button { background: none; border: 1px solid var(--rule-strong); border-radius: 4px; padding: 3px 10px; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.chart-tools button:hover, .chart-tools button.on { color: var(--ink); border-color: var(--ink); }
+.chart-tools .src { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px; }
+.chart-note { font-size: 13px; margin: 8px 0 0; max-width: 80ch; }
+.copy-panel { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.copy-panel textarea { height: 140px; }
+
+/* the run: the stages, what's happening now, what needs you, the run log */
+.nowbox { max-width: 1360px; margin: 16px 0 0; padding: 0 24px; }
+.pipe { list-style: none; margin: 0; padding: 12px 14px 10px; display: flex; align-items: flex-start; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px 6px 0 0; overflow-x: auto; }
+.pipe > li { flex: none; }
+.pipe > li.link { flex: 1 1 24px; min-width: 14px; height: 2px; background: var(--rule-strong); margin: 15px 2px 0; }
+.pipe > li.link.done { background: var(--accent); }
+.pipe > li.link.flowing { background: repeating-linear-gradient(90deg, var(--blue) 0 6px, transparent 6px 12px); background-size: 12px 2px; animation: flow .7s linear infinite; }
+.st { display: grid; justify-items: center; gap: 2px; background: none; border: 0; cursor: pointer; padding: 2px 6px; min-width: 104px; text-align: center; color: inherit; }
+.st:hover .nm { text-decoration: underline; }
+.st .ic { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; border: 2px solid var(--rule-strong); font-weight: 700; font-size: 12.5px; position: relative; color: var(--muted); background: var(--surface); }
+.st.done .ic { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--on-accent); }
+.st.you .ic { border-color: #e0b400; color: var(--warn); background: var(--warn-bg); animation: glowy 1.8s ease-out infinite; }
+.st.error .ic { border-color: var(--bad); color: var(--bad); background: var(--bad-bg); }
+.st.running .ic { border-color: var(--rule); }
+.st.running .ic::after { content: ""; position: absolute; inset: -2px; border-radius: 50%; border: 2px solid var(--blue); border-top-color: transparent; border-right-color: transparent; animation: spin .9s linear infinite; }
+.st .nm { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.st .ln { font-size: 11.5px; color: var(--muted); max-width: 150px; line-height: 1.3; }
+.st.you .ln { color: var(--warn); font-weight: 600; }
+.now-row { display: flex; gap: 10px 18px; align-items: center; flex-wrap: wrap; justify-content: space-between; padding: 10px 14px; background: var(--raised); border: 1px solid var(--rule); border-top: 0; border-radius: 0 0 6px 6px; }
+.live { flex: 1 1 420px; min-width: 0; }
+.live-head { display: flex; gap: 8px; align-items: center; font-size: 13.5px; flex-wrap: wrap; }
+.todo { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.dot-idle { width: 8px; height: 8px; border-radius: 50%; background: var(--rule-strong); display: inline-block; }
+.pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); animation: pulse 1s infinite alternate; flex: none; }
+.needs { list-style: none; margin: 0; padding: 0; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+.needs li { border-top: 1px solid var(--rule); padding: 10px 12px; display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: baseline; }
+.needs li:first-child { border-top: 0; }
+.needs .t { font-weight: 600; font-size: 14px; }
+.needs .d { grid-column: 2; font-size: 13px; color: var(--muted); }
+.log { list-style: none; margin: 0; padding: 0; font-size: 13px; max-height: 420px; overflow-y: auto; }
+.log li { display: grid; grid-template-columns: 58px 110px 1fr; gap: 8px; padding: 5px 0; border-top: 1px solid var(--rule); align-items: baseline; }
+.log li:first-child { border-top: 0; }
+.log .when { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+.log .ev { font-size: 11.5px; }
+.log li.decide .txt, .log li.verify .txt { color: var(--info); }
+.log li.escalate .txt, .log li.blocked .txt, .log li.failed .txt { color: var(--bad); }
+.log li.person .txt { color: var(--ink); font-weight: 600; }
+.bridge td.step { padding-left: 22px; }
+.bridge tr.tot td { background: var(--raised); }
+.lh { display: flex; gap: 6px; align-items: center; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes flow { to { background-position: 12px 0; } }
+@keyframes pulse { from { opacity: .25; } to { opacity: 1; } }
+@keyframes glow { 0% { box-shadow: 0 0 0 0 rgba(26, 154, 250, .55); } 70%, 100% { box-shadow: 0 0 0 7px rgba(26, 154, 250, 0); } }
+@keyframes glowy { 0% { box-shadow: 0 0 0 0 rgba(224, 180, 0, .6); } 70%, 100% { box-shadow: 0 0 0 7px rgba(224, 180, 0, 0); } }
+@media (prefers-reduced-motion: reduce) { .st.running .ic::after, .pipe > li.link.flowing, .st.you .ic, .dot.work, .pulse { animation: none; } .bar i { transition: none; } }
+dialog#callsDlg { border: 1px solid var(--rule-strong); border-radius: 8px; background: var(--ground); color: var(--ink); padding: 0; width: min(1100px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
+dialog#callsDlg::backdrop { background: rgb(0 0 0 / .4); }
+.dlg-head { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--rule); background: var(--surface); position: sticky; top: 0; z-index: 1; }
+.dlg-head h2 { margin: 0; font-size: 16px; flex: 1; }
+.dlg-body { padding: 16px 18px 22px; display: grid; gap: 16px; }
+.transcript pre { white-space: pre-wrap; word-break: break-word; background: var(--code-bg); padding: 10px 12px; border-radius: 4px; font: 12px/1.5 var(--mono); max-height: 420px; overflow: auto; margin: 4px 0 10px; }
+@media (max-width: 640px) { .hbar, main { padding-left: 16px; padding-right: 16px; } .nowbox { padding: 0 16px; } .st { min-width: 84px; } .log li { grid-template-columns: 50px 1fr; } .log .ev { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="hbar">
+    <div class="brandwrap"><a class="brand" href="#" id="brand"><img class="logo" id="brandLogo" src="/brand/logo" alt=""><span><span class="name">Infra Val Workbench</span><br><span class="sub">Last year's valuation, rebuilt and rolled forward</span></span></a>
+      <button class="logo-edit" id="logoEdit" type="button" aria-haspopup="true" aria-expanded="false" title="Change the logo" aria-label="Change the logo">✎</button></div>
+    <div class="hsp"></div>
+    <div class="hctl">
+      <label for="engSel">Engagement</label><select id="engSel"></select>
+      <button class="btn small" id="newEng" style="background:#2e2e38;color:#fff;border-color:#4a4a57">New</button>
+    </div>
+    <div class="hctl" id="hdrCtl" hidden>
+      <button class="chip" id="spend" type="button" title="Tokens, time and the log of every model call">$0.00</button>
+      <button class="hbtn" id="modelsBtn" type="button" aria-haspopup="true" aria-expanded="false" title="Which Azure models extract, review and decide">⚙ Models</button>
+    </div>
+    <button class="hbtn icon" id="themeBtn" type="button" aria-pressed="false"></button>
+  </div>
+  <div class="accent-rule"></div>
+  <div class="popover" id="logoCtl" hidden role="dialog" aria-label="The logo">
+    <p class="small" style="margin:0"><b>Your firm's logo</b> goes here, in place of the mascot.</p>
+    <p class="small muted" style="margin:4px 0 0">An SVG (best) or PNG with a transparent background and light artwork (the header is dark), 144 px high (shown at 36 px) and up to 640 px wide, 2 MB at most. It's kept on this machine as <span class="mono">brand/logo.svg</span> or <span class="mono">brand/logo.png</span> and never committed; you can also put the file there yourself and reload.</p>
+    <p class="small" style="margin:8px 0 0" id="logoNow">…</p>
+    <div class="row" style="margin-top:8px"><button class="btn small primary" id="logoUpload" type="button">Upload a logo</button><button class="btn small" id="logoReset" type="button">Use the mascot</button></div>
+    <input type="file" id="logoFile" accept=".svg,.png,.webp,.jpg,.jpeg,image/svg+xml,image/png,image/webp,image/jpeg" hidden>
+  </div>
+  <div class="popover" id="modelCtl" hidden role="dialog" aria-label="Models">
+    <p class="small muted" style="margin:0 0 8px">The Azure models this engagement uses.</p>
+    <label for="mSel">Extracts</label><select id="mSel" class="in"></select>
+    <label for="rSel">Reviews and decides (the orchestrator)</label><select id="rSel" class="in"></select>
+    <label for="aSel" title="Settles what the extractor and reviewer can't">Arbitrates facts</label><select id="aSel" class="in"></select>
+  </div>
+</header>
+<dialog id="callsDlg" aria-labelledby="callsTitle"><div class="dlg-head"><h2 id="callsTitle">Tokens, time and the call log</h2><button class="btn small" type="button" id="callsClose">Close</button></div><div class="dlg-body" id="callsBody"><p class="muted">Loading…</p></div></dialog>
+<div class="shell" id="shell">
+  <nav class="side" id="steps" aria-label="Engagement"></nav>
+  <div class="content"><div id="now" class="nowbox" hidden aria-live="polite"></div><main id="main"></main></div>
+</div>
+<footer class="disclaimer">
+  <p><b>Experimental.</b> Infra Val Workbench is a prototype under active development. Its figures, row matches,
+    readings of reports and written summaries are produced with automated rules and AI models, can be incomplete or
+    wrong, and must be checked by a qualified person before anyone relies on them. Nothing here is valuation, financial,
+    tax, accounting or legal advice, or an opinion on any value.</p>
+  <p>Files stay on this machine; model calls go to your organisation's Azure AI Foundry. Client files, reports and models
+    remain the property and confidential information of their owners and are used here only for the engagement they
+    belong to.</p>
+  <p>© 2026 the Infra Val Workbench authors. All rights reserved. Third-party names, logos and trademarks belong to their
+    owners and appear only to identify them; no endorsement is implied. The default mascot is an original drawing in
+    Claude's colours; Claude is a trademark of Anthropic, PBC.</p>
+</footer>
+<div id="tip"></div>
+<input type="file" id="picker" multiple accept=".pdf,.pptx,.xlsx,.xlsm" hidden>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const fmt = (v, d = 1) => v == null || v === "" ? "" : (typeof v === "number" ? v.toLocaleString(undefined, {maximumFractionDigits: d, minimumFractionDigits: Math.abs(v) < 10 && d ? Math.min(d, 2) : 0}) : String(v));
+const vN = x => x == null ? "–" : (Math.abs(x) < 0.05 ? 0 : Number(x)).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1});
+const vPct = x => x == null ? "–" : (x * 100).toFixed(2) + "%";
+const size = b => b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " KB";
+const busy = s => ["queued", "processing", "running"].includes(s);
+const kfmt = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n ?? 0);
+const nfmt = n => (n ?? 0).toLocaleString();
+const tok = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const shortName = n => n && n.length > 34 ? n.slice(0, 31) + "…" : (n || "");
+const TIMING = {end: "End of period", mid: "Mid-period", "mid-year": "Mid-year (half a year before each period's end)"};
+const DAYCOUNT = {"actual/actual": "Actual/actual (YEARFRAC)", "actual/365": "Actual/365 (XNPV)"};
+function toast(msg, ms = 3500) { const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.append(t); setTimeout(() => t.remove(), ms); }
+async function api(path, opts = {}) {
+  const r = await fetch(path, {headers: opts.body && !(opts.body instanceof FormData) ? {"Content-Type": "application/json"} : {}, ...opts,
+    body: opts.body && !(opts.body instanceof FormData) ? JSON.stringify(opts.body) : opts.body});
+  if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m } catch {} throw new Error(m); }
+  return r.json();
+}
+
+// the pages, and which of the orchestrator's stages each shows
+const NAV = [
+  {id: "workbench", name: "Workbench", stages: ["files", "roles"]},
+  {id: "report", name: "The report", stages: ["facts"]},
+  {id: "rebuild", name: "Rebuild", stages: ["rebuild"]},
+  {id: "result", name: "Result", stages: ["rows", "result", "review"]},
+  {id: "map", name: "Map", stages: ["map"]}];
+const RAIL = ["files", "facts", "roles", "rebuild", "rows", "result", "review"];  // the Map runs beside, not in line
+const STAGE_PAGE = {files: "workbench", facts: "report", roles: "workbench", rebuild: "rebuild", rows: "result", result: "result", review: "result", map: "map"};
+const ROLE_HELP = {
+  prior_report: "Last year's final report: the equity value, the discount rate and the assumptions.",
+  prior_model: "The client's model behind last year's valuation.",
+  prior_overlay: "Our workings from the client model to the report: a separate workbook, or sheets inside the client model.",
+  current_model: "This year's client model, to roll the valuation forward.",
+};
+let CFG, E = null, state = {step: "workbench", factEdit: null, bridgeEnd: "mid"};
+let uploads = [], pollTimer = null;
+
+// ---- boot / navigation -------------------------------------------------------------------------------------
+async function boot() {
+  CFG = await api("/api/config");
+  for (const id of ["mSel", "rSel", "aSel"]) $("#" + id).innerHTML = CFG.models.map(m => `<option>${esc(m)}</option>`).join("");
+  const h = new URLSearchParams(location.hash.slice(1));
+  state.step = NAV.some(n => n.id === h.get("s")) ? h.get("s") : "workbench";
+  await loadList(+h.get("e") || null);
+}
+async function loadList(select) {
+  const list = await api("/api/engagements");
+  $("#engSel").innerHTML = list.length ? list.map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join("") : `<option value="">No engagements yet</option>`;
+  const id = select && list.some(e => e.id === select) ? select : list[0]?.id;
+  if (id) { $("#engSel").value = id; await open(id); } else { E = null; render(); }
+}
+async function open(id) { E = await api(`/api/engagements/${id}`); E._fetched = Date.now(); render(); schedule(); spend(); }
+function editing() {
+  const a = document.activeElement;
+  return state.factEdit != null || !!(a && a.closest("main") && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
+}
+async function refresh(force = false) {
+  if (!E) return;
+  const before = JSON.stringify([E.run?.stages, E.run?.needs?.length, E.run?.log?.[0]?.id, E.updated_at]);
+  E = await api(`/api/engagements/${E.id}`); E._fetched = Date.now();
+  const after = JSON.stringify([E.run?.stages, E.run?.needs?.length, E.run?.log?.[0]?.id, E.updated_at]);
+  if (!force && editing()) { renderSteps(); renderNow(); }
+  else if (force || before !== after || filesMoving()) render();
+  else { renderNow(); tickTimers(); }
+  schedule();
+}
+const filesMoving = () => E.documents.some(d => busy(d.status) || busy(d.facts_status)) || E.workbooks.some(w => busy(w.status)) || uploads.some(u => !u.done);
+function schedule() {
+  clearTimeout(pollTimer);
+  if (!E) return;
+  pollTimer = setTimeout(async () => { await refresh(); spend(); }, E.run?.busy || filesMoving() ? 1500 : 6000);
+}
+async function spend() {
+  if (!E) return;
+  try { const u = await api(`/api/usage?session=${encodeURIComponent(E.session)}`); const s = u.session || {};
+    $("#spend").textContent = `$${(s.cost_usd || 0).toFixed(3)} · ${((s.input_tokens || 0) + (s.output_tokens || 0)).toLocaleString()} tokens`;
+    $("#spend").title = `Azure model spend for this engagement: ${s.calls || 0} calls (list prices). Click for the call log.`; } catch {}
+}
+$("#engSel").onchange = e => { if (e.target.value) { go(state.step, +e.target.value); open(+e.target.value); } };
+$("#newEng").onclick = () => { E = null; state.step = "workbench"; render(true); };
+for (const [id, key, what] of [["mSel", "model", "Extraction model"], ["rSel", "reviewer_model", "Reviewer and orchestrator"], ["aSel", "arbiter_model", "Arbiter"]])
+  $("#" + id).onchange = async e => { E = {...E, ...await api(`/api/engagements/${E.id}`, {method: "PATCH", body: {[key]: e.target.value}})}; toast(`${what}: ${e.target.value}`); };
+function go(step, eid = E?.id) { state.step = step; history.replaceState(null, "", `#e=${eid || ""}&s=${step}`); render(); window.scrollTo({top: 0}); }
+function jumpTo(step, anchor) {  // a needs-you item: its page, then the element itself, highlighted
+  if (step !== state.step) go(step);
+  if (!anchor) return;
+  const t0 = Date.now(), find = () => {
+    const el = document.getElementById(anchor);
+    if (el) {
+      el.closest("details")?.setAttribute("open", "");
+      el.scrollIntoView({behavior: "smooth", block: "center"});
+      const box = el.tagName === "TR" ? el : el.closest(".callout, .card, tr") || el;
+      box.classList.add("flash"); setTimeout(() => box.classList.remove("flash"), 1800);
+    } else if (Date.now() - t0 < 8000) setTimeout(find, 250);
+  };
+  setTimeout(find, 60);
+}
+
+// ---- the stages as the orchestrator has them ----------------------------------------------------------------
+const stageOf = name => (E?.run?.stages || []).find(s => s.stage === name) || {status: "waiting"};
+const needsOf = pages => (E?.run?.needs || []).filter(n => pages.includes(STAGE_PAGE[n.stage]));
+const LOOK = {done: "done", attention: "you", blocked: "you", failed: "error", running: "running", queued: "running", waiting: "idle"};
+const ICON = {done: "✓", you: "!", error: "×", idle: "", running: ""};
+function pageState(nav) {
+  const st = nav.stages.map(s => stageOf(s).status);
+  if (st.some(s => s === "failed")) return "bad";
+  if (st.some(s => busy(s))) return "work";
+  if (st.every(s => ["done", "attention"].includes(s))) return st.some(s => s === "attention") ? "flag" : "done";
+  if (st.some(s => s === "blocked")) return "you";
+  return "";
+}
+function renderSteps() {
+  $("#steps").innerHTML = NAV.map(s => {
+    const p = E ? pageState(s) : "", n = E ? needsOf([s.id]).filter(x => x.severity !== "info") : [], block = n.some(x => x.severity === "block");
+    const dot = p === "done" || p === "flag" ? `<span class="dot done ${p === "flag" ? "flag" : ""}">✓</span>` : `<span class="dot ${p}">${p === "bad" ? "×" : p === "you" ? "!" : ""}</span>`;
+    return `<button data-s="${s.id}" class="${state.step === s.id ? "on" : ""}" ${!E ? "disabled" : ""} ${state.step === s.id ? 'aria-current="page"' : ""}>${dot}<span class="nm">${esc(s.name)}</span>${n.length ? `<span class="cnt ${block ? "bad" : ""}" title="${n.length} for you">${n.length}</span>` : ""}</button>`;
+  }).join("");
+  $("#steps").querySelectorAll("button").forEach(b => b.onclick = () => go(b.dataset.s));
+}
+function render(creating = false) {
+  $("#hdrCtl").hidden = !E;
+  if (!E) $("#modelCtl").hidden = true;
+  if (E) { $("#mSel").value = E.model || CFG.default_model; $("#rSel").value = E.reviewer_model || CFG.default_reviewer;
+    $("#aSel").value = E.arbiter_model || CFG.default_arbiter; }
+  renderSteps();
+  renderNow();
+  const m = $("#main");
+  if (!E || creating) { m.innerHTML = viewNew(); bindNew(); $("#now").hidden = true; return; }
+  const views = {workbench: viewWorkbench, report: viewReport, rebuild: viewRebuild, result: viewResult, map: viewMap};
+  keepOpen(m, () => { m.innerHTML = (views[state.step] || viewWorkbench)(); bind[state.step]?.(); });
+  tickTimers();
+}
+function keepOpen(root, draw) {  // a redraw keeps each <details> as you left it
+  const was = new Map([...root.querySelectorAll("details")].map(d => [d.dataset.k || d.id, d.open]).filter(([k]) => k));
+  const y = window.scrollY;
+  draw();
+  root.querySelectorAll("details").forEach(d => { const k = d.dataset.k || d.id; if (k && was.has(k) && d.open !== was.get(k)) d.open = was.get(k); });
+  if (was.size) window.scrollTo({top: y});
+}
+
+// ---- the status panel on every page: the stages, what's running now, what needs you --------------------------
+let nowHtml = "";
+function renderNow() {
+  const box = $("#now");
+  if (!E) { box.hidden = true; nowHtml = ""; return; }
+  box.hidden = false;
+  const st = RAIL.map(stageOf), running = st.find(s => s.status === "running") || st.find(s => s.status === "queued");
+  const needs = (E.run?.needs || []).filter(n => n.severity !== "info");
+  const last = (E.run?.log || [])[0];
+  const html = `<ol class="pipe" aria-label="Where the engagement is">${st.map((s, i) => { const look = LOOK[s.status] || "idle";
+      return `${i ? `<li class="link ${["done", "attention"].includes(st[i - 1].status) ? "done" : ""} ${busy(s.status) ? "flowing" : ""}" aria-hidden="true"></li>` : ""}
+      <li><button class="st ${look}" data-go="${STAGE_PAGE[s.stage]}" title="${esc(s.label)}: ${esc(s.note || "")}"><span class="ic">${ICON[look] || i + 1}</span><span class="nm">${esc(s.label)}</span><span class="ln">${esc(shortLine(s))}</span></button></li>`; }).join("")}</ol>
+    <div class="now-row">
+      <div class="live">${running ? `<div class="live-head"><span class="pulse"></span><b>Now</b><span>${esc(running.label)}: ${esc(running.note || "starting")}</span>${running.started_at && running.status === "running" ? runTimer(running.started_at, null, null) : ""}</div>`
+        : `<div class="live-head muted"><span class="dot-idle"></span>${needs.length ? "The orchestrator is waiting for you." : "Nothing running. Everything is up to date with the files."}</div>`}
+        ${last ? `<div class="small muted" style="margin-top:4px">Last: ${esc(LOGSTAGE[last.stage] || last.stage)} · ${esc(last.text)}</div>` : ""}</div>
+      <div class="todo">${needs.length ? `<span class="small muted">For you</span>${needs.slice(0, 3).map((n, i) => `<button class="btn ${i ? "small" : "primary"}" data-need="${esc(n.id)}">${esc(n.title)}</button>`).join("")}` : ""}</div>
+    </div>`;
+  if (html === nowHtml) return;
+  nowHtml = html;
+  box.innerHTML = html;
+  tickTimers(box);
+  box.querySelectorAll("[data-go]").forEach(b => b.onclick = () => go(b.dataset.go));
+  box.querySelectorAll("[data-need]").forEach(b => b.onclick = () => goNeed(b.dataset.need));
+}
+function shortLine(s) {
+  const n = s.note || "";
+  return {done: n.length > 40 ? "done" : n, attention: "done · look", blocked: "needs you", failed: "failed", running: "running", queued: "in line", waiting: "waiting"}[s.status] ?? n;
+}
+function goNeed(id) {
+  const n = (E.run?.needs || []).find(x => x.id === id); if (!n) return;
+  jumpTo(n.go?.step || STAGE_PAGE[n.stage], n.go?.anchor);
+}
+const LOGSTAGE = {files: "Files", facts: "Key facts", roles: "Roles", rebuild: "Rebuild", rows: "Roll forward", result: "Bridge", review: "Review", map: "Map"};
+const EVWORD = {start: "started", done: "done", attention: "done, look", blocked: "needs you", failed: "failed", decide: "gpt-sol decided", verify: "checked in code",
+  escalate: "to a person", person: "you", note: "note"};
+function needsCard(pages) {
+  const n = pages ? needsOf(pages) : (E.run?.needs || []);
+  if (!n.length) return "";
+  const pill = s => s === "block" ? `<span class="pill bad">Blocking</span>` : s === "check" ? `<span class="pill warn">Check</span>` : `<span class="pill">Note</span>`;
+  return `<div class="card" id="needsCard"><h2>For you</h2><p class="sub">What the orchestrator couldn't settle on the evidence, or wants a person to see. Blocking items hold the steps after them; the rest don't.</p>
+    <ul class="needs">${n.map(x => `<li>${pill(x.severity)}<span class="t">${esc(x.title)}</span>${x.retry ? `<button class="btn small" data-retry-stage="${esc(x.retry)}">Try again</button>` : `<button class="btn small" data-need="${esc(x.id)}">Go</button>`}${x.detail ? `<span class="d">${esc(x.detail)}</span>` : ""}</li>`).join("")}</ul></div>`;
+}
+function bindNeeds() {
+  document.querySelectorAll("main [data-need]").forEach(b => b.onclick = () => goNeed(b.dataset.need));
+  document.querySelectorAll("main [data-retry-stage]").forEach(b => b.onclick = () => act(() => api(`/api/engagements/${E.id}/run/retry/${b.dataset.retryStage}`, {method: "POST"})));
+}
+function logCard(n = 30) {
+  const log = E.run?.log || [];
+  const t = s => new Date(s * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  return `<div class="card" id="logCard"><h2>What the orchestrator did</h2><p class="sub">The run log: every step started and finished, every decision gpt-sol made and how code checked it, what went to a person, and what you did. It's also the orchestrator's memory: a step doesn't run again on the same inputs, and a decision isn't asked twice.</p>
+    ${log.length ? `<ul class="log">${log.slice(0, n).map(h => `<li class="${esc(h.event)}"><span class="when">${t(h.at)}</span><span class="ev"><span class="pill ${h.event === "decide" || h.event === "verify" ? "info" : ["failed", "blocked", "escalate"].includes(h.event) ? "bad" : h.event === "done" ? "ok" : h.event === "attention" ? "warn" : ""}">${esc(LOGSTAGE[h.stage] || h.stage)} · ${esc(EVWORD[h.event] || h.event)}</span></span><span class="txt">${esc(h.text)}</span></li>`).join("")}</ul>` : `<p class="muted small" style="margin:0">Nothing yet: upload the files.</p>`}</div>`;
+}
+
+// ---- new engagement ----------------------------------------------------------------------------------------
+function viewNew() {
+  return `<div class="lede"><div><h1><b>Start an engagement</b></h1><p>One engagement per asset and year. Upload last year's report, last year's client model and overlay, and this year's client model. The orchestrator does the rest, and asks you only where the evidence doesn't settle something.</p></div></div>
+  <div class="card" style="max-width:640px"><h2>Engagement name</h2><p class="sub">For example the asset and the valuation year.</p>
+  <form class="row" id="newForm"><input type="text" id="newName" placeholder="Asset name, FY26 valuation" style="flex:1;min-width:240px" required>
+  <button class="btn primary">Create</button>${E ? `<button type="button" class="btn" id="cancelNew">Cancel</button>` : ""}</form></div>`;
+}
+function bindNew() {
+  $("#newForm").onsubmit = async ev => { ev.preventDefault(); const e = await api("/api/engagements", {method: "POST", body: {name: $("#newName").value}}); state.step = "workbench"; await loadList(e.id); go("workbench", e.id); };
+  $("#cancelNew")?.addEventListener("click", () => render());
+  $("#newName").focus();
+}
+
+// ---- time: elapsed, an estimate of what's left, how long a finished job took ----------------------------------
+const clock = () => E ? E.now + (Date.now() - (E._fetched || Date.now())) / 1000 : Date.now() / 1000;
+function dur(secs) {
+  if (secs == null || !isFinite(secs) || secs < 0) return "";
+  secs = Math.round(secs);
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60), h = Math.floor(m / 60);
+  return h ? `${h}h ${String(m % 60).padStart(2, "0")}m` : `${m}m ${String(secs % 60).padStart(2, "0")}s`;
+}
+function left(secs) {
+  if (secs == null || !isFinite(secs)) return "";
+  if (secs < 45) return "under a minute left";
+  if (secs < 90) return "about a minute left";
+  return secs < 3600 ? `about ${Math.round(secs / 60)} min left` : `about ${(secs / 3600).toFixed(1)} h left`;
+}
+function timing(started, pct, last) {
+  if (!started) return "";
+  const el = Math.max(0, clock() - started), bits = [`${dur(el)} elapsed`];
+  if (pct >= 0.05 && pct < 1 && el >= 5) bits.push(left(el * (1 - pct) / pct));
+  else if (last && last > el) bits.push(`${left(last - el)} (last run took ${dur(last)})`);
+  else if (last) bits.push(`last run took ${dur(last)}`);
+  return bits.join(" · ");
+}
+function statusCell(s, step, pct, err, started, took, last) {
+  if (s === "error") return `<span class="pill bad">Failed</span><div class="small" style="color:var(--bad)">${esc(err)}</div>`;
+  if (s === "done") return `<span class="pill ok">Ready</span>${took ? `<div class="small muted">took ${dur(took)}</div>` : ""}${err ? `<div class="small" style="color:var(--warn)">${esc(err)}</div>` : ""}`;
+  return `<span class="pill info">${s === "queued" ? "Queued" : "Processing"}</span><div class="small muted">${esc(step || "")}</div><div class="bar"><i style="width:${Math.round((pct || 0) * 100)}%"></i></div>
+    ${s === "processing" && started ? `<div class="small muted" data-timer="${started}|${pct ?? ""}|${last ?? ""}">${timing(started, pct, last)}</div>` : ""}`;
+}
+function tickTimers(root = document) {
+  root.querySelectorAll("[data-timer]").forEach(el => {
+    const [st, pc, la] = el.dataset.timer.split("|"); el.textContent = timing(+st, pc === "" ? null : +pc, la === "" ? null : +la);
+  });
+}
+setInterval(() => tickTimers(), 1000);
+const runTimer = (started, pct, last) => started ? `<span class="small muted nowrap" data-timer="${started}|${pct ?? ""}|${last ?? ""}">${timing(started, pct, last)}</span>` : "";
+
+// ---- the Workbench: files, roles, the profile, the run, what needs you ------------------------------------------
+function resultTeaser() {
+  const R = E.result; if (!R?.values) return "";
+  const v = R.values, u = R.head?.units || "", basis = R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution";
+  const th = v.this_year?.mid;
+  return `<div class="heads">
+    <div class="head"><div class="k">Last year, per the report (mid)</div><div class="v">${vN(v.report.mid)}</div><div class="s">${esc(u)} · equity value, ${basis} · ${vN(v.report.low)} – ${vN(v.report.high)}</div></div>
+    <div class="head"><div class="k">Last year, rebuilt in Python (mid)</div><div class="v">${vN(v.rebuilt.mid)}</div><div class="s">${R.tie?.low?.ok && R.tie?.high?.ok ? "ties to the report, low and high" : "see Rebuild: doesn't tie"}</div></div>
+    <div class="head main"><div class="k">This year, rolled forward (mid)</div><div class="v">${th != null ? vN(th) : "–"}</div><div class="s">${th != null ? `at last year's discount rate · to ${esc(R.bridges?.valuation_date || "")}` : "held back: rows to find (Result)"}</div></div>
+    <div class="head"><div class="k">The move</div><div class="v">${th != null ? (th - v.report.mid > 0 ? "+" : "") + vN(th - v.report.mid) : "–"}</div><div class="s"><a href="#" data-go-result>The bridge and the cash flows →</a></div></div></div>`;
+}
+function viewWorkbench() {
+  return `<div class="lede"><div><h1><b>${esc(E.name)}</b></h1><p>Drop the four files. The orchestrator reads the report's key facts, works out which file is which, rebuilds last year's valuation in Python and ties it to the report, rolls it forward onto this year's client model, and bridges last year's value to this year's. It asks you only where the evidence doesn't settle something; you can change anything it decided.</p></div></div>
+  ${resultTeaser()}
+  ${needsCard()}
+  <div class="grid2">${filesCard()}${logCard(24)}</div>
+  <div class="sect">Roles</div>
+  ${viewRoles()}`;
+}
+function filesCard() {
+  const docs = E.documents, wbs = E.workbooks;
+  const up = uploads.filter(u => !u.done || u.error);
+  return `<div class="card" id="filesCard"><h2>Files</h2><p class="sub">Reports are read from their text layer (no model calls); models get a row map, their links and their target and valuation date.</p>
+  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Upload files"><b>Drop files here</b> or click to choose<div class="muted small">PDF or PPTX reports · XLSX or XLSM models</div>
+    <div class="slots">${Object.entries(CFG.roles).map(([k, v]) => `<div class="slot"><b>${esc(v)}</b><span class="muted">${esc(ROLE_HELP[k])}</span></div>`).join("")}</div></div>
+  ${up.length ? `<div style="margin-top:10px">${up.map(u => `<div class="small">${u.error ? `<span class="pill bad">Failed</span> ${esc(u.name)}: ${esc(u.error)}` : `<span class="pill info">Uploading</span> ${esc(u.name)}`}</div>`).join("")}</div>` : ""}
+  <h3 style="font-size:14px;margin:14px 0 4px">Reports</h3>
+  ${docs.length ? `<div class="scroll"><table><thead><tr><th>File</th><th class="num">Pages</th><th>Status</th><th></th></tr></thead><tbody>
+  ${docs.map(d => `<tr><td><b>${esc(d.filename)}</b><div class="small muted">${d.kind.toUpperCase()} · ${size(d.size)}</div></td><td class="num">${d.pages ?? ""}</td>
+    <td>${statusCell(d.status, d.step, d.pct, d.error, d.started_at, d.doc_secs, d.doc_secs)}</td>
+    <td class="nowrap">${d.status === "done" ? `<button class="btn small" data-view="${d.id}">Key facts</button>` : ""}${d.status === "error" ? `<button class="btn small" data-retry="${d.id}">Retry</button>` : ""}
+    ${d.status === "done" && !busy(d.facts_status) ? `<button class="btn small ghost" data-rebuilddoc="${d.id}" title="Read it again and extract the key facts again">Read again</button>` : ""}
+    ${!busy(d.status) ? `<button class="btn small ghost" data-rmdoc="${d.id}">Remove</button>` : ""}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted small">No report yet.</p>`}
+  <h3 style="font-size:14px;margin:14px 0 4px">Models</h3>
+  ${wbs.length ? `<div class="scroll"><table><thead><tr><th>File</th><th>Target · valuation date</th><th>Status</th><th></th></tr></thead><tbody>
+  ${wbs.map(w => `<tr id="wb-${w.id}"><td><b>${esc(w.filename)}</b><div class="small muted">${size(w.size || 0)}${w.sheets ? ` · ${w.sheets} sheets` : ""}${w.line_items ? ` · ${w.line_items.toLocaleString()} line items` : ""}</div></td>
+    <td class="small">${esc(w.target_name || "")}${w.status === "done" ? `<div class="row" style="gap:4px;margin-top:2px"><input type="date" class="in" data-vdwb="${w.id}" value="${esc(w.valuation_date || "")}" aria-label="Valuation date of ${esc(w.filename)}" style="padding:2px 4px;font-size:12px">${dateCheck(w)}</div>` : w.valuation_date ? `<div class="muted">${esc(w.valuation_date)}</div>` : ""}</td>
+    <td>${statusCell(w.status, w.step, w.pct, w.error, w.started_at, w.started_at && w.processed_at > w.started_at ? w.processed_at - w.started_at : w.build_secs, null)}</td>
+    <td class="nowrap">${w.status === "error" ? `<button class="btn small" data-retrywb="${w.id}">Retry</button>` : ""}${w.status === "done" ? `<button class="btn small ghost" data-rebuildwb="${w.id}" title="Process it again from scratch">Rebuild</button>` : ""}${!busy(w.status) ? `<button class="btn small ghost" data-rmwb="${w.id}">Remove</button>` : ""}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted small">No models yet.</p>`}</div>`;
+}
+// a workbook's valuation date: checked where the roll-forward reads it (this year's client model; last year's overlay
+// where the report gives no valuation date), confirmed by you or by the agents' check of the evidence
+function rollReads(w) {
+  const r = E.roles, reportVd = E.facts.some(f => f.key === "valuation_date" && f.status !== "rejected");
+  return w.id === r.current_model?.id || (!reportVd && w.id === r.prior_overlay?.id) || (!reportVd && !r.prior_overlay && w.id === r.prior_model?.id);
+}
+function dateCheck(w) {
+  if (w.identity_confirmed) return w.identity_by === "agents"
+    ? `<span class="pill ok" title="Confirmed by the agents: ${esc((w.identity_why || []).join("; "))}">✓ agents</span>`
+    : `<span class="pill ok" title="Checked by you">✓</span>`;
+  if (!rollReads(w)) return `<span class="small muted" title="The roll-forward doesn't read this workbook's date">not used</span>`;
+  const why = w.identity_check?.disagree?.length ? ` The agents didn't confirm it: ${w.identity_check.disagree.join("; ")}.` : "";
+  return `<button class="pill warn" data-vdok="${w.id}" title="Read from the file: the roll-forward uses it. Confirm it as it stands, or change it.${esc(why)}" ${w.valuation_date ? "" : "disabled"}>check · confirm</button>`;
+}
+$("#picker").onchange = e => { send([...e.target.files]); e.target.value = ""; };
+async function act(fn) { try { await fn(); } catch (err) { toast(err.message, 6000); } await refresh(true); }
+async function send(files) {
+  for (const f of files) {
+    const u = {name: f.name, done: false}; uploads.push(u); render();
+    const fd = new FormData(); fd.append("file", f);
+    try { const r = await api(`/api/engagements/${E.id}/files`, {method: "POST", body: fd}); u.done = true;
+      if (r.status === "duplicate") toast(`${f.name} was already uploaded; using the existing copy.`); }
+    catch (err) { u.done = true; u.error = err.message; }
+    await refresh(true);
+  }
+  uploads = uploads.filter(u => u.error);
+}
+function bindFiles() {
+  document.querySelectorAll("[data-vdok]").forEach(b => b.onclick = () => act(async () => {
+    const inp = document.querySelector(`[data-vdwb="${b.dataset.vdok}"]`); if (!inp?.value) return;
+    await api(`/api/engagements/${E.id}/workbooks/${b.dataset.vdok}/date`, {method: "POST", body: {valuation_date: inp.value}}); toast("Valuation date confirmed");
+  }));
+  document.querySelectorAll("[data-vdwb]").forEach(inp => inp.onchange = () => act(async () => {
+    if (!inp.value) return;
+    await api(`/api/engagements/${E.id}/workbooks/${inp.dataset.vdwb}/date`, {method: "POST", body: {valuation_date: inp.value}});
+    toast("Valuation date set: the roll-forward runs again with it");
+  }));
+  const drop = $("#drop"); if (!drop) return;
+  drop.onclick = () => $("#picker").click();
+  drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#picker").click(); } };
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); send([...e.dataTransfer.files]); };
+  document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => go("report"));
+  document.querySelectorAll("[data-retry]").forEach(b => b.onclick = () => act(() => api(`/api/documents/${b.dataset.retry}/retry`, {method: "POST"})));
+  document.querySelectorAll("[data-retrywb]").forEach(b => b.onclick = () => act(() => api(`/api/engagements/${E.id}/workbooks/${b.dataset.retrywb}/retry`, {method: "POST"})));
+  document.querySelectorAll("[data-rebuilddoc]").forEach(b => b.onclick = () => {
+    const d = E.documents.find(x => x.id === +b.dataset.rebuilddoc);
+    if (!confirm(`Read ${d.filename} again and extract its key facts again?\n\nYour decisions on its facts are replaced; the steps after it run again.`)) return;
+    act(() => api(`/api/documents/${d.id}/rebuild`, {method: "POST"}));
+  });
+  document.querySelectorAll("[data-rebuildwb]").forEach(b => b.onclick = () => {
+    const w = E.workbooks.find(x => x.id === +b.dataset.rebuildwb), took = w.started_at && w.processed_at > w.started_at ? w.processed_at - w.started_at : w.build_secs;
+    if (!confirm(`Process ${w.filename} again from scratch?\n\nIts row map, links, target and valuation date are rebuilt${took ? ` (last time this took ${dur(took)})` : ""}; the steps that use it run again.`)) return;
+    act(() => api(`/api/engagements/${E.id}/workbooks/${w.id}/rebuild`, {method: "POST"}));
+  });
+  document.querySelectorAll("[data-rmdoc]").forEach(b => b.onclick = () => { if (confirm("Remove this report and its key facts?")) act(() => api(`/api/documents/${b.dataset.rmdoc}`, {method: "DELETE"})); });
+  document.querySelectorAll("[data-rmwb]").forEach(b => b.onclick = () => { if (confirm("Remove this model from the engagement?")) act(() => api(`/api/engagements/${E.id}/workbooks/${b.dataset.rmwb}`, {method: "DELETE"})); });
+}
+
+// ---- roles: the suggestion, its checks, the second opinion, and who confirmed each ----------------------------
+let roleDraft = null;
+function viewRoles() {
+  const docs = E.documents.filter(d => d.status === "done"), wbs = E.workbooks.filter(w => w.status === "done");
+  const r = E.roles, sug = E.roles_suggested;
+  if (!roleDraft || roleDraft._eid !== E.id || (!roleDraft._dirty && roleDraft._key !== JSON.stringify([sug?.at || null, r])))
+    roleDraft = {_eid: E.id, _key: JSON.stringify([sug?.at || null, r]), ...JSON.parse(JSON.stringify(r))};
+  const ov = roleDraft.prior_overlay, pm = roleDraft.prior_model;
+  const node = role => {
+    const cur = roleDraft[role], opts = role === "prior_report" ? docs.map(d => [d.id, d.filename]) : wbs.map(w => [w.id, w.filename]);
+    const saved = r[role];
+    let extra = "";
+    if ((role === "prior_overlay" || role === "prior_model") && cur) {
+      const w = wbs.find(x => x.id === cur.id); const names = w?.sheet_names || [];
+      const inside = ov && pm && ov.id === pm.id;
+      if (role === "prior_overlay") extra = `<div class="small muted" style="margin-top:6px">${inside ? "Sits inside the prior client model" : (cur.sheets ? "Separate workbook (overlay sheets below)" : "Separate workbook")}</div>`;
+      if (names.length && (inside || cur.sheets)) extra += `<div class="sheets">${names.map(s => `<label><input type="checkbox" data-role="${role}" data-sheet="${esc(s)}" ${!cur.sheets || cur.sheets.includes(s) ? "checked" : ""}>${esc(s)}</label>`).join("")}</div>`;
+    }
+    const who = saved?.confirmed ? (saved.by === "orchestrator" ? `<span class="pill ok" title="Confirmed by the orchestrator on the evidence below">✓ orchestrator</span>` : `<span class="pill ok">✓ you</span>`)
+      : saved ? `<span class="pill warn">Suggested</span>` : "";
+    const ev = saved?.confirmed && saved.by === "orchestrator" && saved.evidence ? `<details data-k="ev-${role}" style="margin-top:6px"><summary>The evidence it confirmed on</summary><ul class="checks" style="margin-top:4px">${(saved.evidence.checks || []).map(c => `<li>${esc(c)}</li>`).join("")}</ul>
+      ${saved.evidence.second_opinion ? `<div class="small muted" style="margin-top:4px">Second opinion: ${esc(saved.evidence.second_opinion)}</div>` : ""}${saved.evidence.decided_by ? `<div class="small" style="margin-top:4px;color:var(--info)">gpt-sol decided: ${esc(saved.evidence.decided_by)}</div>` : ""}</details>` : "";
+    return `<div class="node"><h3>${esc(CFG.roles[role])} ${who}</h3>
+      <select class="in" data-pick="${role}"><option value="">Not assigned</option>${opts.map(([id, n]) => `<option value="${id}" ${cur?.id === id ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+      ${extra}${cur?.why?.length ? `<ul class="why">${cur.why.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : `<p class="small muted" style="margin:6px 0 0">${esc(ROLE_HELP[role])}</p>`}${ev}</div>`;
+  };
+  const rs = stageOf("roles");
+  const status = busy(rs.status) ? `<span class="pill info">The orchestrator is weighing the roles…</span>`
+    : rs.status === "blocked" ? `<span class="pill warn">The orchestrator wants you to confirm</span>`
+    : rs.status === "done" ? `<span class="small muted">${esc(rs.note || "")}</span>`
+    : `<span class="small muted">A suggestion appears once the files and the report's facts are in.</span>`;
+  return `<div class="card" id="rolesCard"><div class="row" style="justify-content:space-between"><div><h2>Who's who</h2><p class="sub" style="max-width:860px">The rules suggest which file plays which part, from how alike the workbooks are, their dates, their links and where the report's figures sit; a second model gives its opinion on the same evidence. The orchestrator confirms the roles itself when both agree and the checks give evidence for it; otherwise gpt-sol weighs the two, and its choice is checked in code, or you're asked. Change anything and confirm: yours stands, and the steps after it run again.</p></div></div>
+  <div class="row" style="margin-bottom:12px"><button class="btn" id="suggest">Look again</button>
+  <button class="btn primary" id="confirmRoles" ${Object.keys(CFG.roles).some(k => roleDraft[k]) ? "" : "disabled"}>Confirm these roles</button>${status}</div>
+  <div class="flow">${["prior_report", "prior_overlay", "prior_model", "current_model"].map(node).join("")}</div></div>
+  ${rolesCheckCard(sug, docs, wbs)}
+  <div class="card" id="engProfile">${engProfileCard()}</div>
+  <details class="card" data-k="likeness"><summary style="font-size:14px">How alike the workbooks are, and what each looks like</summary>${likenessCard(sug, wbs)}${profilesCard(sug, wbs)}</details>`;
+}
+function rolesCheckCard(sug, docs, wbs) {
+  if (!sug?.roles) return "";
+  const checks = sug.checks || [], so = sug.second_opinion;
+  const li = c => `<li class="${c.ok === false ? "no" : c.ok == null ? "unk" : ""}">${esc(c.text)}</li>`;
+  const file = (role, id) => (role === "prior_report" ? docs : wbs).find(x => x.id === id)?.filename || "";
+  const ROLE = {prior_report: "Prior report", prior_model: "Prior client model", prior_overlay: "Prior overlay", current_model: "Current client model", overlay_sheets: "Overlay sheets"};
+  let op = "";
+  if (so?.error) op = `<p class="small muted" style="margin:6px 0 0">Second opinion unavailable: ${esc(so.error)}</p>`;
+  else if (so) {
+    const diff = so.differs || [];
+    op = `<div style="margin-top:8px"><div class="row small"><b>Second opinion</b> <span class="muted">(${esc(so.model)}, same evidence)</span>
+      ${diff.length ? `<span class="pill warn">Would assign differently</span>` : `<span class="pill ok">Agrees</span>`} <span class="pill">${esc(so.confidence)} confidence</span>
+      ${diff.length ? `<button class="btn small" id="useSecond">Put the second opinion in the boxes</button>` : ""}</div>
+      ${diff.length ? `<ul class="why" style="color:var(--ink)">${diff.map(k => `<li><b>${ROLE[k]}:</b> ${k === "overlay_sheets" ? esc((so.overlay_sheets || []).join(", ")) : esc(so[k] || "none")} <span class="muted">(suggested: ${k === "overlay_sheets" ? esc((sug.roles.prior_overlay?.sheets || []).join(", ")) : esc(file(k, sug.roles[k]?.id) || "none")})</span></li>`).join("")}</ul>` : ""}
+      <ul class="why">${(so.reasons || []).map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>`;
+  }
+  return `<div class="card" id="rolesCheck"><h2>Checks on the suggestion</h2><p class="sub">Plain tests of the assignment, then a second model's view of the same evidence. The orchestrator confirms on its own only when no check is against it, at least two are for it, and the second opinion agrees.</p>
+    <ul class="checks">${checks.map(li).join("")}</ul>${op}</div>`;
+}
+const PROF = {stamp: null, data: null, loading: false};
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+function engProfileCard() {
+  const head = `<h2>The engagement's profile</h2><p class="sub">Facts about the models that each step would otherwise guess on its own: detected from the files (no model calls), and yours to set where the detection is wrong. The financial-year end totals the cash-flow chart; the horizon drives the roll-forward.</p>`;
+  const P = PROF.data;
+  if (!P) return head + `<p class="muted small" style="margin:0">${PROF.loading ? "Reading the models…" : ""}</p>`;
+  const f = P.fields, detected = {fy_end_month: v => MONTHS[v - 1], horizon: v => v};
+  const opts = {fy_end_month: MONTHS.map((m, i) => [i + 1, m]), horizon: [["fixed", "Fixed: the periods end on the same date each year"], ["rolling", "Rolling: the periods move on each year"]]};
+  const value = (k, x) => P.settable.includes(k)
+    ? `<select class="in" data-prof="${k}"><option value="">As detected${x.detected ? `: ${esc(detected[k](x.detected))}` : ": not known"}</option>${opts[k].map(([v, t]) => `<option value="${v}" ${x.set && String(x.value) === String(v) ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>`
+    : `<b>${esc(x.shown || "–")}</b>`;
+  return head + `<div class="scroll"><table><thead><tr><th></th><th>Value</th><th>How it was found</th><th>What it drives</th></tr></thead><tbody>
+    ${Object.entries(f).map(([k, x]) => `<tr><td><b>${esc(x.label)}</b></td><td>${value(k, x)}</td><td class="small">${esc(x.how || "")}${x.set ? ` · <b>set by you</b>` : ""}</td><td class="small muted">${esc(x.drives || "")}</td></tr>`).join("")}</tbody></table></div>`;
+}
+async function loadProfile(force) {
+  const stamp = `${E.id}|${JSON.stringify(E.roles)}|${E.overlay_status}|${E.overlay?.roll?.plan || ""}`;
+  if (!force && (PROF.stamp === stamp || PROF.loading)) return;
+  Object.assign(PROF, {stamp, loading: true, data: PROF.stamp?.split("|")[0] === String(E.id) ? PROF.data : null});
+  try { PROF.data = await api(`/api/engagements/${E.id}/profile`); } catch (e) { PROF.data = null; }
+  PROF.loading = false;
+  if ($("#engProfile")) { $("#engProfile").innerHTML = engProfileCard(); bindEngProfile(); }
+}
+function bindEngProfile() {
+  document.querySelectorAll("#engProfile [data-prof]").forEach(s => s.onchange = async () => {
+    const k = s.dataset.prof, v = s.value === "" ? null : k === "fy_end_month" ? +s.value : s.value;
+    try { PROF.data = await api(`/api/engagements/${E.id}/profile`, {method: "PUT", body: {fields: {[k]: v}}});
+      toast("Saved. The steps it drives run again with it.", 5000); } catch (e) { toast(e.message, 6000); }
+    $("#engProfile").innerHTML = engProfileCard(); bindEngProfile();
+  });
+}
+function likenessCard(sug, wbs) {
+  const L = sug?.likeness; if (!L || !L.pairs.length) return `<p class="small muted">Appears with the suggestion.</p>`;
+  const ids = Object.keys(L.profiles).map(Number).filter(id => wbs.some(w => w.id === id));
+  const name = id => wbs.find(w => w.id === id)?.filename || `#${id}`;
+  const get = (a, b) => { const p = L.pairs.find(x => x.a === a && x.b === b); if (p) return p;
+    const q = L.pairs.find(x => x.a === b && x.b === a); return q && {...q, a_in_b: q.b_in_a, b_in_a: q.a_in_b, only_a: q.only_b, only_b: q.only_a}; };
+  const cell = (a, b) => {
+    if (a === b) return `<td class="z" style="background:var(--raised)"></td>`;
+    const p = get(a, b); if (!p) return "<td></td>";
+    const k = Math.max(1, Math.min(7, Math.ceil(p.similarity / 14.3))), white = (tok("color-scheme") === "dark" ? [1, 2, 3, 4, 5] : [5, 6, 7]).includes(k);
+    const tip = `<b>${esc(shortName(name(a)))}</b> vs <b>${esc(shortName(name(b)))}</b>: ${p.similarity}% alike<br>sheets ${p.sheets}% · line items ${p.line_items}% · formulas ${p.formulas}%<br>${p.a_in_b}% of the first's line items are in the second; ${p.b_in_a}% the other way`;
+    return `<td style="background:var(--q${k});color:${white ? "#fff" : "#1a1a24"};width:auto;padding:4px 10px" data-tip="${esc(tip)}">${p.similarity}%</td>`;
+  };
+  return `<h3 style="font-size:15px;margin:14px 0 2px">How alike the workbooks are</h3><p class="sub">Sheet names, line items and formula shapes in common, ignoring years and period labels. Hover a cell for the detail.</p>
+  <div class="scroll" id="likeHeat"><table class="heat"><thead><tr><th></th>${ids.map(b => `<th class="col" title="${esc(name(b))}">${esc(shortName(name(b)))}</th>`).join("")}</tr></thead>
+  <tbody>${ids.map(a => `<tr><th style="text-align:right" title="${esc(name(a))}">${esc(shortName(name(a)))}</th>${ids.map(b => cell(a, b)).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+function profilesCard(sug, wbs) {
+  if (!sug?.workbooks) return "";
+  const P = sug.likeness?.profiles || {};
+  const rows = Object.entries(sug.workbooks).map(([id, x]) => {
+    const w = wbs.find(w => w.id === +id); if (!w) return "";
+    const p = P[id] || {}, terms = Object.keys(p.terms || {});
+    return `<tr><td><b style="font-weight:600">${esc(w.filename)}</b><div class="small muted">${(p.sheets || []).length} sheets · ${nfmt(p.formulas)} formula cells${p.timeline_start ? ` · timeline from ${esc(p.timeline_start)}` : ""}</div></td>
+      <td style="min-width:260px"><b style="font-weight:600">${esc(x.mode)}</b>${x.overlay.length ? `<div class="small muted">overlay sheets: ${esc(x.overlay.join(", "))}</div>` : ""}
+        ${(x.structure || []).length ? `<ul class="why" style="margin:4px 0 0">${x.structure.slice(0, 4).map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : ""}</td>
+      <td class="small">${terms.length ? `${terms.length}: ${esc(terms.slice(0, 6).join(", "))}${terms.length > 6 ? "…" : ""}` : `<span class="muted">none</span>`}</td>
+      <td class="small">${(p.external_links || []).length ? esc(p.external_links.join(", ")) : `<span class="muted">none</span>`}</td></tr>`;
+  }).join("");
+  return `<h3 style="font-size:15px;margin:16px 0 6px">What each workbook looks like</h3>
+  <div class="scroll"><table><thead><tr><th>Workbook</th><th>Looks like, and why</th><th>Valuation terms</th><th>External links</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function bindRoles() {
+  bindEngProfile(); loadProfile();
+  const box = $("#likeHeat"), tip = $("#tip");
+  if (box) { box.onmousemove = ev => { const td = ev.target.closest("td[data-tip]"); if (!td) { tip.style.display = "none"; return; }
+      tip.innerHTML = td.dataset.tip; tip.style.display = "block"; tip.style.left = Math.min(ev.clientX + 14, innerWidth - tip.offsetWidth - 8) + "px"; tip.style.top = (ev.clientY + 14) + "px"; };
+    box.onmouseleave = () => tip.style.display = "none"; }
+  $("#suggest").onclick = () => act(async () => { await api(`/api/engagements/${E.id}/roles/suggest`, {method: "POST"}); roleDraft = null; toast("The orchestrator looks at the roles again"); });
+  document.querySelectorAll("[data-pick]").forEach(s => s.onchange = () => {
+    const role = s.dataset.pick, id = +s.value; roleDraft._dirty = true;
+    if (!id) { roleDraft[role] = null; render(); return; }
+    const kind = role === "prior_report" ? "document" : "workbook";
+    const sugg = E.roles_suggested?.workbooks?.[id];
+    let sheets = null;
+    if (role === "prior_overlay" && sugg?.overlay?.length && sugg.mode !== "client model") sheets = sugg.overlay;
+    if (role === "prior_model" && roleDraft.prior_overlay?.id === id) sheets = sugg?.client?.length ? sugg.client : null;
+    roleDraft[role] = {kind, id, sheets, why: ["set by you"]};
+    if (role === "prior_overlay" && sugg?.mode === "overlay inside the client model" && !roleDraft.prior_model) roleDraft.prior_model = {kind, id, sheets: sugg.client, why: ["same workbook as the overlay"]};
+    render();
+  });
+  document.querySelectorAll("[data-sheet]").forEach(c => c.onchange = () => {
+    const role = c.dataset.role, cur = roleDraft[role], w = E.workbooks.find(x => x.id === cur.id); roleDraft._dirty = true;
+    const set = new Set(cur.sheets || w.sheet_names); c.checked ? set.add(c.dataset.sheet) : set.delete(c.dataset.sheet);
+    cur.sheets = w.sheet_names.filter(s => set.has(s));
+  });
+  $("#useSecond")?.addEventListener("click", () => {
+    const so = E.roles_suggested.second_opinion, wbs = E.workbooks, docs = E.documents;
+    const wb = n => wbs.find(w => w.filename === n), dc = n => docs.find(d => d.filename === n);
+    const set = (role, x, kind, sheets = null) => { roleDraft[role] = x ? {kind, id: x.id, sheets, why: [`second opinion (${so.model})`]} : null; };
+    if (so.prior_report !== undefined) set("prior_report", dc(so.prior_report), "document");
+    set("prior_overlay", wb(so.prior_overlay), "workbook", so.overlay_sheets?.length ? so.overlay_sheets : null);
+    set("prior_model", wb(so.prior_model), "workbook", so.prior_model && so.prior_model === so.prior_overlay
+      ? (wb(so.prior_model)?.sheet_names || []).filter(x => !(so.overlay_sheets || []).includes(x)) : null);
+    set("current_model", wb(so.current_model), "workbook");
+    roleDraft._dirty = true; toast("The second opinion's assignment is in the boxes: check it, then confirm."); render();
+  });
+  $("#confirmRoles").onclick = () => act(async () => {
+    const out = {}; for (const role of Object.keys(CFG.roles)) out[role] = roleDraft[role] ? {kind: roleDraft[role].kind, id: roleDraft[role].id, sheets: roleDraft[role].sheets} : null;
+    await api(`/api/engagements/${E.id}/roles`, {method: "PUT", body: {roles: out}}); roleDraft = null; toast("Roles confirmed by you: the steps after them run again.");
+  });
+}
+
+// ---- the report: the key facts -----------------------------------------------------------------------------------
+const agreedFact = f => f.check?.ok && (f.agent ? f.agent.status === "agreed" : f.review?.verdict === "accept");
+const needsYou = f => f.status === "pending" && !agreedFact(f) && f.agent?.status !== "withdrawn";
+const byAgents = f => f.decided_by === "agents";
+const CAT = {conclusion: "The equity value, and what the report discloses of it", assumption: "Key assumptions", identity: "Who and when"};
+const CRITICAL = ["valuation_date", "equity_value", "discount_rate"];
+function viewReport() {
+  const ready = E.documents.filter(d => d.status === "done");
+  if (!ready.length) return `<div class="card empty">Upload last year's report (PDF or PPTX) on the Workbench first.</div>`;
+  const d = ready.find(x => x.id === E.roles.prior_report?.id) || ready[0];
+  const H = E.result?.head;
+  return `<div class="lede"><div><h1><b>The report</b></h1><p>Only what the workbench needs from last year's report: who and when, the equity value (low, high and the midpoint), the discount rate, the terminal growth rate and the franking credit utilisation, and, where the report discloses them, the terminal value, the present values of the forecast and of the terminal value, and the value of franking credits. One model extracts them from the report's own text, code checks each against its page, a second model reviews, and they loop on what's open. What they agree on is approved; what they can't settle comes to you.</p></div></div>
+  ${needsCard(["report"])}
+  ${H ? `<div class="callout info"><b>The equity value the bridge starts from:</b> ${vN(H.low)} – ${vN(H.high)} ${esc(H.units || "")}, mid ${vN(H.mid)}, ${H.basis === "cum" ? "cum-distribution" : "ex-distribution"}. ${esc((H.why || []).join("; "))}.</div>` : ""}
+  <div class="card" id="factsCard">${factsCard(d)}</div>`;
+}
+function factsCard(d) {
+  const fs = E.facts.filter(f => f.document_id === d.id);
+  const running = busy(d.facts_status);
+  const head = `<div class="row" style="justify-content:space-between"><div><h2>Key facts from ${esc(d.filename)}</h2><p class="sub">Extracted by <b>${esc(E.model)}</b>, reviewed by <b>${esc(E.reviewer_model)}</b> (the header's Models).</p></div>
+    <div class="row">${running ? `<span class="pill info">${esc(d.facts_step || "Working")}</span> ${d.facts_status === "running" ? runTimer(d.facts_started_at, null, d.facts_secs) : ""}` : d.facts_secs ? `<span class="small muted">took ${dur(d.facts_secs)}</span>` : ""}</div></div>`;
+  if (d.facts_status === "error") return head + `<div class="callout bad">${esc(d.facts_error)} <button class="btn small" data-retry-stage="facts">Try again</button></div>`;
+  if (!fs.length) return head + `<p class="muted">${running ? "Reading the report… about a minute." : "Waiting to start."}</p>`;
+  const n = {approved: 0, pending: 0, rejected: 0}; fs.forEach(f => n[f.status]++);
+  const nYou = fs.filter(needsYou).length, nAgentsOk = fs.filter(f => f.status === "approved" && byAgents(f)).length;
+  let html = head + `<div class="row small" style="margin-bottom:8px">${nAgentsOk ? `<span class="pill ok">${nAgentsOk} approved by the agents</span>` : ""}${n.approved - nAgentsOk ? `<span class="pill ok">${n.approved - nAgentsOk} approved by you</span>` : ""}${nYou ? `<span class="pill warn">${nYou} need you</span>` : `<span class="pill">nothing needs you</span>`}${n.rejected ? `<span class="pill">${n.rejected} rejected</span>` : ""}</div>`;
+  const L = d.loop || {};
+  if (L.facts) html += `<div class="callout info small" style="margin-bottom:8px"><b>The review loop:</b> ${L.facts.rounds ? `${L.facts.rounds} round(s); ${L.facts.settled_in_loop} fact(s) settled between the agents` : "the reviewer and the checks agreed with every fact at first reading"}${L.facts.arbitrated ? `; the arbiter settled ${L.facts.arbitrated} more` : ""}${L.facts.escalated ? `; ${L.facts.escalated} they couldn't settle are yours (first below)` : ""}. Undo any decision to take it over.</div>`;
+  for (const [cat, label] of Object.entries(CAT)) {
+    const rows = fs.filter(f => f.category === cat).sort((a, b) => needsYou(b) - needsYou(a) || CRITICAL.includes(b.key) - CRITICAL.includes(a.key)); if (!rows.length) continue;
+    html += `<details data-k="facts-${cat}" open style="margin-top:10px"><summary style="font-size:14px;color:var(--ink);font-weight:600">${label} <span class="muted small">(${rows.length})</span></summary>
+    <div class="scroll"><table><thead><tr><th>Item</th><th>Value</th><th>Source</th><th>Checks</th><th>The agents</th><th>Decision</th></tr></thead><tbody>${rows.map(factRow).join("")}</tbody></table></div></details>`;
+  }
+  return html;
+}
+function factRow(f) {
+  const v = f.status === "approved" && f.final ? f.final : f;
+  const range = v.low_text || v.high_text ? `<div class="small muted">range ${esc(v.low_text)} – ${esc(v.high_text)}</div>` : "";
+  const ch = (f.status === "approved" && f.final?.check) || f.check || {items: []};
+  const rv = f.review || {}, sug = rv.suggestion;
+  const decision = f.status === "approved" ? `<span class="pill ok">Approved${byAgents(f) ? " by the agents" : f.final ? " (changed)" : ""}</span> <button class="btn small ghost" data-f="${f.id}" data-a="reset">Undo</button>`
+    : f.status === "rejected" ? `<span class="pill ${byAgents(f) ? "" : "bad"}">Rejected${byAgents(f) ? " by the agents" : ""}</span> <button class="btn small ghost" data-f="${f.id}" data-a="reset">Undo</button>`
+    : `<div class="row" style="gap:4px"><button class="btn small" data-f="${f.id}" data-a="approve">Approve</button>${sug ? `<button class="btn small" data-f="${f.id}" data-a="use_suggestion">Use correction</button>` : ""}<button class="btn small" data-f="${f.id}" data-a="edit">Edit</button><button class="btn small ghost" data-f="${f.id}" data-a="reject">Reject</button></div>`;
+  const edit = state.factEdit === f.id ? `<tr><td colspan="6" style="background:var(--raised)"><form class="row" data-fe="${f.id}" style="align-items:flex-end">
+    ${["value_text", "low_text", "high_text", "basis"].map(k => `<label class="small">${k.replace("_text", "")}<br><input type="text" name="${k}" value="${esc(v[k] || "")}" style="width:150px"></label>`).join("")}
+    <label class="small">page<br><input type="text" name="page" value="${esc(v.page ?? "")}" style="width:60px"></label>
+    <label class="small" style="flex:1;min-width:260px">quote (verbatim)<br><input type="text" name="quote" value="${esc(v.quote || "")}" style="width:100%"></label>
+    <button class="btn small primary">Save and approve</button><button type="button" class="btn small" data-cancel>Cancel</button></form></td></tr>` : "";
+  const a = f.agent, st = a?.status;
+  const loop = !a ? `${rv.verdict ? `<span class="pill">${esc(rv.verdict)}</span>` : ""} ${esc(rv.reason || "")}`
+    : `${st === "agreed" ? `<span class="pill ok">${a.round === "arbiter" ? "Settled by the arbiter" : `Agreed${a.round ? ` in round ${a.round}` : ""}`}</span>` : st === "withdrawn" ? `<span class="pill">Withdrawn</span>` : st === "escalated" ? `<span class="pill warn">Needs you</span>` : `<span class="pill">${esc(st)}</span>`}
+      <span class="small">${esc(st === "escalated" ? [a.open?.reason, a.open?.arbiter && `Arbiter: ${a.open.arbiter}`].filter(Boolean).join(" ") : (a.thread?.[a.thread.length - 1]?.reviewer?.reason || ""))}</span>`;
+  return `<tr id="fact-${f.id}"><td><b>${esc(v.label || f.key)}</b><div class="small muted mono">${esc(f.key)}</div>${CRITICAL.includes(f.key) ? `<span class="pill info" title="The bridge needs it">needed</span>` : ""}${f.origin === "reviewer" ? ` <span class="pill info">added by reviewer</span>` : ""}</td>
+    <td><b>${esc(v.value_text)}</b>${range}${v.basis ? `<div class="small muted">${esc(v.basis)}</div>` : ""}</td>
+    <td class="small">p. ${esc(v.page ?? "?")}<div class="quote">${esc((v.quote || "").slice(0, 220))}</div></td>
+    <td><ul class="checks">${(ch.items || []).map(i => `<li class="${i.ok ? "" : "no"}">${esc(i.text)}</li>`).join("")}</ul></td>
+    <td class="small">${loop}${sug && !agreedFact(f) ? `<div class="small" style="margin-top:4px"><b>Reviewer suggests:</b> ${esc(sug.value_text)}${sug.low_text ? ` (${esc(sug.low_text)} – ${esc(sug.high_text)})` : ""}, p. ${esc(sug.page)}</div>` : ""}</td>
+    <td>${decision}</td></tr>${edit}`;
+}
+function bindReport() {
+  document.querySelectorAll("#factsCard [data-f]").forEach(b => b.onclick = () => {
+    if (b.dataset.a === "edit") { state.factEdit = +b.dataset.f; render(); document.querySelector(`[data-fe="${b.dataset.f}"] input`)?.focus(); return; }
+    act(() => api(`/api/facts/${b.dataset.f}`, {method: "PUT", body: {action: b.dataset.a}}));
+  });
+  document.querySelectorAll("#factsCard [data-fe]").forEach(form => {
+    form.onsubmit = ev => { ev.preventDefault(); const fields = Object.fromEntries(new FormData(form)); fields.page = fields.page ? +fields.page : null;
+      state.factEdit = null; act(() => api(`/api/facts/${form.dataset.fe}`, {method: "PUT", body: {action: "edit", fields}})); };
+    form.querySelector("[data-cancel]").onclick = () => { state.factEdit = null; render(); };
+  });
+}
+
+// ---- rebuild: last year's valuation in Python, its assumptions, and the tie to the report ------------------------
+const EQ = {cands: null, eid: null};
+function viewRebuild() {
+  const O = E.overlay, R = E.result, rb = stageOf("rebuild");
+  const head = `<div class="lede"><div><h1><b>Last year, rebuilt</b></h1><p>The overlay's formulas compiled to Python and checked cell by cell against the values Excel saved; the report's equity value found in it (low and high on one row where they are); its discountings read back from their factors; and the whole fed again from last year's client model, which should give the same figures.</p></div></div>`;
+  if (!O) return head + needsCard(["rebuild"]) + `<div class="card empty">${busy(rb.status) ? `Rebuilding: ${esc(rb.note || "")}` : "Waiting for the roles."}</div>`;
+  const val = O.validation || {}, off = (val.cells || 0) - (val.matched || 0);
+  const w = R?.where || rb.data?.where;
+  return head + needsCard(["rebuild"]) + `
+  <div class="tiles">
+    <div class="tile"><b>${nfmt(val.matched)} / ${nfmt(val.cells)}</b><span>formula cells reproduced in Python</span></div>
+    <div class="tile"><b>${esc(w ? `${w.low}${w.high !== w.low ? ` / ${w.high}` : ""}` : "–")}</b><span>the equity value, low / high${w?.how ? ` (${esc(w.how)})` : ""}</span></div>
+    <div class="tile"><b>${R?.tie ? (R.tie.low.ok && R.tie.high.ok ? "Ties" : "Doesn't tie") : "–"}</b><span>to the report's figures, as Excel saved them</span></div>
+    <div class="tile"><b>${esc(O.roll?.prior_valuation_date || "–")}</b><span>last year's valuation date</span></div>
+  </div>
+  ${R?.tie ? tieCard(R) : ""}
+  ${R?.assumptions ? assumptionsCard(R) : ""}
+  ${equityPickCard()}
+  ${off > 0 ? `<details class="card" data-k="mismatches"><summary style="font-size:14px">${off} cell(s) Python computes differently from Excel</summary><div class="scroll" style="margin-top:8px"><table><thead><tr><th>Cell</th><th>Line item</th><th class="num">Python</th><th class="num">Excel</th><th>Formula</th></tr></thead><tbody>
+    ${(val.mismatches || []).map(m => `<tr><td class="mono">${esc(m.cell)}</td><td>${esc(m.label)}</td><td class="num">${esc(fmt(m.python, 4))}</td><td class="num">${esc(fmt(m.workbook, 4))}</td><td class="mono small">${esc((m.formula || "").slice(0, 90))}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
+  <div class="card"><h2>The module</h2><p class="sub">${esc(O.files?.overlay || "")}, sheets ${esc((O.sheets || []).join(", "))}: each formula a Python function, Excel's formula beside it. Regenerated from the workbook, never edited.</p>
+    <a class="btn" href="/api/engagements/${E.id}/overlay/module.py" target="_blank" rel="noopener">Open overlay_e${E.id}.py</a></div>`;
+}
+function tieCard(R) {
+  const u = R.head?.units || "", row = (end, t) => `<tr><td><b>${end === "low" ? "Low" : "High"}</b> <span class="mono small muted">${esc(R.where[end])}</span></td><td class="num">${esc(t.report_text || vN(t.report))}</td>
+    <td class="num">${vN(t.saved)} ${t.ok ? `<span class="pill ok">✓</span>` : `<span class="pill bad">✗</span>`}</td><td class="num">${vN(t.rebuilt)} ${t.rebuilt_ok ? `<span class="pill ok">✓</span>` : `<span class="pill warn">moves</span>`}</td></tr>`;
+  return `<div class="card"><h2>The tie to the report</h2><p class="sub">The report's equity value against the overlay's cells as Excel saved them, and rebuilt in Python on last year's client model. ${esc(u)}. Mid = the midpoint of the low and the high.</p>
+    <div class="scroll"><table><thead><tr><th></th><th class="num">The report</th><th class="num">As Excel saved</th><th class="num">Rebuilt in Python</th></tr></thead><tbody>${row("low", R.tie.low)}${row("high", R.tie.high)}
+    <tr class="tot"><td>Mid</td><td class="num">${vN(R.values.report.mid)}</td><td class="num">${vN((R.tie.low.saved + R.tie.high.saved) / 2)}</td><td class="num">${vN(R.values.rebuilt.mid)}</td></tr></tbody></table></div>
+    ${(R.head?.why || []).length ? `<p class="small muted" style="margin:8px 0 0">${esc(R.head.why.join("; "))}.</p>` : ""}</div>`;
+}
+function assumptionsCard(R) {
+  const facts = key => E.facts.find(f => f.key === key && f.status !== "rejected");
+  const f = (k, label) => { const x = facts(k); return x ? `<dt>${label} (report)</dt><dd>${esc(x.value_text || `${x.low_text} – ${x.high_text}`)}${x.basis ? ` <span class="small muted">${esc(x.basis)}</span>` : ""}</dd>` : ""; };
+  const one = (end, rows) => {
+    const A = rows.find(r => !r.error && r.parts?.length) || rows.find(r => !r.error);
+    if (!A) return `<div><h3 style="font-size:14px;margin:0 0 6px">${end}</h3><p class="small muted">No discounting under it could be recomputed.</p></div>`;
+    const others = rows.filter(r => r !== A && !r.error);
+    return `<div><h3 style="font-size:14px;margin:0 0 6px">${end === "low" ? "The low" : "The high"} <span class="mono small muted">${esc(R.where[end])}</span></h3><dl class="kv">
+      <dt>Discount rate</dt><dd>${vPct(A.rate)} <span class="small muted">${esc(A.rate_source || "")}</span></dd>
+      <dt>Valuation date</dt><dd>${esc(A.valuation_date)} <span class="small muted">${esc(A.valuation_date_source || "")}</span></dd>
+      <dt>Discounting</dt><dd>${esc(TIMING[A.timing] || A.timing)}, ${esc(DAYCOUNT[A.day_count] || A.day_count)}</dd>
+      <dt>Cut-off</dt><dd>${esc(A.terminal_date || "none")}</dd>
+      <dt>Forecast</dt><dd>${A.periods} periods, ${esc(A.first_period)} to ${esc(A.last_period)}</dd>
+      <dt>Cash flows (undiscounted)</dt><dd>${vN(A.undiscounted)}${A.parts?.length ? ` <span class="small muted">(${esc(A.parts.join(" + "))})</span>` : ""}</dd>
+      ${A.terminal_value != null ? `<dt>Terminal value</dt><dd>${vN(A.terminal_value)} <span class="small muted">${esc(A.terminal_value_row || "")}</span></dd>` : ""}
+      <dt>Present value</dt><dd>${vN(A.pv)} <span class="mono small muted">${esc(A.cell)}</span>${A.label ? ` <span class="small muted">${esc(A.label)}</span>` : ""}</dd>
+      ${others.map(o => `<dt>Also discounted</dt><dd>${esc(o.label || "")} ${vN(o.pv)} <span class="mono small muted">${esc(o.cell)}</span> at ${vPct(o.rate)}</dd>`).join("")}</dl></div>`;
+  };
+  return `<div class="card"><h2>Model assumptions</h2><p class="sub">Read from the overlay's own discountings under the equity value (the rate and dates they read, the convention their factors show), recomputed from the values Excel saved; beside them, what the report says.</p>
+    <div class="grid2">${one("low", R.assumptions.low || [])}${one("high", R.assumptions.high || [])}</div>
+    <dl class="kv" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--rule)">${f("discount_rate", "Discount rate")}${f("terminal_growth_rate", "Terminal growth rate")}${f("franking_utilisation", "Franking credit utilisation")}${f("terminal_value", "Terminal value")}${f("pv_forecast", "PV of the forecast")}${f("pv_terminal_value", "PV of the terminal value")}${f("franking_credits_value", "Value of franking credits")}${f("franking_credits_share", "Franking credits, share of value")}</dl></div>`;
+}
+function equityPickCard() {
+  const needs = (E.run?.needs || []).find(n => n.id === "equity" || n.id === "equity-rows");
+  const w = E.result?.where, open = !!needs;
+  const cands = needs?.candidates || EQ.cands;
+  return `<details class="card" id="equityPick" data-k="equitypick" ${open ? "open" : ""}><summary style="font-size:14px">${open ? "<b>Pick last year's equity value cells</b>" : "Pick other cells for last year's equity value"}</summary>
+    <p class="small muted">The low and the high of the report's equity value, as cells on the overlay's sheets (Sheet!A1). ${w ? `Now: ${esc(w.low)} / ${esc(w.high)} (${esc(w.how || "")}).` : ""} Cells holding the report's figures:</p>
+    ${cands?.length ? `<div class="scroll"><table><thead><tr><th>Cell</th><th>Line item</th><th class="num">Value</th><th>The report's</th><th>Basis</th></tr></thead><tbody>${cands.map(c => `<tr><td class="mono">${esc(c.cell)}</td><td>${esc(c.label || "")}</td><td class="num">${esc(fmt(c.value, 1))}</td><td>${esc(c.part === "value" ? "mid / preferred" : c.part)}</td><td>${esc(c.basis)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="small"><button class="btn small" id="eqLoad" type="button">Find them</button></p>`}
+    <form class="row" id="eqForm" style="margin-top:10px"><label class="small">Low<br><input type="text" name="low" value="${esc(w?.low || "")}" placeholder="Summary!C9"></label>
+      <label class="small">High<br><input type="text" name="high" value="${esc(w?.high || "")}" placeholder="Summary!E9"></label>
+      <label class="small">Basis<br><select class="in" name="basis"><option value="ex">ex-distribution</option><option value="cum">cum-distribution</option></select></label>
+      <button class="btn primary small">Use these cells</button>${w?.how === "picked by you" ? `<button class="btn small ghost" type="button" id="eqClear">Go back to what was found</button>` : ""}</form></details>`;
+}
+function bindRebuild() {
+  $("#eqLoad")?.addEventListener("click", async () => { try { EQ.cands = await api(`/api/engagements/${E.id}/candidates`); } catch (e) { toast(e.message, 6000); } render(); });
+  const f = $("#eqForm");
+  if (f) f.onsubmit = ev => { ev.preventDefault(); const b = Object.fromEntries(new FormData(f));
+    act(async () => { await api(`/api/engagements/${E.id}/equity`, {method: "PUT", body: b}); toast("Your cells: the bridge runs again on them"); }); };
+  $("#eqClear")?.addEventListener("click", () => act(() => api(`/api/engagements/${E.id}/equity`, {method: "PUT", body: {low: null}})));
+}
+
+// ---- the result: the bridge and the cash flows -------------------------------------------------------------------
+const STEP_SHORT = {report: "Report", rounding: "Rounding", prior_feed: "Client file", rebuilt: "Rebuilt", time: "Time value", cash: "Cash flows paid",
+  forecast: "New forecast", roll: "Roll-forward", rate: "Discount rate", this_year: "This year"};
+function bridgeSpec(steps, title, units) {
+  const keep = steps.filter(s => s.value != null && (s.total || Math.abs(s.value) >= 0.05 || ["time", "cash", "forecast", "roll"].includes(s.key)));
+  const labels = keep.map(x => STEP_SHORT[x.key] || x.label);
+  return {title, kind: "waterfall", units: units || "", labels, period_labels: labels, frequency: "irregular", sign: 1,
+    series: [{name: title, range: "", data: keep.map(x => x.value)}], totals: keep.map((x, i) => x.total ? i : -1).filter(i => i >= 0)};
+}
+function flowsSpec(ch, units) {
+  const ys = ch.years || [], s = ch.series || {};
+  const series = [["last_year", "Last year's forecast"], ["this_year", "This year's forecast"]].filter(([k]) => s[k]).map(([k, name]) => ({name, range: (ch.rows || []).join(", "), data: ys.map(y => s[k][y] ?? null)}));
+  return {title: "Undiscounted forecast cash flows by financial year", kind: "bar", units: units || "", labels: ys, period_labels: ys, frequency: "annual", sign: 1, series};
+}
+function viewResult() {
+  const R = E.result, rs = stageOf("result");
+  const head = `<div class="lede"><div><h1><b>Last year to this year</b></h1><p>The report's equity value, confirmed in Python on last year's client model, then rolled forward onto this year's at last year's discount rate: a year of time value, last year's forecast cash flows up to the new valuation date dropping out, and this year's forecast in their place. Each step is recomputed, so they add up exactly; the mid is the average of the low's and the high's.</p></div></div>`;
+  if (!R?.bridges) return head + needsCard(["result"]) + `<div class="card empty">${busy(rs.status) ? `Working: ${esc(rs.note || "")}` : "Waiting for last year's rebuild."}</div>`;
+  const B = R.bridges, end = state.bridgeEnd, steps = (B[end] || B.mid).steps, u = B.units || R.head?.units || "";
+  let run = 0;
+  const rows = steps.map(x => { if (x.value == null) return ""; run = x.total ? x.value : run + x.value;
+    return `<tr class="${x.total ? "tot" : ""}"><td class="${x.total ? "" : "step"}">${esc(x.label)}</td><td class="num">${x.total ? "" : (x.value >= 0.05 ? "+" : "") + vN(x.value)}</td><td class="num"><b>${vN(run)}</b></td></tr>`; }).join("");
+  const rev = stageOf("review"), rv = E.run?.stages && (E.run.log || []).find(h => h.stage === "review" && h.event === "decide");
+  return head + resultTeaser() + needsCard(["result"]) + `
+  <div class="card"><div class="row" style="justify-content:space-between"><div><h2>The value bridge</h2><p class="sub">${esc(u)} · equity value, ${R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution"}${B.valuation_date ? ` · this year's valuation date ${esc(B.valuation_date)}` : ""}</p></div>
+    <div class="seg" role="tablist" aria-label="Which end">${["low", "mid", "high"].map(k => `<button role="tab" data-end="${k}" class="${end === k ? "on" : ""}" aria-selected="${end === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div></div>
+    ${B.held ? `<div class="callout warn small" style="margin-bottom:10px">This year's value is held back until the rows below are found: the bridge stops at last year's rebuilt value.</div>` : ""}
+    <div class="grid2"><div id="brChart"></div><div class="scroll"><table class="bridge"><thead><tr><th>Step</th><th class="num">Change</th><th class="num">Value</th></tr></thead><tbody>${rows}</tbody></table>
+    ${(B.notes || []).length ? `<p class="small muted">${esc(B.notes.join("; "))}</p>` : ""}</div></div></div>
+  <div class="card"><h2>The forecast cash flows</h2><p class="sub">The undiscounted discrete forecast cash flows under the value (${esc(R.chart?.label || "the cash-flow row")}, the terminal value left out${R.chart?.left_out?.length ? `: ${esc(R.chart.left_out.join(", "))}` : ""}), totalled by financial year: last year's as the rebuild reads them from last year's client model, and this year's, rolled forward.</p>
+    ${R.chart?.years?.length ? `<div id="cfChart"></div>` : `<p class="muted small">${esc(R.chart?.why || "No cash flows found under the value.")}</p>`}</div>
+  ${rowsCard(R)}
+  ${rev.status && rev.status !== "waiting" ? `<div class="card"><h2>gpt-sol's review of the run</h2><p class="sub">It read the facts, the tie, the bridge, the cash flows and the run log end to end.</p>
+    <p style="margin:0">${rv ? esc(rv.text) : esc(rev.note || "")}</p></div>` : ""}`;
+}
+function rowsCard(R) {
+  const g = R.figures?.gaps; if (!g) return "";
+  const rows = [...g.dcf_missing.map(x => ({...x, kind: "not found"})), ...g.blank_rows.map(x => ({...x, kind: "found but blank"})),
+    ...g.weak_rows.map(x => ({...x, kind: "found, not sure"})), ...g.timing_open.map(x => ({...x, kind: "timing row"}))];
+  if (!rows.length) return `<div class="card" id="rowsCard"><h2>This year's rows</h2><p class="sub" style="margin:0">Every row the value's cash flows come from was found in this year's model (${nfmt(g.dcf_rows)} of them), and this year's model at last year's date gives about last year's value (the zero-roll check).</p></div>`;
+  return `<div class="card" id="rowsCard"><h2>Rows to find in this year's model</h2><p class="sub">The value's cash flows come from these rows of last year's client model. The row agents couldn't settle them, so this year's value waits: pick this year's row, or keep last year's values for it on purpose. Last year's values are never used silently.</p>
+    <div class="scroll"><table><thead><tr><th>Last year's row</th><th>Why</th><th>This year's</th><th></th></tr></thead><tbody>${rows.map(x => `<tr id="row-${esc(x.row).replace(/[^A-Za-z0-9]/g, "_")}"><td><span class="mono">${esc(x.row)}</span><div class="small">${esc(x.label || "")}</div></td>
+      <td class="small">${esc(x.kind)}${x.why ? `: ${esc(x.why)}` : ""}${x.confidence != null ? ` (confidence ${esc(x.confidence)})` : ""}</td><td class="mono small">${esc(x.found || "–")}</td>
+      <td class="nowrap"><button class="btn small" data-rowinfo="${esc(x.row)}">Pick…</button></td></tr><tr hidden data-rowbox="${esc(x.row)}"><td colspan="4"></td></tr>`).join("")}</tbody></table></div></div>`;
+}
+async function rowPicker(row) {
+  const box = document.querySelector(`[data-rowbox="${CSS.escape(row)}"]`); if (!box) return;
+  box.hidden = false; box.firstElementChild.innerHTML = `<p class="muted small">Looking in this year's model…</p>`;
+  let r; try { r = await api(`/api/engagements/${E.id}/overlay/row?row=${encodeURIComponent(row)}`); } catch (e) { box.firstElementChild.innerHTML = `<div class="callout bad">${esc(e.message)}</div>`; return; }
+  const alts = [...(r.found ? [{row: r.found, label: r.found_label, why: "what was found"}] : []), ...(r.alternatives || [])];
+  box.firstElementChild.innerHTML = `<div class="small">${esc(r.label)}: ${esc(r.how || "")}</div>
+    ${r.side_by_side?.length ? `<div class="small muted" style="margin:4px 0">${r.side_by_side.map(s => `${esc(s.period)}: ${esc(fmt(s.last_year))} → ${esc(fmt(s.this_year))}`).join(" · ")}</div>` : ""}
+    <div class="row" style="margin-top:6px"><select class="in" data-rowto="${esc(row)}">${alts.map(a => `<option value="${esc(a.row)}">${esc(a.row)} ${esc(a.label || "")}${a.why ? ` (${esc(a.why)})` : ""}</option>`).join("")}</select>
+      <input type="text" data-rowtyped="${esc(row)}" placeholder="or Sheet!rN" style="width:140px">
+      <button class="btn small primary" data-rowuse="${esc(row)}">Use this row</button><button class="btn small" data-rowkeep="${esc(row)}" title="Keep last year's values for this row, on purpose">Keep last year's values</button></div>`;
+  box.querySelector("[data-rowuse]").onclick = () => { const typed = box.querySelector("[data-rowtyped]").value.trim(), pick = typed || box.querySelector("[data-rowto]").value;
+    act(async () => { await api(`/api/engagements/${E.id}/overlay/rowpick`, {method: "POST", body: {prior: row, current: pick}}); toast("Picked: the bridge runs again"); }); };
+  box.querySelector("[data-rowkeep]").onclick = () => act(async () => { await api(`/api/engagements/${E.id}/overlay/rowpick`, {method: "POST", body: {prior: row, current: "-"}}); toast("Last year's values kept for that row"); });
+}
+function bindResult() {
+  document.querySelectorAll("[data-end]").forEach(b => b.onclick = () => { state.bridgeEnd = b.dataset.end; render(); });
+  document.querySelectorAll("[data-rowinfo]").forEach(b => b.onclick = () => rowPicker(b.dataset.rowinfo));
+  const R = E.result; if (!R?.bridges) return;
+  const B = R.bridges, u = B.units || R.head?.units || "", end = state.bridgeEnd;
+  $("#brChart")?.append(chartCard(bridgeSpec((B[end] || B.mid).steps, `The ${end}: last year to this year`, u)));
+  if (R.chart?.years?.length) $("#cfChart")?.append(chartCard(flowsSpec(R.chart, u)));
+  mountCharts($("#main"));
+}
+
+// ---- the map: insight cards, the detail on demand ------------------------------------------------------------------
+function viewMap() {
+  const m = E.map, ms = stageOf("map");
+  const head = `<div class="lede"><div><h1><b>The map</b></h1><p>How the four files link up: where the report's figures sit in the overlay, which client rows the overlay reads, those rows in this year's model, and what changed between last year's client model and this year's. The detail is a click away.</p></div></div>`;
+  if (!m) return head + `<div class="card empty">${busy(ms.status) ? `Building the map: ${esc(ms.note || "")}` : "The map is built after last year's rebuild."}</div>`;
+  const located = b => !!b && (b.located ?? (b.label_match || b.anchor));
+  const found = m.report_overlay.filter(x => located(x.matches[0])), chain = m.chain || [], now = chain.filter(c => c.current);
+  const books = m.overlay_client.books || [], ch = m.changes || {}, c = ch.counts || {};
+  const tile = (b, s) => `<div class="tile"><b>${b}</b><span>${s}</span></div>`;
+  return head + `
+  <div class="grid3">
+    <div class="card"><h2>The report in the overlay</h2><p class="sub">Where the report's figures sit: a cell labelled like the figure, or a DCF.</p>
+      <div class="tiles">${tile(`${found.length} / ${m.report_overlay.length}`, "report figures located")}${tile(m.python.filter(p => p.reproduced).length, "DCFs recomputed in Python")}</div>
+      <ul class="why" style="color:var(--ink)">${found.slice(0, 6).map(x => `<li><b>${esc(x.label || x.key)}</b> ${esc(x.value_text || "")} → <span class="mono">${esc(x.matches[0].sheet)}!${esc(x.matches[0].addr)}</span></li>`).join("")}</ul>
+      <details data-k="map-report"><summary>Every figure, and the DCFs</summary>${reportTable(m, located)}</details></div>
+    <div class="card"><h2>The overlay reads the client model</h2><p class="sub">${esc(m.overlay_client.mode || "")}. Each overlay row that reads a client row, and that row in this year's model.</p>
+      <div class="tiles">${tile(chain.length, "overlay rows read the client model")}${tile(`${now.length} / ${chain.length}`, "found in this year's model")}</div>
+      ${books.length ? `<p class="small" style="margin:8px 0 0">${books.map(b => `<span class="mono">[${b.idx}]</span> ${esc(b.filename || b.target || "")}${b.is_client ? ` <span class="pill ok">last year's client model</span>` : ""}${b.cached_check ? ` <span class="small muted">${b.cached_check.matched} of ${b.cached_check.cells} cached values match</span>` : ""}`).join("<br>")}</p>` : ""}
+      <details data-k="map-chain"><summary>Every row</summary>${chainTable(chain)}</details></div>
+    <div class="card"><h2>What changed in the client model</h2><p class="sub">Last year's client model against this year's, cell by cell, line items aligned by sheet and label.</p>
+      ${ch.error ? `<p class="small muted">${esc(ch.error)}</p>` : ch.counts ? `<div class="tiles">${tile(nfmt(c.inputs_changed), "inputs changed")}${tile(nfmt(c.calculated_cells_changed), "calculated cells moved")}${tile(nfmt(c.line_items_added), "line items added")}${tile(nfmt(c.line_items_removed), "line items removed")}</div>
+        ${(ch.key_outputs || []).length ? `<ul class="why" style="color:var(--ink)">${ch.key_outputs.slice(0, 5).map(r => `<li>${esc(r.label)} <span class="mono small">${esc(r.ref)}</span>${r.pct != null ? ` ${r.pct > 0 ? "+" : ""}${r.pct}%` : ""}</li>`).join("")}</ul>` : ""}
+        <details data-k="map-changes"><summary>The detail</summary>${changesTable(ch)}</details>` : `<p class="small muted">Needs last year's and this year's client models as separate files.</p>`}</div>
+  </div>
+  <details class="card" data-k="map-models"><summary style="font-size:14px">Inside each model: sheets, links and line items</summary>${modelsCard()}</details>`;
+}
+function reportTable(m, located) {
+  return `<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Report figure</th><th>Overlay cell</th><th>Line item there</th><th class="num">Value</th></tr></thead><tbody>
+  ${m.report_overlay.map(x => { const b = x.matches[0]; return `<tr><td><b>${esc(x.label || x.key)}</b> ${esc(x.value_text || "")}</td><td class="mono">${!b ? `<span class="pill warn">not found</span>` : located(b) ? esc(`${b.sheet}!${b.addr}`) : `<span class="muted">${esc(`${b.sheet}!${b.addr}`)}</span> <span class="pill warn">value only</span>`}${b && b.part !== "value" ? ` <span class="pill">${esc(b.part)}</span>` : ""}</td><td class="small">${esc(b?.label || "")}</td><td class="num">${b ? esc(fmt(b.value, 4)) : ""}</td></tr>`; }).join("")}</tbody></table></div>
+  ${m.python.length ? `<div class="scroll" style="margin-top:10px"><table><thead><tr><th>DCF cell</th><th>Line item</th><th class="num">Workbook</th><th class="num">Python</th><th></th></tr></thead><tbody>${m.python.map(p => `<tr><td class="mono">${esc(p.cell)}</td><td>${esc(p.label)}</td><td class="num">${esc(fmt(p.value))}</td><td class="num">${esc(fmt(p.python))}</td><td>${p.reproduced ? `<span class="pill ok">reproduced</span>` : `<span class="pill">${p.ok ? "differs" : "not a DCF"}</span>`}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
+}
+function chainTable(chain) {
+  return chain.length ? `<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Overlay row</th><th>Last year's client row</th><th>This year's</th></tr></thead><tbody>
+  ${chain.slice(0, 200).map(c => `<tr><td><span class="mono">${esc(c.overlay)}</span><div class="small">${esc(c.overlay_label)}</div></td><td><span class="mono">${esc(c.client)}</span><div class="small">${esc(c.client_label)}</div></td>
+    <td>${c.current ? `<span class="mono">${esc(c.current)}</span>` : `<span class="pill warn">not found</span>${c.why ? `<div class="small muted">${esc(c.why)}</div>` : ""}`}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted small">No links found from the overlay into the client model.</p>`;
+}
+function changesTable(ch) {
+  const t = (rows, cols) => rows?.length ? `<div class="scroll" style="margin-top:6px"><table><thead><tr>${cols.map(c => `<th>${c[0]}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${cols.map(c => `<td>${c[1](r)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : "";
+  return t(ch.inputs, [["Input", r => `<span class="mono">${esc(r.ref)}</span> ${esc(r.label)}`], ["Last year", r => esc(fmt(r.old, 4))], ["This year", r => esc(fmt(r.new, 4))]])
+    + t(ch.key_outputs, [["Result", r => `<span class="mono">${esc(r.ref)}</span> ${esc(r.label)}`], ["First change", r => `${esc(fmt(r.old))} → ${esc(fmt(r.new))}`], ["%", r => r.pct == null ? "" : `${r.pct}%`]])
+    + t([...(ch.rows_added || []).map(r => ({...r, k: "added"})), ...(ch.rows_removed || []).map(r => ({...r, k: "removed"}))], [["", r => `<span class="pill ${r.k === "added" ? "ok" : "bad"}">${r.k}</span>`], ["Line item", r => `<span class="mono">${esc(r.ref)}</span> ${esc(r.label)}`]]);
+}
+const MD = {eid: null, fid: null, data: {}, rows: null, rowsKey: null, q: "", sheet: "", mapped: false, chart: null, seq: 0};
+const ROLE_NAME = {prior_overlay: "Prior overlay", prior_model: "Prior client model", current_model: "Current client model"};
+const mdKey = (fid = MD.fid) => `${fid}|${E.map_status}|${E.overlay_status}|${E.updated_at}`;
+function modelChoices() {
+  const out = [];
+  for (const role of ["prior_overlay", "prior_model", "current_model"]) {
+    const r = E.roles[role];
+    if (!r || r.kind !== "workbook") continue;
+    const w = E.workbooks.find(x => x.id === r.id), have = out.find(o => o.fid === r.id);
+    if (have) { have.roles.push(role); continue; }
+    out.push({fid: r.id, roles: [role], filename: w?.filename || "", ready: w?.status === "done"});
+  }
+  return out;
+}
+function modelsCard() {
+  const ch = modelChoices();
+  if (!ch.length) return "";
+  if (MD.eid !== E.id) Object.assign(MD, {eid: E.id, fid: null, data: {}, rows: null, rowsKey: null, q: "", sheet: "", mapped: false});
+  if (!ch.some(c => c.fid === MD.fid)) MD.fid = (ch.find(c => c.ready) || ch[0]).fid;
+  return `<div id="modelsCard" style="margin-top:10px"><div class="seg" role="tablist" aria-label="Model">${ch.map(c => `<button role="tab" data-md="${c.fid}" class="${c.fid === MD.fid ? "on" : ""}" aria-selected="${c.fid === MD.fid}" ${c.ready ? "" : "disabled"} title="${esc(c.filename)}">${esc(c.roles.map(r => ROLE_NAME[r]).join(" + "))}</button>`).join("")}</div>
+    <div id="mdBody" style="margin-top:10px">${MD.data[mdKey()] ? modelBody(MD.data[mdKey()]) : `<p class="muted small">Loading…</p>`}</div></div>`;
+}
+function modelBody(d) {
+  const t = d.totals, e = d.edges;
+  const pct = t.formulas + t.consts ? Math.round(100 * t.formulas / (t.formulas + t.consts)) : 0;
+  const liveEdges = e.kinds.filter(k => k.kind !== "inactive").reduce((a, k) => a + k.n, 0);
+  const ov = new Set(d.overlay_sheets || []);
+  const tl = s => s.layout.periods ? `${s.layout.periods} ${esc(s.layout.periodicity || "")} · ${esc(s.layout.period_start || "")} → ${esc(s.layout.period_end || "")}` : `<span class="muted">none</span>`;
+  return `<p class="small muted" style="margin:0 0 10px"><b style="color:var(--ink)">${esc(d.filename)}</b>${d.target_name ? " · " + esc(d.target_name) : ""}${d.valuation_date ? " · valued at " + esc(d.valuation_date) : ""}</p>
+  <div class="tiles"><div class="tile"><b>${nfmt(t.sheets)}</b><span>sheets</span></div><div class="tile"><b>${nfmt(t.rows)}</b><span>line items</span></div>
+    <div class="tile"><b>${kfmt(t.formulas)}</b><span>formula cells (${pct}%)</span></div><div class="tile"><b>${kfmt(t.consts)}</b><span>inputs / constants</span></div>
+    <div class="tile"><b>${nfmt(liveEdges)}</b><span>row links in use</span></div><div class="tile"><b>${nfmt(d.marked.rows)}</b><span>rows the map uses</span></div></div>
+  <div class="grid2" style="margin-top:14px">
+    <div><h3 style="font-size:14px;margin:0 0 8px">Cells by sheet</h3><div class="chart" id="mdChartBox"><canvas id="mdChart" aria-label="Formula cells and inputs by sheet"></canvas></div></div>
+    <div><h3 style="font-size:14px;margin:0 0 8px">Which sheets feed which</h3><div class="scroll" id="mdHeat"></div></div></div>
+  <h3 style="font-size:14px;margin:16px 0 6px">Sheets</h3>
+  <div class="scroll"><table><thead><tr><th class="num">#</th><th>Sheet</th><th>Timeline</th><th class="num">Line items</th><th class="num">Formulas</th><th class="num">Inputs</th><th class="num">In the map</th></tr></thead><tbody>
+  ${d.sheets.map(s => `<tr class="click" data-mdsheet="${esc(s.sheet)}"><td class="num">${s.pos}</td><td>${esc(s.sheet)}${ov.has(s.sheet) ? ` <span class="pill warn">overlay</span>` : ""}</td><td class="small">${tl(s)}</td><td class="num">${nfmt(s.rows)}</td><td class="num">${nfmt(s.formulas)}</td><td class="num">${nfmt(s.consts)}</td><td class="num">${d.marked.by_sheet[s.sheet] ? nfmt(d.marked.by_sheet[s.sheet]) : ""}</td></tr>`).join("")}</tbody></table></div>
+  <h3 style="font-size:14px;margin:16px 0 6px">Line items</h3>
+  <div class="row small" style="margin-bottom:8px"><input type="text" id="mdQ" placeholder="Search labels and sections" value="${esc(MD.q)}" style="flex:1;min-width:200px" aria-label="Search line items">
+    <select class="in" id="mdSheet" aria-label="Sheet"><option value="">All sheets</option>${d.sheets.filter(s => s.rows).map(s => `<option ${s.sheet === MD.sheet ? "selected" : ""}>${esc(s.sheet)}</option>`).join("")}</select>
+    <label><input type="checkbox" id="mdMapped" ${MD.mapped ? "checked" : ""}> Only rows the map uses</label></div>
+  <div id="mdRows">${rowsTable()}</div>`;
+}
+function rowsTable() {
+  if (!MD.rows) return `<p class="muted small">Loading…</p>`;
+  if (!MD.rows.length) return `<p class="muted small">No line items match.</p>`;
+  const tag = ms => ms.map(m => `<span class="tag ${m.startsWith("lever") ? "lever" : m.startsWith("output") ? "out" : ""}">${esc(m)}</span>`).join("");
+  return `<div class="scroll" style="max-height:520px;overflow-y:auto"><table><thead><tr><th>Row</th><th>Section</th><th>Label</th><th>Units</th><th class="num">Formulas</th><th class="num">Inputs</th><th>In the map</th></tr></thead><tbody>
+  ${MD.rows.map(r => `<tr><td class="mono nowrap">${esc(r.sheet)}!r${r.row}</td><td class="small">${esc(r.section)}</td><td>${esc(r.label)}</td><td class="small">${esc(r.units)}</td><td class="num">${nfmt(r.n_formula)}</td><td class="num">${nfmt(r.n_const)}</td><td>${tag(r.marks || [])}</td></tr>`).join("")}</tbody></table></div>`;
+}
+function mountModel() {
+  const d = MD.data[mdKey()]; if (!d || !$("#mdChart")) return;
+  if (MD.chart) { MD.chart.destroy(); MD.chart = null; }
+  const sh = d.sheets.filter(s => s.rows);
+  $("#mdChartBox").style.height = Math.max(160, 60 + sh.length * 26) + "px";
+  const tick = {color: tok("--muted"), font: {family: tok("--sans"), size: 12}};
+  const ds = (label, data, color) => ({label, data, backgroundColor: tok(color), borderColor: tok("--surface"), borderWidth: 1, borderRadius: 3, borderSkipped: "start", maxBarThickness: 26});
+  MD.chart = new Chart($("#mdChart"), {type: "bar",
+    data: {labels: sh.map(s => s.sheet), datasets: [ds("Formula cells", sh.map(s => s.formulas), "--s1"), ds("Inputs", sh.map(s => s.consts), "--s2")]},
+    options: {indexAxis: "y", responsive: true, maintainAspectRatio: false, animation: false, interaction: {mode: "index", axis: "y", intersect: false},
+      plugins: {legend: {position: "top", align: "start", labels: {color: tok("--ink"), boxWidth: 12, boxHeight: 12, font: {family: tok("--sans"), size: 12}}}},
+      scales: {x: {stacked: true, ticks: {...tick, callback: v => kfmt(v)}, grid: {color: tok("--rule")}, border: {display: false}}, y: {stacked: true, ticks: tick, grid: {display: false}}}}});
+  heatmap($("#mdHeat"), d.edges.flows, d.sheets.map(s => s.sheet), new Set(d.overlay_sheets || []));
+}
+function heatmap(box, flows, order, ov) {
+  const live = flows.filter(f => f.live > 0);
+  if (!live.length) { box.innerHTML = `<p class="muted small" style="margin:0">No links between sheets.</p>`; return; }
+  const src = order.filter(s => live.some(f => f.src_sheet === s)), dst = order.filter(s => live.some(f => f.dst_sheet === s));
+  const n = Object.fromEntries(live.map(f => [f.src_sheet + "\u0000" + f.dst_sheet, f.live]));
+  const max = Math.max(...live.map(f => f.live)), step = v => Math.min(7, 1 + Math.floor(6 * Math.log(v) / Math.log(Math.max(max, 2))));
+  const whiteText = tok("color-scheme") === "dark" ? [1, 2, 3, 4, 5] : [5, 6, 7];
+  box.innerHTML = `<table class="heat"><thead><tr><th></th>${dst.map(s => `<th class="col ${ov.has(s) ? "ov" : ""}">${esc(s)}</th>`).join("")}</tr></thead><tbody>
+    ${src.map(a => `<tr><th style="text-align:right" class="${ov.has(a) ? "ov" : ""}">${esc(a)}</th>${dst.map(b => { const v = n[a + "\u0000" + b]; if (!v) return `<td class="z"></td>`;
+      const k = step(v); return `<td style="background:var(--q${k});color:${whiteText.includes(k) ? "#fff" : "#1a1a24"}" title="${esc(a)} reads ${esc(b)}: ${nfmt(v)} row links">${v >= 1000 ? kfmt(v) : v}</td>`; }).join("")}</tr>`).join("")}</tbody></table>
+    <div class="legend">Fewer ${[1, 2, 3, 4, 5, 6, 7].map(k => `<i style="background:var(--q${k})"></i>`).join("")} more links (log scale, up to ${nfmt(max)})</div>`;
+}
+async function loadModelRows() {
+  const key = JSON.stringify([MD.fid, MD.q, MD.sheet, MD.mapped, E.map_status, E.overlay_status]);
+  if (key === MD.rowsKey && MD.rows) return;
+  const seq = ++MD.seq, p = new URLSearchParams();
+  if (MD.q) p.set("q", MD.q); if (MD.sheet) p.set("sheet", MD.sheet); if (MD.mapped) p.set("mapped", "true");
+  try { const rows = await api(`/api/engagements/${E.id}/models/${MD.fid}/rows?${p}`); if (seq !== MD.seq) return; MD.rows = rows; MD.rowsKey = key; }
+  catch (err) { if (seq === MD.seq) MD.rows = []; }
+  const box = $("#mdRows"); if (box) box.innerHTML = rowsTable();
+}
+async function bindModels() {
+  if (!$("#modelsCard")) return;
+  document.querySelectorAll("#modelsCard [data-md]").forEach(b => b.onclick = () => { MD.fid = +b.dataset.md; MD.rows = null; MD.sheet = ""; $("#modelsCard").outerHTML = modelsCard(); bindModels(); });
+  const key = mdKey();
+  if (!MD.data[key]) {
+    try { MD.data[key] = await api(`/api/engagements/${E.id}/models/${MD.fid}`); }
+    catch (err) { const b = $("#mdBody"); if (b) b.innerHTML = `<div class="callout warn">${esc(err.message)}</div>`; return; }
+    if (mdKey() !== key || !$("#mdBody")) return;
+    $("#mdBody").innerHTML = modelBody(MD.data[key]);
+  }
+  mountModel();
+  let t = null;
+  $("#mdQ").oninput = e => { MD.q = e.target.value.trim(); clearTimeout(t); t = setTimeout(() => loadModelRows(), 250); };
+  $("#mdSheet").onchange = e => { MD.sheet = e.target.value; loadModelRows(); };
+  $("#mdMapped").onchange = e => { MD.mapped = e.target.checked; loadModelRows(); };
+  document.querySelectorAll("#modelsCard [data-mdsheet]").forEach(r => r.onclick = () => { MD.sheet = r.dataset.mdsheet; $("#mdSheet").value = MD.sheet; loadModelRows(); });
+  loadModelRows();
+}
+
+// ---- charts (web/charts.js draws them) -----------------------------------------------------------------------------
+function shownData(spec) {
+  const sign = spec.sign || 1;
+  return {labels: spec.period_labels || spec.labels, series: spec.series.map(s => ({name: s.name, as: s.as, axis: s.axis, data: s.data.map(v => v == null ? null : v * sign + 0)})), phases: null};
+}
+function chartCard(spec) {
+  const card = document.createElement("div"); card.className = "chart-card";
+  card.innerHTML = `<h4>${esc(spec.title)}</h4><div class="sub">${esc(spec.units || "")}${spec.labels.length ? ` · ${esc(spec.labels[0])} to ${esc(spec.labels[spec.labels.length - 1])}` : ""}</div><div class="chart-box"><canvas role="img" aria-label="${esc(spec.title)}"></canvas></div>
+    <div class="chart-tools">${chartKinds(spec).map(k => `<button type="button" data-kind="${k}">${KIND_WORD[k]}</button>`).join("")}<button type="button" data-act="copy">Copy data</button></div>
+    <script type="application/json">${JSON.stringify(spec).replace(/</g, "\\u003c")}<\/script>`;
+  return card;
+}
+function mountCharts(root) {
+  root.querySelectorAll(".chart-card").forEach(card => {
+    if (card._chart) return;
+    const spec = JSON.parse(card.querySelector('script[type="application/json"]').textContent);
+    const draw = kind => {
+      card._chart?.destroy();
+      const d = shownData(spec), f = v => v == null ? "–" : Number(v).toLocaleString(undefined, {maximumFractionDigits: 1});
+      card._chart = new Chart(card.querySelector("canvas"), chartConfig(spec, d, kind, {
+        color: i => tok(`--c${(i % 6) + 1}`), ink: tok("--ink"), muted: tok("--muted"), rule: tok("--rule"), shade: tok("--code-bg"), up: tok("--c5"), down: tok("--c6"), total: tok("--c1"),
+        font: {family: tok("--sans")}, fmt: f, unit: spec.units ? " " + spec.units : "", plugins: []}));
+      card.querySelectorAll("[data-kind]").forEach(b => b.classList.toggle("on", b.dataset.kind === kind));
+    };
+    card.querySelectorAll("[data-kind]").forEach(b => b.onclick = () => draw(b.dataset.kind));
+    card.querySelector('[data-act="copy"]').onclick = async e => {
+      const d = shownData(spec), rows = [["", ...d.series.map(s => s.name)], ...d.labels.map((l, i) => [l, ...d.series.map(s => s.data[i] ?? "")])];
+      try { await navigator.clipboard.writeText(rows.map(r => r.join("\t")).join("\n")); e.currentTarget.textContent = "Copied"; } catch { toast("This browser blocked copying"); }
+    };
+    draw(spec.kind || "bar");
+  });
+}
+
+// ---- what each page binds after it's drawn ---------------------------------------------------------------------
+const bind = {
+  workbench() { bindNeeds(); bindFiles(); bindRoles(); document.querySelector("[data-go-result]")?.addEventListener("click", e => { e.preventDefault(); go("result"); }); },
+  report() { bindNeeds(); bindReport(); },
+  rebuild() { bindNeeds(); bindRebuild(); },
+  result() { bindNeeds(); bindResult(); document.querySelector("[data-go-result]")?.addEventListener("click", e => { e.preventDefault(); $("#brChart")?.scrollIntoView({behavior: "smooth"}); }); },
+  map() { bindModels(); },
+};
+
+// ---- the logo: your firm's (brand/ on this machine), else the mascot --------------------------------------------
+function logoPanel(open) {
+  $("#logoCtl").hidden = !open; $("#logoEdit").setAttribute("aria-expanded", String(open));
+  if (open) api("/api/brand").then(b => { $("#logoNow").innerHTML = b.custom ? `Now: your logo (<span class="mono">${esc(b.file)}</span>).` : "Now: the mascot (no logo in the brand folder yet)."; $("#logoReset").disabled = !b.custom; }).catch(() => {});
+}
+const logoRefresh = () => { $("#brandLogo").src = "/brand/logo?" + Date.now(); };
+$("#logoEdit").onclick = e => { e.stopPropagation(); logoPanel($("#logoCtl").hidden); };
+$("#logoUpload").onclick = () => $("#logoFile").click();
+$("#logoFile").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  const fd = new FormData(); fd.append("file", f);
+  try { await api("/api/brand/logo", {method: "POST", body: fd}); logoRefresh(); logoPanel(true); toast("Logo updated"); } catch (err) { toast(err.message, 6000); }
+};
+$("#logoReset").onclick = async () => { try { await api("/api/brand/logo", {method: "DELETE"}); logoRefresh(); logoPanel(true); toast("Back to the mascot"); } catch (err) { toast(err.message, 6000); } };
+document.addEventListener("click", e => { if (!$("#logoCtl").hidden && !e.target.closest("#logoCtl, #logoEdit")) logoPanel(false); });
+$("#brandLogo").onerror = () => { $("#brandLogo").onerror = null; $("#brandLogo").src = "/brand/logo?fallback"; };
+$("#brand").onclick = e => { e.preventDefault(); if (E) go("workbench"); };
+
+// ---- theme: light or dark, as chosen here (remembered in this browser), else as the system has it ----------------
+const THEME_KEY = "ivw-theme";
+const SUN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
+const MOON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>`;
+const systemDark = matchMedia("(prefers-color-scheme: dark)");
+const themeNow = () => document.documentElement.dataset.theme || (systemDark.matches ? "dark" : "light");
+function themeButton() {
+  const dark = themeNow() === "dark", b = $("#themeBtn"), t = dark ? "Switch to the light theme" : "Switch to the dark theme";
+  b.innerHTML = dark ? SUN : MOON; b.title = t; b.setAttribute("aria-label", t); b.setAttribute("aria-pressed", String(dark));
+}
+$("#themeBtn").onclick = () => {
+  const t = themeNow() === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem(THEME_KEY, t); } catch {}
+  themeButton(); if (E) render();
+};
+systemDark.addEventListener("change", () => { if (!document.documentElement.dataset.theme) { themeButton(); if (E) render(); } });
+themeButton();
+$("#modelsBtn").onclick = e => { const pop = $("#modelCtl"); pop.hidden = !pop.hidden; e.currentTarget.setAttribute("aria-expanded", String(!pop.hidden)); };
+document.addEventListener("click", e => { const pop = $("#modelCtl"); if (!pop.hidden && !pop.contains(e.target) && e.target.id !== "modelsBtn") { pop.hidden = true; $("#modelsBtn").setAttribute("aria-expanded", "false"); } });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { $("#modelCtl").hidden = true; $("#modelsBtn").setAttribute("aria-expanded", "false"); } });
+
+// ---- tokens, time and the call log (from the spend chip) ---------------------------------------------------------
+let CALLS = null;
+const tokfmt = n => (n || 0) >= 1e6 ? ((n || 0) / 1e6).toFixed(2) + "M" : (n || 0) >= 1e3 ? ((n || 0) / 1e3).toFixed(1) + "k" : String(n || 0);
+const usdf = v => v == null ? "–" : v < 0.01 && v > 0 ? "<$0.01" : "$" + Number(v).toFixed(v < 1 ? 3 : 2);
+function whose(r) {
+  if (r.document) return CALLS.names.documents[r.document] || `report #${r.document}`;
+  if (r.workbook) return CALLS.names.workbooks[r.workbook] || `workbook #${r.workbook}`;
+  return "The engagement (roles, the orchestrator)";
+}
+async function openCalls() {
+  if (!E) return;
+  $("#callsDlg").showModal();
+  $("#callsBody").innerHTML = `<p class="muted">Loading…</p>`;
+  try { CALLS = await api(`/api/engagements/${E.id}/calls`); } catch (e) { $("#callsBody").innerHTML = `<div class="callout bad">${esc(e.message)}</div>`; return; }
+  const c = CALLS.calls, t = c.total || {};
+  const sumCols = [["Calls", r => nfmt(r.calls), 1], ["Input tokens", r => tokfmt(r.input_tokens), 1], ["Output tokens", r => tokfmt(r.output_tokens), 1], ["Cost", r => usdf(r.cost_usd), 1], ["Model time", r => dur(r.model_secs), 1]];
+  const table = (rows, cols) => rows.length ? `<div class="scroll"><table><thead><tr>${cols.map(x => `<th${x[2] ? ' class="num"' : ""}>${x[0]}</th>`).join("")}</tr></thead><tbody>
+    ${rows.map(r => `<tr${r.id ? ` class="click" data-call="${r.id}"` : ""}>${cols.map(x => `<td${x[2] ? ' class="num"' : ""}>${x[1](r)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<p class="small muted" style="margin:0">Nothing yet.</p>`;
+  $("#callsBody").innerHTML = `
+    <div class="tiles"><div class="tile"><b>${nfmt(t.calls)}</b><span>model calls${t.failed ? ` (${t.failed} failed)` : ""}</span></div>
+      <div class="tile"><b>${tokfmt((t.input_tokens || 0) + (t.output_tokens || 0))}</b><span>tokens</span></div>
+      <div class="tile"><b>${usdf(t.cost_usd)}</b><span>at list prices</span></div><div class="tile"><b>${dur(t.model_secs) || "0s"}</b><span>waiting on the models</span></div></div>
+    <div class="card"><h2>By file</h2>${table(c.by_file || [], [["File", r => esc(whose(r))], ...sumCols])}</div>
+    <div class="card"><h2>Time on the clock, by job</h2>${table(CALLS.jobs, [["File", r => esc(r.file || "The engagement")], ["Job", r => esc(r.job)], ["Took", r => dur(r.secs), 1]])}</div>
+    <div class="card"><h2>By step</h2>${table(c.by_step || [], [["File", r => esc(whose(r))], ["Step", r => esc(r.step || "")], ["Purpose", r => `<span class="mono small">${esc(r.purpose || "")}</span>`], ["Model", r => esc(r.model)], ...sumCols])}</div>
+    <div class="card"><h2>Latest calls</h2><p class="sub">Click a call to see what was sent and what came back. Kept on this machine in <span class="mono">${esc(CALLS.log_file)}</span> (not in git; it holds report text).</p>
+      ${table(c.recent || [], [["When", r => new Date(r.ts * 1000).toLocaleTimeString()], ["Step", r => esc(r.step || "")], ["Purpose", r => `<span class="mono small">${esc(r.purpose || "")}</span>`],
+        ["Model", r => esc(r.model)], ["In", r => tokfmt(r.input_tokens), 1], ["Out", r => tokfmt(r.output_tokens), 1], ["Cost", r => usdf(r.cost_usd), 1], ["", r => r.ok ? "" : `<span class="pill bad" title="${esc(r.error || "")}">failed</span>`]])}
+      <div id="callDetail" class="transcript"></div></div>`;
+  document.querySelectorAll("#callsBody [data-call]").forEach(tr => tr.onclick = () => showCall(+tr.dataset.call));
+}
+function msgText(m) {
+  if (typeof m === "string") return m;
+  if (Array.isArray(m)) return m.map(msgText).join("\n\n");
+  if (m && typeof m === "object") {
+    if (m.type === "input_image") return "[image sent: not kept]";
+    if (m.type === "input_text" || m.type === "output_text") return m.text;
+    if (m.content !== undefined) return `[${m.role || m.type || "message"}]\n${msgText(m.content)}`;
+    return JSON.stringify(m);
+  }
+  return String(m ?? "");
+}
+async function showCall(id) {
+  const box = $("#callDetail"); box.innerHTML = `<p class="muted">Loading…</p>`;
+  let c; try { c = await api(`/api/engagements/${E.id}/calls/${id}`); } catch (e) { box.innerHTML = `<div class="callout bad">${esc(e.message)}</div>`; return; }
+  const q = c.request || {};
+  box.innerHTML = `<div style="border-top:1px solid var(--rule);margin-top:12px;padding-top:12px">
+    <div class="row small"><b>Call ${c.id}</b><span class="muted">${new Date(c.ts * 1000).toLocaleString()} · ${esc(c.model)} · ${esc(c.purpose)} · ${tokfmt(c.input_tokens)} in, ${tokfmt(c.output_tokens)} out · ${usdf(c.cost_usd)}</span>${c.ok ? "" : `<span class="pill bad">${esc(c.error)}</span>`}</div>
+    <div class="small muted" style="margin-top:8px">Sent</div><pre>${esc(msgText(q.input))}</pre><div class="small muted">Came back</div><pre>${esc(c.response || "(nothing)")}</pre></div>`;
+}
+$("#spend").onclick = openCalls;
+$("#callsClose").onclick = () => $("#callsDlg").close();
+
+boot().catch(e => { $("#main").innerHTML = `<div class="callout bad">Couldn't start: ${esc(e.message)}</div>`; });
+</script>
+</body>
+</html>

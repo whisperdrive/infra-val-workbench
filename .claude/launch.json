@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "infra-val-workbench",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "exec uv run uvicorn app.server:app --port ${PORT:-8003}"],
+      "port": 8003,
+      "autoPort": true
+    }
+  ]
+}
