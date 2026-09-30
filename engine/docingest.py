@@ -193,8 +193,18 @@ def _row_key(cells: list[str]) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (cells[0] if cells else "").lower()).strip()
 
 
+def _by_column(cells: list[str]) -> list[list[str]]:
+    """A row's numbers cell by cell, the label left out and trailing empty cells dropped."""
+    out = [numbers(c) for c in cells[1:]]
+    while out and not out[-1]:
+        out.pop()
+    return out
+
+
 def compare_reads(a: str, b: str) -> dict:
-    """Two independent transcriptions of one table, compared row by row (rows matched by first cell)."""
+    """Two independent transcriptions of one table, compared row by row (rows matched by first cell): the same
+    figures in the same columns (a figure shifted into the next column, or two columns swapped, is a difference),
+    and headings in the same order."""
     ra, rb = md_rows(a), md_rows(b)
     diffs = []
     kb = {}
@@ -208,8 +218,12 @@ def compare_reads(a: str, b: str) -> dict:
         if nb is None:
             if na:
                 diffs.append({"row": cells[0], "first": " | ".join(cells[1:]), "second": "(row not found)"})
-        elif Counter(na) != Counter(nb):
+        elif Counter(na) != Counter(nb) or _by_column(cells) != _by_column(other):
             diffs.append({"row": cells[0], "first": " | ".join(cells[1:]), "second": " | ".join(other[1:])})
+        elif not na:  # headings: the same words, in the same order
+            ha, hb = [_sq(c) for c in cells if _sq(c)], [_sq(c) for c in other if _sq(c)]
+            if sorted(ha) == sorted(hb) and ha != hb:
+                diffs.append({"row": cells[0] or "(headings)", "first": " | ".join(cells), "second": " | ".join(other)})
     for rest in kb.values():
         for cells in rest:
             if numbers(" ".join(cells[1:])):
@@ -247,7 +261,34 @@ def _find(sq: str, want: str, start: int = 0) -> int:
     return -1
 
 
-def _take(left: list[list[str]], cells: list[str]) -> bool:
+def _fits(cells: list[str]):
+    """A test for a source line a row's figures may be claimed from: its words (three letters or more) are all in
+    the row's own cells. A line that carries another row's label ("cum" on the line, "ex" in the row) doesn't fit."""
+    mine = _letters(" ".join(cells))
+    return lambda line: all(w in mine for w in re.findall(r"[a-z]{3,}", line.lower()))
+
+
+def _heading_order(cells: list[str], lines: list[str]) -> bool:
+    """Headings (a row without figures) in the order the page has them, where one source line holds them all;
+    True where no single line does (headings over two lines can't be judged this way)."""
+    want = [w for w in map(_sq, cells) if w]
+    if len(want) < 2:
+        return True
+    for ln in lines:
+        sq = _sq(ln)
+        if not all(w in sq for w in want):
+            continue
+        pos = 0
+        for w in want:
+            j = sq.find(w, pos)
+            if j < 0:
+                return False
+            pos = j + len(w)
+        return True
+    return True
+
+
+def _take(left: list[list[str]], cells: list[str], fits=None) -> bool:
     """Find a row's cells, spacing ignored, in order on one line of the page; mark those characters used (so no
     other row can claim them) and say whether they were found. The characters must be the same: only spaces may
     differ ("3. 75%" is 3.75%, "Hi gh" is High). Cells are looked for one after another, other text allowed
@@ -256,6 +297,8 @@ def _take(left: list[list[str]], cells: list[str]) -> bool:
     if not want:
         return False
     for chars in left:
+        if fits and not fits("".join(chars)):
+            continue
         idx = [i for i, ch in enumerate(chars) if not ch.isspace()]
         sq = "".join(chars[i] for i in idx).lower()
         spans, pos = [], 0
@@ -294,15 +337,23 @@ def check_text_layer(md: str, lines: list[str], title: str | None = None) -> dic
     for cells in md_rows(md):
         row, every = numbers(" ".join(cells[1:])), numbers(" ".join(cells))
         total += len(every)
-        if every and _take(left, [c for c in cells if c]):  # the whole row, label included (or no label at all)
+        if not every:  # headings: in the page's order (swapped Low and High headings swap every column's meaning)
+            if not _heading_order(cells, lines):
+                bad_rows.append({"row": " | ".join(c for c in cells if c), "numbers": [],
+                                 "why": "the headings are in another order on the page"})
             continue
-        if row and (_take(left, [c for c in cells[1:] if c]) or _take(left, [c for c in cells[1:] if numbers(c)])):
+        if _take(left, [c for c in cells if c]):  # the whole row, label included (or no label at all)
+            continue
+        # the figures alone, from a line that carries no other row's label (a label over two lines is fine)
+        fits = _fits(cells)
+        if row and (_take(left, [c for c in cells[1:] if c], fits) or
+                    _take(left, [c for c in cells[1:] if numbers(c)], fits)):
             got += Counter(numbers(cells[0]))  # the label's own numbers are matched one by one below
             continue
         got += Counter(every)
-        # the row's numbers, in order, on one source line (so a swapped column or a row's figures under
-        # another row's label is caught, not just a misread digit)
-        if row and not any(_in_order(row, line) for line in src_lines):
+        # the row's numbers, in order, on one source line that carries no other row's label (so a swapped column
+        # or a row's figures under another row's label is caught, not just a misread digit)
+        if row and not any(_in_order(row, nums) and fits(line) for nums, line in zip(src_lines, lines)):
             bad_rows.append({"row": cells[0], "numbers": row})
     src = Counter(n for chars in left for n in numbers("".join(chars)))
     not_in_source = list((got - src).elements())
@@ -439,9 +490,13 @@ def problems(t: dict) -> list[str]:
             out.append("numbers in your transcription that aren't on the page: " + ", ".join(c["not_in_source"]))
         if c.get("not_transcribed"):
             out.append("numbers on the page missing from your transcription: " + ", ".join(c["not_transcribed"]))
-        if c.get("rows_not_on_one_line"):
-            out.append("rows whose numbers don't appear, in this order, on one line of the page: "
-                       + "; ".join(r["row"] for r in c["rows_not_on_one_line"]))
+        rows = [r for r in c.get("rows_not_on_one_line") or [] if r["numbers"]]
+        heads = [r for r in c.get("rows_not_on_one_line") or [] if not r["numbers"]]
+        if rows:
+            out.append("rows whose numbers don't appear, in this order, on one line of the page under their own "
+                       "label: " + "; ".join(r["row"] for r in rows))
+        if heads:
+            out.append("headings in another order than the page's: " + "; ".join(r["row"] for r in heads))
         if c.get("words_not_in_source"):
             out.append("words in your transcription that aren't on the page: " + ", ".join(c["words_not_in_source"]))
         if c.get("words_not_transcribed"):
@@ -509,7 +564,7 @@ def _image_over_text(reader: Reader, doc: dict | None, t: dict, md: str, chk: di
         return out
     disputed = ([f"as read from the image: {', '.join(chk['not_in_source'])}"] if chk["not_in_source"] else []) + (
         [f"what the PDF's own text has instead: {', '.join(chk['not_transcribed'])}"] if chk["not_transcribed"] else []) + [
-        f"row {r['row']}: {', '.join(r['numbers'])}" for r in rows]
+        f"row {r['row']}: {', '.join(r['numbers'])}" for r in rows if r["numbers"]]
     try:
         got = reader.mentions(t["where"], t.get("title"), md, disputed, found)
     except Exception as e:  # the other mentions are extra evidence: without them the two reads still stand

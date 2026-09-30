@@ -178,15 +178,17 @@ def image_for(f: dict, doc: dict, pg: dict, out_dir: Path, source_path: str | No
 
 
 def _apply(f: dict, fig: dict, pg: dict, why: str) -> None:
-    """Set a fact's figures to what two reads of the image agree on; a check the text layer then fails is waived."""
+    """Set a fact's figures to what two reads of the image agree on. Where the text layer then doesn't hold the new
+    figures (a scrambled layout), those figure checks are waived, for this quote and these figures only; where the
+    quote is, and whether its table is settled, still has to check out."""
     for k in ("value", "low", "high"):
         if fig.get(k) is not None:
             f[f"{k}_text"] = fig[k]
     keyfacts.settle_value(f)
     chk = keyfacts.check(f, pg)
-    failed = [i["text"] for i in chk["items"] if not i["ok"]]
+    failed = [i["text"] for i in chk["items"] if not i["ok"] and i.get("kind") == "figure"]
     if failed:
-        f["waivers"] = (f.get("waivers") or []) + [{"check": c, "by": "the image (two reads)", "note": why} for c in failed]
+        f["waivers"] = (f.get("waivers") or []) + [keyfacts.waiver(f, c, "the image (two reads)", why) for c in failed]
         chk = keyfacts.check(f, pg)
     f["check"] = chk
 
@@ -215,13 +217,15 @@ def confirm(doc: dict, facts: list[dict], reader, out_dir: str | Path, source_pa
     for i, (rel, fs) in enumerate(groups.items(), 1):
         tid = rel.split("/", 1)[1].removesuffix(".png") if rel.startswith("tables/") else None
         ctx = context.block(doc["markdown"], around, page=fs[0].get("page"), table_id=tid, facts=facts)
+        # the blind read gets the same context with its figures and dates masked: what things are, not the answer
+        blind = context.block(doc["markdown"], around, page=fs[0].get("page"), table_id=tid, facts=facts, blind=True)
         progress(i / max(1, len(groups)), f"Checking {len(fs)} fact(s) on {where[rel]} ({i} of {len(groups)} images)")
         png = (out_dir / rel).read_bytes()
         items = [{"id": k, "item": f.get("label") or f["key"], "key": f["key"],
                   "kind": "a range (low and high)" if f.get("low_text") or f.get("high_text") else "one figure"}
                  for k, f in enumerate(fs)]
         reads = {r["id"]: r for r in reader._call(reader.model, BLIND_PROMPT.format(
-            where=where[rel], context=ctx, items=json.dumps(items, indent=1)), png, BLIND_SCHEMA, "visual-read")["reads"]}
+            where=where[rel], context=blind, items=json.dumps(items, indent=1)), png, BLIND_SCHEMA, "visual-read")["reads"]}
         disputed = []
         for k, f in enumerate(fs):
             n["looked"] += 1

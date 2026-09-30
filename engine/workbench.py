@@ -238,7 +238,7 @@ def facts(eid: int) -> list[dict]:
 
 def reference(eid: int) -> list[dict]:
     """The facts to navigate by: approved ones as approved (with edits); if none approved yet, those that pass
-    the code checks, marked unapproved."""
+    the code checks and aren't waiting for a person, marked unapproved."""
     fs = facts(eid)
     approved = [{**{k: f[k] for k in ("id", *FACT_FIELDS)}, **(f["final"] or {}), "approved": True}
                 for f in fs if f["status"] == "approved"]
@@ -246,7 +246,7 @@ def reference(eid: int) -> list[dict]:
         return approved
     return [{**{k: f[k] for k in ("id", *FACT_FIELDS)}, "approved": False} for f in fs
             if f["status"] != "rejected" and (f["check"] or {}).get("ok")
-            and (f["agent"] or {}).get("status") != "withdrawn"]
+            and (f["agent"] or {}).get("status") not in ("withdrawn", "escalated")]  # one a person must settle: not yet
 
 
 def roles(eid: int) -> dict:

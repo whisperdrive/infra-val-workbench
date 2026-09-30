@@ -11,8 +11,10 @@ takes it from there:
 2. **Reads the key tables from their images.** A text layer can scramble a table (columns, merged headings) and has
    nothing for one pasted as a picture:
    - the tables most likely to hold the key figures, and the pictures beside them, are read from their images;
-   - code checks each read against the page's own characters where there are any; otherwise a second model reads the
-     image again, independently, and the two reads are compared;
+   - code checks each read against the page's own characters where there are any (each row's figures on a line under
+     its own label, the headings in the page's order); otherwise a second model reads the image again, independently,
+     and the two reads are compared cell by cell (a figure shifted into the next column, or swapped headings, is a
+     difference);
    - a read that doesn't check out goes round the table loop (fix, check against the image, an arbiter).
 3. **Extracts the report's key facts.** Only what the rebuild needs:
    - who and when;
@@ -22,11 +24,18 @@ takes it from there:
      of franking credits.
 
    One model extracts, code checks each fact against its page, a second model reviews, and they loop on what's open.
-   Then each fact with a figure is looked up, blind, on the image of where it sits (its table's, else its page's); where
-   the image reading differs, the reviewer looks at the image with both. A date is compared whole (day, month and
-   year), not by its numbers. A correction stands when two reads of the
-   image agree; what doesn't settle goes to a person, with the image. Slides' own text and tables are exact, so they
-   aren't looked at again.
+   The code check is the backstop behind the models: the quote must be on the cited page (not starting or ending
+   inside a word or a number), and each figure must be in the quote in the scale and currency it's stated in (A$2.3m
+   isn't A$2.3bn), under its own label rather than another fact's (in "WACC of 7.25% and terminal growth of 2.5%" the
+   2.5% is the growth rate), and not inside a date or a longer number; a name is checked as text; a range needs both
+   ends, in one scale.
+   Then each fact with a figure is looked up, blind, on the image of where it sits (its table's, else its page's): the
+   read gets the report's context with its figures and dates masked, so it can't take the answer from the text layer.
+   Where the image reading differs, the reviewer looks at the image with both. A date is compared whole (day, month and
+   year), not by its numbers. A correction stands when two reads of the image agree; it waives only the figure checks
+   the text layer then fails, for that quote and those figures (where the quote is, and a table still to settle, must
+   still check out). What doesn't settle goes to a person, with the image, and doesn't lead the rebuild meanwhile.
+   Slides' own text and tables are exact, so they aren't looked at again.
 
    Every model that reads a table or judges a figure is also given what the report says around it (`context.py`): the
    text on its page, the transmittal letter (else the executive summary), the scope of the engagement, any definitions,

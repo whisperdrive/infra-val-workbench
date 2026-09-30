@@ -17,6 +17,8 @@
   workpaper the Excel workpaper built from the run, in memory: its sheets, the bridge's mid ends at this year's value,
             a row for every financial year of the cash flows, the disclaimer on its summary; none before the bridge
   overview  every engagement at a glance: where it is (a finished one, an empty one), its values
+  facts     the code checks behind the models, on the reviewers' cases: scale and currency, the label a figure sits
+            under, dates and longer numbers, names, ranges, the image's waivers, table rows and headings, a blind read
   ranges    a dash between two figures is a range in the fact checks ("7.25% - 7.75%"), not a minus; a bracket
             or a dash after a word still is
 
@@ -399,9 +401,13 @@ def escalate_check() -> None:
             rate["visual"]["status"] == "escalated" and rate["agent"]["open"]["image"].startswith("tables/"), rate
         need = next(n for n in v["needs"] if n["id"] == f"fact-{rate['id']}")
         assert need["severity"] == "check" and "on the image" in need["detail"], need
+        for f in wb.facts(eid):  # nothing approved yet: the facts that pass their checks lead, but not one a person owes
+            wb._set("facts", f["id"], status="pending")
+        assert rate["id"] not in [f["id"] for f in wb.reference(eid)] and wb.reference(eid), wb.reference(eid)
     finally:
         BEHAVIOUR.update(verdict="image", verdict_figures={})
-    print("escalate: ok (where the reads of the image agree with nothing, the fact goes to a person, with the image)")
+    print("escalate: ok (where the reads of the image agree with nothing, the fact goes to a person, with the image; "
+          "it doesn't lead meanwhile)")
 
 
 def place_check() -> None:
@@ -537,6 +543,98 @@ def delete_check(first: int) -> None:
           f"the last; the same files run again from the start to {got:,.1f})")
 
 
+def facts_check() -> None:
+    """The code checks behind the models: a figure must be in its quote in the scale and currency it's stated in,
+    under its own label, not inside a date or a longer number; a quote on word and number boundaries; a name checked
+    as text; a range's two ends; a waiver from the image only for the figure it was given for, and only while the
+    quote and figures are the same. The tables: figures under their own row label and column, headings in order.
+    The blind image read's context has no figures or dates."""
+    import keyfacts as K
+    import docingest as D
+    import context
+    import visual
+    fact = lambda **k: {"key": "equity_value", "label": "Equity value", "category": "conclusion", "unit": "A$m",
+                        "value_text": "", "low_text": "", "high_text": "", "basis": "", "page": 1, **k}
+    failed = lambda f, text: [i["text"] for i in K.check(f, {1: text})["items"] if not i["ok"]]
+    # scale and currency
+    q = "The equity value of the Target is A$2.3bn on an ex-distribution basis."
+    assert failed(fact(value_text="A$2.3m", quote=q), q) == ["A$2.3m: the quote gives it in bn, not m"]
+    assert not failed(fact(value_text="A$2.3bn", quote=q), q)
+    q = "The equity value is NZ$850m."
+    assert failed(fact(value_text="US$850m", quote=q), q) == ["US$850m: the quote gives it in NZ$, not US$"]
+    # not the front or the tail of a longer number
+    for v, q in (("A$22m", "The equity value is A$22.5m."), ("A$2,296m", "The equity value is A$2,296.7m."),
+                 ("2,296.7", "Equity value 2,296.75")):
+        assert failed(fact(value_text=v, quote=q), q), (v, q)
+    assert K._in_squashed("22", "A$22.0m") and not K._in_squashed("25", "7.25%")
+    # under its own label, not another fact's
+    q = "WACC of 7.25% and terminal growth of 2.5%"
+    rate = fact(key="discount_rate", label="Discount rate", category="assumption", unit="%", value_text="2.5%", quote=q)
+    assert failed(rate, q) == ["2.5% sits under 'terminal growth of' in the quote, not under the Discount rate"], failed(rate, q)
+    assert not failed({**rate, "key": "terminal_growth_rate", "label": "Terminal growth rate"}, q)
+    q = "an equity value of A$2,500m, being an enterprise value of A$4,100m less net debt of A$1,600m"
+    assert failed(fact(value_text="A$4,100m", quote=q), q) and not failed(fact(value_text="A$2,500m", quote=q), q)
+    q = "Discount rate (post-tax nominal WACC) 7.25% 7.75%"
+    assert not failed({**rate, "value_text": "", "low_text": "7.25%", "high_text": "7.75%", "quote": q}, q)
+    # a date's day isn't a figure; a quote doesn't start inside a number; a name is checked as text
+    q = "As at 30 June 2025 the business was valued at A$28m."
+    assert failed(fact(value_text="A$30m", quote=q), q)
+    assert failed({**rate, "value_text": "25%", "quote": "25%"}, "The WACC of 7.25% applied") == \
+        ["quote not found in the document"]
+    q = "The Asset 9 Link was valued at A$5m"
+    assert failed(fact(key="target_name", label="Target", category="identity", unit="text", value_text="Asset 5 East",
+                       quote=q), q)
+    # a range: both ends, in one scale; printed as one text, its ends are the low and the high
+    q = "The equity value is A$2,100m to A$2,200m"
+    assert failed(fact(value_text="A$2,200m", low_text="A$2,100m", quote=q), q) == ["only the low end of the range is given"]
+    q = "The equity value is A$2.1bn to A$2,300m"
+    assert "the range's ends are in different scales (A$2.1bn and A$2,300m)" in \
+        failed(fact(low_text="A$2.1bn", high_text="A$2,300m", quote=q), q)
+    q = "The equity value is A$1,900m – A$2,100m (ex-distribution)"
+    f = fact(value_text="A$1,900m – A$2,100m", quote=q, basis="ex-distribution", status="approved")
+    assert not failed(f, q) and K.settle_value(dict(f))["value"] is None
+    c = K.conclusion([f])
+    assert (c["low"], c["mid"], c["high"]) == (1900.0, 2000.0, 2100.0) and c["texts"]["high_text"] == "A$2,100m", c
+    assert K.numbers(K._unrange("Net debt at valuation - 850.0")) == ["-850.0"]
+    # the image's waiver: a figure's check only, for that quote and those figures
+    q = "The equity value is A$2,507.9m."
+    f = fact(value_text="A$2,507.9m", quote=q)
+    visual._apply(f, {"value": "A$2,570.9m"}, {1: q}, "two reads of the image agree")
+    assert f["check"]["ok"] and "waived" in " ".join(i["text"] for i in f["check"]["items"]), f["check"]
+    moved = {1: q + " Its equity value is A$2,507.9m, as before."}  # another quote on the page: checked afresh
+    assert failed({**f, "quote": "Its equity value is A$2,507.9m, as before."}, moved[1]) == \
+        ["A$2,570.9m is not in the quote"]
+    f = fact(value_text="A$2,507.9m", quote="words on no page")
+    visual._apply(f, {"value": "A$2,507.9m"}, {1: q}, "two reads of the image agree")
+    assert not f["check"]["ok"] and "quote not found in the document" in [i["text"] for i in f["check"]["items"]
+                                                                            if not i["ok"]], f["check"]
+    # tables: figures under their own label and column, headings in order
+    lines = ["A$m Low High", "Equity value (ex-distribution) 2,296.7 2,500.0", "Equity value (cum-distribution) 2,350.1 2,553.4"]
+    t = lambda h, ex, cum: f"| A$m | {h} |\n|---|---|---|\n| Equity value (ex-distribution) | {ex} |\n" \
+                           f"| Equity value (cum-distribution) | {cum} |"
+    assert D.check_text_layer(t("Low | High", "2,296.7 | 2,500.0", "2,350.1 | 2,553.4"), lines)["ok"]
+    assert not D.check_text_layer(t("Low | High", "2,350.1 | 2,553.4", "2,296.7 | 2,500.0"), lines)["ok"]  # rows swapped
+    assert not D.check_text_layer(t("High | Low", "2,296.7 | 2,500.0", "2,350.1 | 2,553.4"), lines)["ok"]  # headings
+    assert D.check_text_layer("| A$m | Low | High |\n|---|---|---|\n| Equity value (ex-distribution) | 2,296.7 | 2,500.0 |",
+                              ["A$m Low High", "Equity value", "(ex-distribution) 2,296.7 2,500.0"])["ok"]  # two lines
+    one = "| A$m | Low | High |\n|---|---|---|\n| Equity value | 2,296.7 | 2,500.0 |"
+    assert D.compare_reads(one, one)["ok"]
+    for other in ("| A$m | Low | High |\n|---|---|---|\n| Equity value | | 2,296.7 | 2,500.0 |",
+                  "| A$m | Low | High |\n|---|---|---|\n| Equity value | 2,500.0 | 2,296.7 |",
+                  "| A$m | High | Low |\n|---|---|---|\n| Equity value | 2,296.7 | 2,500.0 |"):
+        assert not D.compare_reads(one, other)["ok"], other
+    # the blind read's context: what things are, not the figures or the date
+    md = ("<!-- page 1 -->\nDear Board, we have assessed the equity value of Asset A Pty Ltd as at 30 June 2025 at "
+          "A$2,507.9m (ex-distribution).\n\n<!-- page 2 -->\nScope: the equity value of Asset A.\n")
+    facts = [{"key": "valuation_date", "value_text": "30 June 2025"}, {"key": "currency_units", "value_text": "A$m"}]
+    full, blind = (context.block(md, page=1, facts=facts, blind=b) for b in (False, True))
+    assert "2,507.9" in full and "30 June 2025" in full, full
+    assert "2,507.9" not in blind and "June" not in blind and "A$m" in blind and "Asset A" in blind, blind
+    print("facts: ok (a figure in its quote's scale and currency, under its own label, not in a date or a longer number; "
+          "names as text; a range's ends; the image waives only a figure, for its quote; table rows and headings in "
+          "place; the blind read sees no figures)")
+
+
 def ranges_check() -> None:
     import keyfacts
     import context
@@ -588,6 +686,7 @@ def upgrade_check() -> None:
 
 def main() -> None:
     ranges_check()
+    facts_check()
     upgrade_check()
     if not PACK.exists():
         sys.exit("run tests/make_pack.py first")

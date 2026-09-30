@@ -28,9 +28,11 @@ from docingest import numbers
 
 MAX_CHARS = 150_000  # longer reports: send the pages most likely to hold conclusions and assumptions
 MAX_ROUNDS = 3       # review and remediation rounds before a fact goes to a person
-CHECK_VERSION = 4    # bump when check() changes: existing facts are checked again once (2: spacing-tolerant, waivers;
+CHECK_VERSION = 5    # bump when check() changes: existing facts are checked again once (2: spacing-tolerant, waivers;
                      # 3: numbers worked out by code, none for identity text or a range without a preferred point;
-                     # 4: a date checked whole, its month included)
+                     # 4: a date checked whole, its month included; 5: a figure's scale and currency, the label it
+                     # sits under, a quote on word and number boundaries, identity checked as text, a range's ends,
+                     # a waiver tied to the quote and figures it was given for)
 LOOP_CHARS = 60_000  # the loop sends only the pages the open facts cite, and their neighbours
 KEYWORDS = re.compile(r"valuation|discount|wacc|terminal|growth|multiple|rab|conclu|range|preferred|assumption|"
                       r"enterprise value|equity value|methodolog|approach|summary|cost of capital|cpi|inflation", re.I)
@@ -231,6 +233,9 @@ def _in_squashed(num: str, text: str) -> bool:
         before, after = flat[max(0, m.start() - 1):m.start()], flat[m.end():m.end() + 1]
         if neg != (before in ("(", "-", "−", "–")):  # a bracket or minus in front: negative, both ways
             continue
+        rest = re.match(r"[.,](\d+)", flat[m.end():])
+        if after.isdigit() or (rest and rest[1].strip("0")) or re.search(r"\d[.,]$", flat[:m.start()]):
+            continue  # the front or the tail of a longer number: 22 isn't in 22.5, nor 25 in 7.25 (22.0 is 22)
         if pct and after != "%":
             continue
         return True
@@ -292,81 +297,223 @@ def settle_value(f: dict) -> dict:
         return f
     nums, lo, hi = (numbers(f.get(k) or "") for k in ("value_text", "low_text", "high_text"))
     bare = {x.lstrip("-") for x in nums}  # "1.25%–1.75%" reads as 1.25% and -1.75%: the dash isn't a sign
-    range_only = bool(lo and hi) and (not nums or (lo[0].lstrip("-") in bare and hi[0].lstrip("-") in bare))
+    range_only = bool(lo and hi) and (not nums or (lo[0].lstrip("-") in bare and hi[0].lstrip("-") in bare)) or \
+        (not lo and not hi and bool(_range_of(f.get("value_text"))))
     f["value"] = None if f.get("category") == "identity" or not nums or range_only else float(nums[0].rstrip("%"))
     return f
 
 
 def _unrange(text: str) -> str:
-    """A dash between two figures is a range, not a minus: "7.25% - 7.75%" reads as 7.25% to 7.75%."""
-    return re.sub(r"(\d%?)\s*[-–—]\s*(?=\d)", r"\1 to ", text or "")
+    """A dash between two figures is a range, not a minus: "7.25% - 7.75%" reads as 7.25% to 7.75%, and
+    "A$1,900m – A$2,100m" as A$1,900m to A$2,100m. A dash after a word ("Net debt - 850.0") stays a minus."""
+    return re.sub(r"(\d(?:%|\s?(?:bn|mn|m|k)\b)?)\s*[-–—]\s*(?=(?:[A-Z]{0,3}\$|€|£)?\s?\d)", r"\1 to ", text or "")
+
+
+_SCALE = {"k": 1e3, "'000": 1e3, "thousand": 1e3, "m": 1e6, "mn": 1e6, "million": 1e6, "bn": 1e9, "billion": 1e9}
+_FIG = re.compile(r"(?P<cur>[A-Z]{0,3}\$|€|£)?\s?(?P<num>\d[\d,]*(?:\.\d+)?)(?P<pct>\s?%)?"
+                  r"(?:\s?(?P<scale>thousand|million|billion|bn|mn|m|k|'000)(?![A-Za-z]))?")
+
+
+def _figs(text: str | None) -> list[dict]:
+    """The figures in a text with what they're stated in: [{"value", "scale" ("m", "bn", "k" or None), "cur" ("A$",
+    "NZ$", "$", "€" or None), "start", "end"}]. A figure inside a date isn't one."""
+    out = []
+    for m in _FIG.finditer(_undated(text or "")):
+        sc = (m["scale"] or "").lower() or None
+        out.append({"value": float(m["num"].replace(",", "")), "scale": None if m["pct"] else sc,
+                    "cur": m["cur"].upper() if m["cur"] else None, "start": m.start("num"), "end": m.end()})
+    return out
+
+
+def _undated(text: str) -> str:
+    """The text with its dates blanked out (to the same length): the 30 in "30 June 2025" isn't a figure."""
+    for rx, _kind in _DATES:
+        text = rx.sub(lambda m: " " * len(m.group(0)), text)
+    return text
+
+
+def _range_of(text: str | None) -> tuple[str, str] | None:
+    """A range printed as one text ("A$1,900m – A$2,100m", "7.25% to 7.75%"): its two ends, else None."""
+    t = _unrange(text or "")
+    fig = r"(?:[A-Z]{0,3}\$|€|£)?\s?\d[\d,]*(?:\.\d+)?\s?(?:%|bn|mn|m|k|million|billion)?"
+    m = re.fullmatch(rf"\s*({fig})\s+(?:to|and)\s+({fig})\s*", t, re.I)
+    return (m[1].strip(), m[2].strip()) if m else None
+
+
+# the words a figure's label uses, by key: a figure checked against its quote must sit under its own label, not
+# another fact's ("WACC of 7.25% and terminal growth of 2.5%": the 2.5% is the growth rate's)
+TERMS = {"equity_value": r"equity|net assets|\bshares?\b|unitholder|securit",
+         "discount_rate": r"discount|wacc|cost of (?:capital|equity)|hurdle|required return",
+         "terminal_growth_rate": r"growth|\bcpi\b|inflation|perpetu",
+         "franking_utilisation": r"utili[sz]|gamma|theta",
+         "franking_credits_value": r"franking|imputation",
+         "terminal_value": r"terminal|exit|perpetu",
+         "pv_forecast": r"present value|\bpv\b|discrete|forecast|explicit",
+         "pv_terminal_value": r"present value|\bpv\b|terminal"}
+TERMS.update(equity_value_ex=TERMS["equity_value"], equity_value_cum=TERMS["equity_value"],
+             franking_credits_share=TERMS["franking_credits_value"])
+OTHER_TERMS = r"enterprise value|net debt|\bdebt\b|ebitda|revenue|capex|capital expenditure|tax rate"
+
+
+def _under_other(f: dict, v: str, quote: str) -> str | None:
+    """Where every place the quote holds v's figure sits under another fact's label (the nearest label before it,
+    looking back past the figures in between), that label; None where one sits under its own, or no label is seen."""
+    own = TERMS.get(f.get("key"))
+    if not own:
+        return None
+    others = "|".join([t for k, t in TERMS.items() if t != own] + [OTHER_TERMS])
+    q = _unrange(quote or "").lower()
+    figs, wanted = _figs(q), [x["value"] for x in _figs(v)]
+    seen = None
+    for want in wanted:
+        at = [i for i, x in enumerate(figs) if abs(x["value"] - want) < 1e-9 * max(1, abs(want))]
+        if not at:
+            return None  # found only with spacing ignored: the number check speaks for it
+        for i in at:
+            j, verdict = i, None
+            while j >= 0 and verdict is None:
+                seg = q[figs[j - 1]["end"] if j else 0:figs[j]["start"]]
+                if re.search(own, seg):
+                    verdict = "own"
+                elif re.search(others, seg):
+                    verdict = seg[re.search(others, seg).start():].strip(" :,;(")
+                j -= 1
+            if verdict in (None, "own"):
+                break
+            seen = verdict
+        else:
+            return seen
+    return None
+
+
+def _scale_off(v: str, quote: str) -> str | None:
+    """A figure's scale (m, bn, k) and currency (A$, NZ$) must be the quote's where the quote states them: A$2.3m
+    isn't A$2.3bn. -> what differs, or None."""
+    qf = _figs(quote)
+    for x in _figs(v):
+        same = [y for y in qf if abs(y["value"] - x["value"]) < 1e-9 * max(1, abs(x["value"]))]
+        if not same:
+            continue
+        if x["scale"] and all(y["scale"] and _SCALE[y["scale"]] != _SCALE[x["scale"]] for y in same):
+            return f"{v}: the quote gives it in {same[0]['scale']}, not {x['scale']}"
+        named = lambda c: c and c not in ("$",)  # a bare $ is the report's own currency
+        if named(x["cur"]) and all(named(y["cur"]) and y["cur"] != x["cur"] for y in same):
+            return f"{v}: the quote gives it in {same[0]['cur']}, not {x['cur']}"
+    return None
+
+
+def _at(hay: str, q: str, squashed: bool = False) -> bool:
+    """q in hay, not starting or ending inside a number ("25%" isn't in "7.25%") or, spacing kept, inside a word."""
+    i = hay.find(q)
+    while i >= 0:
+        e = i + len(q)
+        pre, nxt = hay[max(0, i - 2):i], hay[e:e + 2]
+        bad = (q[:1].isdigit() and bool(re.search(r"\d[.,]?$", pre))) or \
+              (q[-1:].isdigit() and bool(re.match(r"[.,]?\d", nxt))) or \
+              (not squashed and q[:1].isalpha() and pre[-1:].isalpha()) or \
+              (not squashed and q[-1:].isalpha() and nxt[:1].isalpha())
+        if not bad:
+            return True
+        i = hay.find(q, i + 1)
+    return False
 
 
 def check(f: dict, pg: dict[int, str]) -> dict:
     """Is the fact supported by the text it cites? Returns {"ok", "items": [{"ok", "text"}]}.
     Strict first; where a report's text layer spaces letters oddly or runs table cells together, a match that
     ignores spacing still counts, and says so. A check an arbiter waived (f["waivers"]) counts, with its note."""
-    items = []
+    items = []  # (ok, text, kind): "quote" (where it is), "figure" (a value against its quote), "table", "range"
     q = _norm(f.get("quote"))
-    where = [n for n, t in pg.items() if q and q in _norm(t)]
-    loose = [] if where or not q else [n for n, t in pg.items() if _squash(f.get("quote")) in _squash(t)]
+    where = [n for n, t in pg.items() if q and _at(_norm(t), q)]
+    loose = [] if where or not q else [n for n, t in pg.items() if _at(_squash(t), _squash(f.get("quote")), True)]
     if not q:
-        items.append((False, "no quote"))
+        items.append((False, "no quote", "quote"))
     elif f.get("page") in where:
-        items.append((True, f"quote found on page {f['page']}"))
+        items.append((True, f"quote found on page {f['page']}", "quote"))
     elif f.get("page") in loose:
-        items.append((True, f"quote found on page {f['page']} (spacing ignored)"))
+        items.append((True, f"quote found on page {f['page']} (spacing ignored)", "quote"))
     elif where or loose:
-        items.append((False, f"quote is on page {(where or loose)[0]}, not page {f.get('page')}"))
+        items.append((False, f"quote is on page {(where or loose)[0]}, not page {f.get('page')}", "quote"))
     else:
-        items.append((False, "quote not found in the document"))
+        items.append((False, "quote not found in the document", "quote"))
+    quote = f.get("quote") or ""
+    undated = _undated(quote)  # the day and year of a date aren't figures: "30 June" doesn't hold A$30m
     for k in ("value_text", "low_text", "high_text"):
         v = (f.get(k) or "").strip()
         if not v or (k == "value_text" and is_date(f) and date_of(v)):  # a date: checked whole, below
             continue
-        nums = numbers(_unrange(v))
+        nums = [] if f.get("category") == "identity" else numbers(_unrange(v))  # a name holding digits is a name
         if nums:
-            missing = [n for n in nums if n not in numbers(_unrange(f.get("quote") or ""))]
+            missing = [n for n in nums if n not in numbers(_unrange(undated))]
             if not missing:
-                items.append((True, f"{v} in the quote"))
-            elif all(_in_squashed(n, f.get("quote") or "") for n in missing):
-                items.append((True, f"{v} in the quote (spacing ignored)"))
+                items.append((True, f"{v} in the quote", "figure"))
+            elif all(_in_squashed(n, undated) for n in missing):
+                items.append((True, f"{v} in the quote (spacing ignored)", "figure"))
             else:
-                items.append((False, f"{v} is not in the quote"))
+                items.append((False, f"{v} is not in the quote", "figure"))
+                continue
+            off = _scale_off(v, quote)
+            if off:
+                items.append((False, off, "figure"))
+            other = _under_other(f, v, undated)
+            if other:
+                items.append((False, f"{v} sits under '{other}' in the quote, not under the {f.get('label') or f.get('key')}",
+                              "figure"))
         elif _norm(v) in q:
-            items.append((True, f"'{v}' in the quote"))
-        elif _squash(v) and _squash(v) in _squash(f.get("quote")):
-            items.append((True, f"'{v}' in the quote (spacing ignored)"))
+            items.append((True, f"'{v}' in the quote", "figure"))
+        elif _squash(v) and _squash(v) in _squash(quote):
+            items.append((True, f"'{v}' in the quote (spacing ignored)", "figure"))
         else:
-            items.append((False, f"'{v}' is not in the quote"))
+            items.append((False, f"'{v}' is not in the quote", "figure"))
+    lo, hi = ((f.get(k) or "").strip() for k in ("low_text", "high_text"))
+    if bool(lo) != bool(hi):
+        items.append((False, f"only the {'low' if lo else 'high'} end of the range is given", "range"))
+    elif lo and hi:
+        a, b = (_figs(x) for x in (lo, hi))
+        if a and b and a[0]["scale"] and b[0]["scale"] and _SCALE[a[0]["scale"]] != _SCALE[b[0]["scale"]]:
+            items.append((False, f"the range's ends are in different scales ({lo} and {hi})", "range"))
     nums = numbers(f.get("value_text") or "")
     said = date_of(f.get("value_text")) if is_date(f) else None
     if said:  # a date is checked whole, month included: its numbers alone pass a different month
         ymd = said.year * 10000 + said.month * 100 + said.day
         if said in dates_in(f.get("quote")):
-            items.append((True, f"{said:%d %B %Y} is a date in the quote"))
+            items.append((True, f"{said:%d %B %Y} is a date in the quote", "figure"))
         elif said in dates_in(re.sub(r"(?<=[A-Za-z])\s+(?=[a-z])", "", f.get("quote") or "")):
-            items.append((True, f"{said:%d %B %Y} is a date in the quote (spacing ignored)"))
+            items.append((True, f"{said:%d %B %Y} is a date in the quote (spacing ignored)", "figure"))
         else:
-            items.append((False, f"{said:%d %B %Y} is not a date in the quote"))
+            items.append((False, f"{said:%d %B %Y} is not a date in the quote", "figure"))
         if f.get("value") is not None:
             items.append((int(f["value"]) == ymd, "date matches the text" if int(f["value"]) == ymd
-                          else f"date {f['value']} doesn't match {f['value_text']}"))
+                          else f"date {f['value']} doesn't match {f['value_text']}", "figure"))
     elif f.get("value") is not None and nums and not is_date(f):
         want = float(nums[0].rstrip("%"))
         items.append((abs(want - float(f["value"])) < 1e-9 * max(1, abs(want)),
                       "number matches the text" if abs(want - float(f["value"])) < 1e-9 * max(1, abs(want))
-                      else f"number {f['value']} doesn't match {f['value_text']}"))
+                      else f"number {f['value']} doesn't match {f['value_text']}", "figure"))
     # A quote taken from a table inherits that table's status (it's in the page's <!-- table id (status) --> marker).
     for tid, status in source_tables(f, pg):
         if status == "unread":  # quoted from the PDF's own text while the table waits to be read: that text is real
-            items.append((True, f"from table {tid}, still being read; the quote is the PDF's own text"))
+            items.append((True, f"from table {tid}, still being read; the quote is the PDF's own text", "table"))
         elif status not in ("verified", "approved", "edited", "resolved"):
-            items.append((False, f"from table {tid}, which is {status}: settle the table first"))
-    waived = {w["check"]: w for w in f.get("waivers") or []}
-    items = [(True, f"{t} — waived by {waived[t]['by']}: {waived[t]['note']}") if not ok and t in waived else (ok, t)
-             for ok, t in items]
-    return {"ok": all(ok for ok, _ in items), "items": [{"ok": ok, "text": t} for ok, t in items]}
+            items.append((False, f"from table {tid}, which is {status}: settle the table first", "table"))
+    # a waiver holds for the quote and figures it was given for: a new quote or figure is checked afresh
+    now = {"quote": f.get("quote") or "", **{k: f.get(k) or "" for k in ("value_text", "low_text", "high_text")}}
+    holds = lambda w: not w.get("given") or all(w["given"].get(k, "") == v for k, v in now.items())
+    # what a waiver may waive: a figure's check; an arbiter's also where the quote is (one from before waivers were
+    # tied to their kind keeps that, unless the image gave it)
+    reach = lambda w: w.get("any", not str(w.get("by", "")).startswith("the image"))
+    waived = {w["check"]: w for w in f.get("waivers") or [] if holds(w)}
+    items = [(True, f"{t} — waived by {waived[t]['by']}: {waived[t]['note']}", kind) if not ok and t in waived
+             and (kind == "figure" or reach(waived[t])) else (ok, t, kind) for ok, t, kind in items]
+    return {"ok": all(ok for ok, _, _ in items), "items": [{"ok": ok, "text": t, "kind": kind} for ok, t, kind in items]}
+
+
+def waiver(f: dict, check_text: str, by: str, note: str, any_kind: bool = False) -> dict:
+    """A waiver of one failing check, tied to the quote and figures it was given for. any_kind: it may waive a check
+    of where the quote is (an arbiter's reading of a garbled text layer); else only a figure's check against its
+    quote is waived."""
+    return {"check": check_text, "by": by, "note": note, "any": any_kind,
+            "given": {"quote": f.get("quote") or "", **{k: f.get(k) or "" for k in ("value_text", "low_text", "high_text")}}}
 
 
 def source_tables(f: dict, pg: dict[int, str]) -> list[tuple[str, str]]:
@@ -516,8 +663,8 @@ def arbitrate(markdown: str, facts: list[dict], model: str, on_usage=None) -> in
         a["thread"].append(entry)
         ok = False
         if dec["decision"] == "waive" and dec["check"]:
-            waived = {**f, "waivers": (f.get("waivers") or []) + [{"check": dec["check"].strip(), "by": model,
-                                                                 "note": dec["note"]}]}
+            waived = {**f, "waivers": (f.get("waivers") or []) + [waiver(f, dec["check"].strip(), model, dec["note"],
+                                                                          any_kind=True)]}
             chk = check(waived, pg)
             if chk["ok"]:
                 f["waivers"], f["check"], ok = waived["waivers"], chk, True
@@ -728,12 +875,17 @@ def conclusion(facts: list[dict], markdown: str = "") -> dict | None:
     else:
         pick, basis = by["cum"][0], "cum"
         why.append("only a cum-distribution equity value is given")
-    low, high, printed = _num(pick.get("low_text")), _num(pick.get("high_text")), _num(pick.get("value_text"))
+    texts = {k: pick.get(k) for k in ("value_text", "low_text", "high_text")}
+    rng = _range_of(texts["value_text"]) if not texts["low_text"] and not texts["high_text"] else None
+    if rng:  # the range printed as one text: its ends are the low and the high, and it has no preferred point
+        texts = {"value_text": "", "low_text": rng[0], "high_text": rng[1]}
+        why.append(f"the range {pick.get('value_text')} is the low and the high")
+    low, high, printed = _num(texts["low_text"]), _num(texts["high_text"]), _num(texts["value_text"])
     mid = (low + high) / 2 if low is not None and high is not None else printed
     if low is not None and high is not None:
-        why.append(f"mid = the midpoint of {pick.get('low_text')} and {pick.get('high_text')}")
+        why.append(f"mid = the midpoint of {texts['low_text']} and {texts['high_text']}")
         if printed is not None:
-            d = len((numbers(pick.get("value_text"))[0].rstrip("%").split(".") + [""])[1])
+            d = len((numbers(texts["value_text"])[0].rstrip("%").split(".") + [""])[1])
             if abs(round(mid, d) - printed) > 0.5 * 10 ** -d + 1e-9:
                 why.append(f"the report prints {pick.get('value_text')}, not the midpoint: the midpoint is used")
     else:
@@ -742,7 +894,7 @@ def conclusion(facts: list[dict], markdown: str = "") -> dict | None:
     other = next((f for b in ("ex", "cum") if b != basis for f in by[b]), None)
     units = next((f.get("value_text") for f in facts if f.get("key") == "currency_units"), None) or pick.get("unit")
     return {"fact_id": pick.get("id"), "key": pick.get("key"), "basis": basis, "low": low, "high": high, "mid": mid,
-            "printed": printed, "texts": {k: pick.get(k) for k in ("value_text", "low_text", "high_text")},
+            "printed": printed, "texts": texts,
             "page": pick.get("page"), "units": units, "why": why,
             "other": {"fact_id": other.get("id"), "basis": _basis(other), "low": _num(other.get("low_text")),
                       "high": _num(other.get("high_text")), "value": _num(other.get("value_text")),

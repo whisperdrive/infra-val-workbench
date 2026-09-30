@@ -115,30 +115,42 @@ def established(facts: list[dict] | None) -> str:
     return "\n".join(lines)
 
 
+def masked(text: str) -> str:
+    """The text with its dates and figures masked ("[a date]", "#"): what things are, without the answer. For a
+    read that must be blind to the text layer's figures."""
+    import keyfacts
+    for rx, _kind in keyfacts._DATES:
+        text = rx.sub("[a date]", text)
+    return re.sub(r"\d[\d,]*(?:\.\d+)?", "#", text)
+
+
 def block(markdown: str, ctx: dict | None = None, page: int | None = None, table_id: str | None = None,
-          facts: list[dict] | None = None, figures_from: str = "the image") -> str:
-    """The context as one block for a prompt."""
+          facts: list[dict] | None = None, figures_from: str = "the image", blind: bool = False) -> str:
+    """The context as one block for a prompt. blind: its figures and dates masked (masked()), for the read of an
+    image that is checked against the text layer."""
     ctx = ctx if ctx is not None else find(markdown)
+    hide = masked if blind else (lambda t: t)
     parts = []
-    est = established(facts)
+    est = hide(established(facts))
     if est:
         parts.append(f"Established so far:\n{est}")
     if page:
-        parts.append(f"The text on page {page}" + (" (the table itself left out)" if table_id else "") + ":\n"
-                     + (page_text(markdown, page, table_id) or "(nothing but the table)"))
+        parts.append(f"The text on page {page}" + (" (the table itself left out)" if table_id else "")
+                     + (" (its figures and dates masked)" if blind else "") + ":\n"
+                     + (hide(page_text(markdown, page, table_id)) or "(nothing but the table)"))
     names = {"letter": "The report's transmittal letter", "summary": "The report's executive summary",
              "scope": "The scope of the engagement", "definitions": "Definitions"}
     for key in ("letter", "summary", "scope", "definitions"):
         if key in ctx and not (page and ctx[key]["pages"] == [page]):
             said = "\n".join(parts)
-            if ctx[key]["text"][:160] in said:  # a scope inside the letter: said once
+            if hide(ctx[key]["text"])[:160] in said:  # a scope inside the letter: said once
                 continue
-            parts.append(f"{names[key]} (page {', '.join(map(str, ctx[key]['pages']))}):\n{ctx[key]['text']}")
+            parts.append(f"{names[key]} (page {', '.join(map(str, ctx[key]['pages']))}):\n{hide(ctx[key]['text'])}")
     if not parts:
         return ""
     basis = sorted({m.strip() for m in BASIS.findall(markdown or "")})[:3]
     if basis:
-        parts.append("Where the report states a basis:\n" + "\n".join(f"- {_cap(b, 240)}" for b in basis))
+        parts.append("Where the report states a basis:\n" + "\n".join(f"- {hide(_cap(b, 240))}" for b in basis))
     return ("Context from the report, to judge what the figures mean (the entity, the interest valued, the basis, the "
             f"date, the units, what a heading stands for). It is context only: take figures from {figures_from}, not "
             "from here.\n\n" + "\n\n".join(parts))
