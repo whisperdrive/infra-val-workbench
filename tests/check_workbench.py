@@ -1,6 +1,9 @@
 """The workbench end to end on the synthetic pack (tests/make_pack.py), every model call stubbed:
 
-  run       four files uploaded; the orchestrator reads the report's text, extracts and reviews the key facts,
+  run       four files uploaded; the orchestrator reads the report's text, reads its key tables from their images (the
+            discount rate is only in a pasted picture), extracts and reviews the key facts, checks each on the image of
+            where it sits (the extraction swaps the rate's low and high, as a scrambled layout would; the image
+            reading and the reviewer put it right),
             confirms the roles on the evidence (the rules' checks and a second opinion that agrees), rebuilds last
             year's overlay in Python (every formula cell as Excel saved it), finds the report's equity value (low
             and high on one row, ex-distribution), rolls forward onto this year's model, and writes the bridge
@@ -53,7 +56,14 @@ def sandbox() -> Path:
 # ---- the models, stubbed -------------------------------------------------------------------------------------------
 
 CALLS: list[str] = []
-BEHAVIOUR = {"second_opinion": "agree", "roles_decision": "rules"}
+BEHAVIOUR = {"second_opinion": "agree", "roles_decision": "rules", "verdict": "image"}
+TABLES: dict[int, str] = {}  # page -> the table on it, as a reader of its image would transcribe it
+TRUTH = {"equity_value": {"value": "A$2,507.9m", "low": "A$2,345.5m", "high": "A$2,670.3m"},
+         "equity_value_cum": {"value": "A$2,532.9m"}, "valuation_date": {"value": "30 June 2025"},
+         "discount_rate": {"low": "7.25%", "high": "7.75%"}, "terminal_growth_rate": {"value": "2.50%"},
+         "franking_utilisation": {"value": "50%"}, "franking_credits_value": {"value": "A$389.8m"},
+         "franking_credits_share": {"value": "15.5%"}, "terminal_value": {"value": "A$4,968.9m"},
+         "pv_forecast": {"value": "A$1,819.3m"}, "pv_terminal_value": {"value": "A$1,173.7m"}}
 
 
 class Reply:
@@ -94,7 +104,8 @@ def fake_facts(doc: str) -> list[dict]:
               basis="ex-distribution"),
             f("conclusion", "equity_value_cum", "Equity value (cum-distribution)", "the midpoint would be A$2,532.9m",
               "A$2,532.9m", basis="cum-distribution"),
-            f("assumption", "discount_rate", "Discount rate", "Discount rate 7.25% - 7.75%", "", "7.25%", "7.75%",
+            # the low and the high the wrong way round, as a scrambled text layer can give them
+            f("assumption", "discount_rate", "Discount rate", "Discount rate 7.25% - 7.75%", "", "7.75%", "7.25%",
               unit="%", basis="Post-tax nominal WACC"),
             f("assumption", "terminal_growth_rate", "Terminal growth rate", "Terminal growth rate 2.50%", "2.50%", unit="%"),
             f("assumption", "franking_utilisation", "Franking credit utilisation", "Franking credit utilisation 50%", "50%",
@@ -111,6 +122,20 @@ def fake_facts(doc: str) -> list[dict]:
 def fake_create(client, model, input, text=None, max_output_tokens=None, purpose=None, **kw):
     name = text["format"]["name"]
     CALLS.append(name)
+    if isinstance(input, list):  # a call with an image: its prompt is the text part
+        input = next(c["text"] for c in input[0]["content"] if c["type"] == "input_text")
+    if name == "table_read":
+        page = int(re.search(r"(?:page|slide) (\d+)", input)[1])
+        md = TABLES.get(page, "")
+        return Reply({"is_table": bool(md), "title": "", "markdown": md, "description": "" if md else "a picture"})
+    if name == "visual_read":
+        items = json.loads(_section(input, "Items:\n", None))
+        return Reply({"reads": [{"id": x["id"], "found": x["key"] in TRUTH, "column": "", "row": x["item"],
+                                 **{k: TRUTH.get(x["key"], {}).get(k, "") for k in ("value", "low", "high")}} for x in items]})
+    if name == "visual_verdict":
+        items = json.loads(_section(input, "Items:\n", None))
+        return Reply({"verdicts": [{"id": x["id"], "choice": BEHAVIOUR["verdict"], "value": "", "low": "", "high": "",
+                                    "reason": "the image shows 7.25% under Low and 7.75% under High"} for x in items]})
     if name == "identity":
         raise RuntimeError("no model in the test: identify falls back to the cells it found")
     if name == "report_facts":
@@ -142,6 +167,9 @@ def fake_create(client, model, input, text=None, max_output_tokens=None, purpose
 def stub_models() -> None:
     llm.client = lambda *a, **k: None
     llm.create = fake_create
+    import docingest  # what a reader of each page's table image sees: the slides' own tables, which are the same
+    slides = docingest.process(str(PACK / "AssetA_valuation_report_FY25.pptx"), tempfile.mkdtemp(), read=False)
+    TABLES.update({t["page"]: t["markdown"] for t in slides["tables"]})
 
 
 # ---- helpers -------------------------------------------------------------------------------------------------------
@@ -214,6 +242,17 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     assert ch["left_out"] == ["Terminal value"] and len(ch["series"]["last_year"]) == 20 and \
         len(ch["series"]["this_year"]) == 20, ch
     assert list(ch["series"]["last_year"])[0] == "FY26" and list(ch["series"]["this_year"])[0] == "FY27"
+    rate = next(f for f in e["facts"] if f["key"] == "discount_rate")
+    if files == PACK_A:  # read from the picture, the swap put right on the image, and the picture's table read
+        assert (rate["low_text"], rate["high_text"]) == ("7.25%", "7.75%") and rate["visual"]["status"] == "corrected", rate
+        assert rate["status"] == "approved", rate
+        seen = {f["key"]: (f.get("visual") or {}).get("status") for f in e["facts"]}
+        assert seen["equity_value"] == "confirmed" and seen["terminal_value"] == "confirmed", seen
+        doc = wb.document(rate["document_id"])["doc"]
+        pic = next(t for t in doc["tables"] if t["source"] == "picture")
+        assert pic["status"] == "verified" and "Discount rate" in pic["markdown"], pic
+    else:
+        assert rate["visual"]["status"] == "native", rate
     rec = {r["key"]: r for r in res["reconcile"]["rows"]}
     for key in ("terminal_value", "pv_forecast", "pv_terminal_value", "franking_credits_value", "franking_credits_share"):
         assert rec[key].get("ok") is True, (key, rec[key])
@@ -227,6 +266,8 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
         any(h["stage"] == "review" and h["event"] == "decide" for h in log)
     calls = {c: CALLS.count(c) - n0.get(c, 0) for c in set(CALLS)}
     assert calls.get("report_facts") == 1 and calls.get("facts_review") == 1 and not calls.get("roles_decision"), calls
+    if files == PACK_A:
+        assert calls.get("visual_read") == 3 and calls.get("visual_verdict") == 1, calls
     print(f"{'run' if files == PACK_A else 'inside'}: ok (the terminal value, the PV split and the franking credits "
           f"reconcile to the report; facts agreed, roles confirmed on {len(rl['current_model']['evidence']['checks'])} checks and a "
           f"second opinion; {res['where']['low']} / {res['where']['high']} tie; mid {v['report']['mid']:,.1f} -> "
@@ -255,6 +296,12 @@ def gating_check(eid: int) -> None:
         wait(eid, lambda v: len(runs) == 2 and status(v)["map"] == "failed", "the person's try again")
     finally:
         orc.STAGE_JOBS["map"] = keep
+    # the roles run again and come out the same: the rebuild and what follows keep their outcome, without running again
+    before = {n: orc.stage(eid, n)["started_at"] for n in ("rebuild", "rows", "result")}
+    orc.retry(eid, "roles")
+    wait(eid, lambda v: all(status(v)[n] in orc.SETTLED for n in ("roles", "rebuild", "rows", "result")), "the rerun")
+    after = {n: orc.stage(eid, n)["started_at"] for n in ("rebuild", "rows", "result")}
+    assert before == after, (before, after)
     schema = orc._schema("test_decision", ["pick", "escalate"])
     n0 = CALLS.count("test_decision")
     a = orc.ask(eid, "map", "test", "k1", "decide", schema)
@@ -264,8 +311,8 @@ def gating_check(eid: int) -> None:
     assert any(h["event"] == "escalate" and h["issue"] == "test" for h in orc.history(eid, "map"))
     orc.retry(eid, "map")
     wait(eid, lambda v: status(v)["map"] == "done", "the map")
-    print("gating: ok (a failed stage waits for new inputs or a person's try again; gpt-sol decides an issue once per "
-          "set of inputs, then escalates)")
+    print("gating: ok (a failed stage waits for new inputs or a person's try again; a stage the rerun before it didn't "
+          "change keeps its outcome; gpt-sol decides an issue once per set of inputs, then escalates)")
 
 
 def roles_check() -> None:
@@ -304,8 +351,25 @@ def ranges_check() -> None:
     print("ranges: ok (a dash between figures is a range; a bracket, or a dash after a word, is a minus)")
 
 
+def upgrade_check() -> None:
+    """A database from an earlier version gets the columns added since (a Windows install upgrades in place)."""
+    import sqlite3
+    db_path = Path(tempfile.mkdtemp()) / "old.db"
+    with sqlite3.connect(db_path) as old:
+        old.execute("CREATE TABLE facts(id INTEGER PRIMARY KEY, engagement_id INT, key TEXT)")
+    keep = wb.DB
+    wb.DB = db_path
+    try:
+        cols = {r[1] for r in wb._conn().execute("PRAGMA table_info(facts)")}
+    finally:
+        wb.DB = keep
+    assert {"visual_json", "agent_json", "status"} <= cols, cols
+    print("upgrade: ok (an older database gets the columns added since)")
+
+
 def main() -> None:
     ranges_check()
+    upgrade_check()
     if not PACK.exists():
         sys.exit("run tests/make_pack.py first")
     sandbox()

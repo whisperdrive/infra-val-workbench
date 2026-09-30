@@ -260,7 +260,11 @@ def tick(eid: int) -> None:
         if not ready.get(up):
             rec = stage(eid, name)
             if rec["status"] not in MOVING and (eid, name) not in _active:
-                _put(eid, name, status="waiting", note=f"waiting for {LABEL[up].lower()}")
+                data = rec["data"]
+                if rec["status"] in ("done", "attention", "blocked", "failed") and rec["inputs"]:
+                    # its outcome stands if its inputs come out the same once the stage before settles again
+                    data = {**data, "prev": {"status": rec["status"], "note": rec["note"]}}
+                _put(eid, name, status="waiting", note=f"waiting for {LABEL[up].lower()}", data=data)
             ready[name] = False
             continue
         rec = stage(eid, name)
@@ -276,6 +280,16 @@ def tick(eid: int) -> None:
             _submit(eid, name, key)
             ready[name] = False
             continue
+        if rec["status"] == "waiting":  # the stage before ran again and changed nothing this stage reads
+            prev = rec["data"].get("prev")
+            if not prev:
+                _submit(eid, name, key)
+                ready[name] = False
+                continue
+            _put(eid, name, status=prev["status"], note=prev["note"],
+                 data={k: v for k, v in rec["data"].items() if k != "prev"})
+            log(eid, name, "note", f"{LABEL[name]}: unchanged by the rerun before it, so its outcome stands", inputs=key)
+            rec["status"] = prev["status"]
         ready[name] = rec["status"] in SETTLED
 
 
@@ -814,7 +828,8 @@ def view(eid: int) -> dict:
             live = "the doctor: " + (e.get("doctor_step") or "")
         stages.append({"stage": name, "label": LABEL[name], "status": rec["status"] or "waiting", "note": live,
                        "started_at": rec["started_at"], "finished_at": rec["finished_at"]})
-        needs += rec["data"].get("needs") or []
+        if rec["status"] != "waiting":  # a stage waiting on the one before: its needs may no longer stand
+            needs += rec["data"].get("needs") or []
     sev = {"block": 0, "check": 1, "info": 2}
     needs.sort(key=lambda n: sev.get(n["severity"], 3))
     running = [{"job": j if isinstance(j, str) else j[0], "state": st} for (x, j), st in list(_active.items()) if x == eid]

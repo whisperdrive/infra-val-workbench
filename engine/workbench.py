@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS documents(id INTEGER PRIMARY KEY, engagement_id INT, 
 CREATE TABLE IF NOT EXISTS facts(id INTEGER PRIMARY KEY, engagement_id INT, document_id INT, n INT, category TEXT,
   key TEXT, label TEXT, value_text TEXT, low_text TEXT, high_text TEXT, value REAL, unit TEXT, basis TEXT, page INT,
   quote TEXT, origin TEXT, check_json TEXT, review_json TEXT, status TEXT DEFAULT 'pending', final_json TEXT,
-  updated_at REAL, agent_json TEXT, decided_by TEXT);
+  updated_at REAL, agent_json TEXT, decided_by TEXT, visual_json TEXT);
 CREATE TABLE IF NOT EXISTS roles(engagement_id INT, role TEXT, kind TEXT, ref_id INT, sheets_json TEXT, why_json TEXT,
   confirmed INT DEFAULT 0, confirmed_by TEXT, evidence_json TEXT, PRIMARY KEY(engagement_id, role));
 CREATE TABLE IF NOT EXISTS stages(engagement_id INT, stage TEXT, status TEXT, inputs TEXT, started_at REAL,
@@ -78,11 +78,39 @@ CREATE INDEX IF NOT EXISTS runlog_eid ON runlog(engagement_id, stage, event);
 FACT_FIELDS = ("category", "key", "label", "value_text", "low_text", "high_text", "value", "unit", "basis", "page", "quote")
 
 
+def _declared() -> dict[str, list[tuple[str, str]]]:
+    """Each table's columns as SCHEMA declares them: {table: [(name, type)]}."""
+    out = {}
+    for table, body in re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)\((.*?)\);", SCHEMA, re.S):
+        parts, depth, cur = [], 0, ""
+        for ch in body:
+            depth += (ch == "(") - (ch == ")")
+            if ch == "," and depth == 0:
+                parts.append(cur)
+                cur = ""
+            else:
+                cur += ch
+        parts.append(cur)
+        cols = [p.split(None, 1) for p in (x.strip() for x in parts) if p and not re.match(r"(PRIMARY|UNIQUE)\b", p)]
+        out[table] = [(c[0], c[1] if len(c) > 1 else "") for c in cols]
+    return out
+
+
+_MIGRATED = set()
+
+
 def _conn() -> sqlite3.Connection:
     OUT.mkdir(exist_ok=True)
     db = sqlite3.connect(DB, check_same_thread=False, timeout=30)
     db.row_factory = sqlite3.Row
     db.executescript(SCHEMA)
+    if str(DB) not in _MIGRATED:  # a database from an earlier version gets the columns added since
+        for table, cols in _declared().items():
+            have = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
+            for name, kind in cols:
+                if name not in have:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
+        _MIGRATED.add(str(DB))
     return db
 
 
@@ -191,7 +219,7 @@ def documents(eid: int) -> list[dict]:
 def facts(eid: int) -> list[dict]:
     out = []
     for f in _q("SELECT * FROM facts WHERE engagement_id=? ORDER BY document_id, n", eid):
-        for k in ("check_json", "review_json", "final_json", "agent_json"):
+        for k in ("check_json", "review_json", "final_json", "agent_json", "visual_json"):
             f[k.removesuffix("_json")] = json.loads(f.pop(k) or "null")
         out.append(f)
     return out
@@ -1505,32 +1533,65 @@ def _process_doc(did: int) -> None:
 
 
 def _process_facts(did: int) -> None:
-    """The key facts (keyfacts.py): extracted, checked, reviewed, the loop on what's open; the agents' agreement
-    decides (auto_decide); what the loop taught goes to the lessons."""
+    """The key facts: the key tables read from their images first (visual.read_tables), then the facts extracted,
+    checked, reviewed and looped on (keyfacts.py), then each one looked up on the image of where it sits
+    (visual.confirm); the agents' agreement decides (auto_decide); what the loops taught goes to the lessons."""
+    import visual
     d = _doc(did)
     eid = d["engagement_id"]
     e = _q("SELECT model, reviewer_model, arbiter_model FROM engagements WHERE id=?", eid)[0]
     doc = json.loads(d["doc_json"])
     t0 = time.time()
-    _set("documents", did, facts_status="running", facts_step="Extracting key facts", facts_error=None, facts_started_at=t0)
+    step = lambda msg: _set("documents", did, facts_step=msg)
+    _set("documents", did, facts_status="running", facts_step="Reading the key tables from their images", facts_error=None,
+         facts_started_at=t0)
+    arbiter = e["arbiter_model"] or DEFAULT_ARBITER
+    note = {}
+    try:
+        reader = docingest.Reader(e["model"] or DEFAULT_MODEL, e["reviewer_model"] or DEFAULT_REVIEWER, _logger(eid), arbiter)
+    except Exception as ex:  # no sign-in: the facts come from the text layer alone, and say so
+        reader, note["error"] = None, "the images weren't read: " + friendly(ex)
+    if reader is not None:
+        note["tables"] = visual.read_tables(doc, d["out_dir"], reader, lambda frac, msg: step(msg), arbiter)
+        _save_doc(did, doc)
     res = keyfacts.run(doc["markdown"], e["model"] or DEFAULT_MODEL, e["reviewer_model"] or DEFAULT_REVIEWER, _logger(eid),
-                       lambda frac, msg: _set("documents", did, facts_step=msg),
-                       arbiter_model=e["arbiter_model"] or DEFAULT_ARBITER)
+                       lambda frac, msg: step(msg), arbiter_model=arbiter)
+    if reader is not None:
+        step("Checking each fact on the report's images")
+        try:
+            note["facts"] = visual.confirm(doc, res["facts"], reader, d["out_dir"], d["source_path"], lambda frac, msg: step(msg))
+        except Exception as ex:  # the facts stand as the text layer gave them, and say they weren't looked at
+            traceback.print_exc()
+            note["error"] = "the facts weren't checked on the images: " + friendly(ex)
     now = time.time()
     with _lock, _conn() as db:
         db.execute("DELETE FROM facts WHERE document_id=?", (did,))
         for f in res["facts"]:
+            if f.get("waivers"):
+                f.setdefault("agent", {"status": "agreed", "round": 0, "thread": []})["waivers"] = f["waivers"]
             db.execute(f"""INSERT INTO facts(engagement_id, document_id, n, {', '.join(FACT_FIELDS)}, origin, check_json,
-                           review_json, status, updated_at, agent_json) VALUES ({', '.join('?' * (len(FACT_FIELDS) + 9))})""",
+                           review_json, status, updated_at, agent_json, visual_json)
+                           VALUES ({', '.join('?' * (len(FACT_FIELDS) + 10))})""",
                        (eid, did, f["id"], *[f.get(k) for k in FACT_FIELDS], f["origin"], json.dumps(f["check"]),
-                        json.dumps(f.get("review")), "pending", now, json.dumps(f.get("agent"))))
+                        json.dumps(f.get("review")), "pending", now, json.dumps(f.get("agent")),
+                        json.dumps(f.get("visual"))))
     _set("documents", did, facts_notes=res.get("notes"), review_summary=res.get("review_summary"))
+    _note_loop(did, visual={**note, "at": now})
     if res.get("loop"):
         _note_loop(did, facts={**res["loop"]["summary"], **auto_decide(did), "at": now}, lessons_facts=None)
-        _set("documents", did, facts_step="Writing down what the loop taught")
+        step("Writing down what the loop taught")
         _learn(did, "facts", res["loop"]["episodes"])
     _set("documents", did, facts_status="done", facts_step="Done", facts_secs=round(time.time() - t0, 1))
     _touch(eid)
+
+
+def document_image(did: int, rel: str) -> Path | None:
+    """One of a report's images (a table's, or a page's), kept in its folder."""
+    d = _doc(did)
+    if not d or not re.fullmatch(r"(tables|pages)/[A-Za-z0-9_-]+\.png", rel or ""):
+        return None
+    p = Path(d["out_dir"]) / rel
+    return p if p.is_file() else None
 
 
 def rebuild_document(did: int) -> dict:

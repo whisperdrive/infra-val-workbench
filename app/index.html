@@ -854,10 +854,54 @@ function viewReport() {
   if (!ready.length) return `<div class="card empty">Upload last year's report (PDF or PPTX) on the Workbench first.</div>`;
   const d = ready.find(x => x.id === E.roles.prior_report?.id) || ready[0];
   const H = E.result?.head;
-  return `<div class="lede"><div><h1><b>The report</b></h1><p>Only what the workbench needs from last year's report: who and when, the equity value (low, high and the midpoint), the discount rate, the terminal growth rate and the franking credit utilisation, and, where the report discloses them, the terminal value, the present values of the forecast and of the terminal value, and the value of franking credits. One model extracts them from the report's own text, code checks each against its page, a second model reviews, and they loop on what's open. What they agree on is approved; what they can't settle comes to you.</p></div></div>
+  return `<div class="lede"><div><h1><b>The report</b></h1><p>Only what the workbench needs from last year's report: who and when, the equity value (low, high and the midpoint), the discount rate, the terminal growth rate and the franking credit utilisation, and, where the report discloses them, the terminal value, the present values of the forecast and of the terminal value, and the value of franking credits. The key tables are read from their images first (a text layer can scramble a table, and a pasted picture has none); one model extracts the facts, code checks each against its page, a second model reviews, and they loop on what's open; then each fact is looked up, blind, on the image of where it sits, and the reviewer settles any difference. What they agree on is approved; what they can't settle comes to you, with the image.</p></div></div>
   ${needsCard(["report"])}
   ${H ? `<div class="callout info"><b>The equity value the bridge starts from:</b> ${vN(H.low)} – ${vN(H.high)} ${esc(H.units || "")}, mid ${vN(H.mid)}, ${H.basis === "cum" ? "cum-distribution" : "ex-distribution"}. ${esc((H.why || []).join("; "))}.</div>` : ""}
-  <div class="card" id="factsCard">${factsCard(d)}</div>`;
+  <div class="card" id="factsCard">${factsCard(d)}</div>
+  <div class="card" id="imagesCard">${imagesCard(d)}</div>`;
+}
+// the key tables read from their images (visual.read_tables), loaded with the document
+const DOCV = {id: null, doc: null, stamp: null, loading: false};
+function imagesCard(d) {
+  const V = d.loop?.visual || {}, T = V.tables || {};
+  const head = `<h2>Read from the report's images</h2><p class="sub">A report's text layer can scramble a table (columns, merged headings) and has nothing for a table pasted as a picture, so the tables most likely to hold the key figures are read from their images: luna reads each one; code checks the read against the page's own characters where there are any, otherwise sol reads it again, independently, and the two are compared; what doesn't check out goes round the table loop. Then each fact above is looked up, blind, on the image of where it sits.</p>`;
+  if (V.error) return head + `<div class="callout warn small">${esc(V.error)}</div>`;
+  if (!T.read) return head + `<p class="small muted" style="margin:0">${d.kind === "pptx" ? "The slides' own tables and text are exact (read from the file); no picture held a key table." : "No key table to read yet."}</p>`;
+  if (DOCV.id !== d.id || DOCV.stamp !== JSON.stringify(d.loop?.visual?.at)) loadDocV(d);
+  const tabs = (DOCV.doc?.tables || []).filter(t => (T.tables || []).includes(t.id));
+  const SAY = {verified: ["ok", "checked"], resolved: ["ok", "settled by the loop"], flagged: ["warn", "not settled"], figure: ["", "not a table"], unread: ["", "not read"]};
+  const how = t => t.status === "verified" ? (t.check?.ok ? "the page's own text confirms every figure" : "two independent reads of the image agree") : t.status === "resolved" ? "the table loop settled it" : t.status === "figure" ? (t.description || "") : t.read_error || "";
+  return head + `<div class="row small" style="margin-bottom:8px"><span class="pill">${T.read} read</span>${T.verified ? `<span class="pill ok">${T.verified} checked</span>` : ""}${T.resolved ? `<span class="pill ok">${T.resolved} settled by the loop</span>` : ""}${T.flagged ? `<span class="pill warn">${T.flagged} not settled</span>` : ""}
+    ${V.facts ? `<span class="pill">${V.facts.looked} facts looked up on ${V.facts.images} image(s): ${V.facts.confirmed} confirmed${V.facts.corrected ? `, ${V.facts.corrected} corrected` : ""}${V.facts.escalated ? `, ${V.facts.escalated} for you` : ""}</span>` : ""}</div>
+    ${tabs.length ? `<div class="stack" style="gap:10px">${tabs.map(t => { const [cls, word] = SAY[t.status] || ["", t.status];
+      return `<details data-k="img-${esc(t.id)}" ${t.status === "flagged" ? "open" : ""}><summary><b>${esc(t.title || t.id)}</b> <span class="small muted">${esc(t.where)} · ${esc(t.source)}</span> <span class="pill ${cls}">${esc(word)}</span> <span class="small muted">${esc(how(t))}</span></summary>
+        <div class="grid2" style="margin-top:8px"><a href="/api/documents/${d.id}/image/${esc(t.png)}" target="_blank" rel="noopener"><img src="/api/documents/${d.id}/image/${esc(t.png)}" alt="${esc(t.title || t.id)}" style="max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#fff"></a>
+        <div class="scroll">${mdTable(t.final_markdown || t.resolution?.markdown || t.markdown || "")}</div></div></details>`; }).join("")}</div>` : `<p class="small muted">Loading…</p>`}`;
+}
+async function loadDocV(d) {
+  if (DOCV.loading) return;
+  DOCV.loading = true;
+  try { DOCV.doc = (await api(`/api/documents/${d.id}`)).doc; DOCV.id = d.id; DOCV.stamp = JSON.stringify(d.loop?.visual?.at); } catch {}
+  DOCV.loading = false;
+  const c = $("#imagesCard"); if (c && state.step === "report") keepOpen(c, () => { c.innerHTML = imagesCard(d); });
+}
+function mdTable(md) {  // a Markdown table as HTML (cells escaped)
+  const sep = l => /^\|(\s*:?-+:?\s*\|)+\s*$/.test(l.trim());
+  const rows = md.split("\n").filter(l => l.trim().startsWith("|") && !sep(l));
+  if (!rows.length) return `<p class="small muted">${esc(md) || "(empty)"}</p>`;
+  const cells = l => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+  return `<table><thead><tr>${cells(rows[0]).map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${rows.slice(1).map(r => `<tr>${cells(r).map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+function seen(f, did) {  // the fact on its image (visual.confirm)
+  const v = f.visual;
+  if (!v) return `<span class="small muted">not looked at</span>`;
+  if (v.status === "native") return `<span class="small muted" title="${esc(v.note)}">the slide's own text</span>`;
+  const link = v.image ? ` <a class="small" href="/api/documents/${did}/image/${esc(v.image)}" target="_blank" rel="noopener">image</a>` : "";
+  const read = v.read ? ["value", "low", "high"].filter(k => v.read[k]).map(k => `${k === "value" ? "" : k + " "}${esc(v.read[k])}`).join(", ") : "";
+  if (v.status === "confirmed") return `<span class="pill ok" title="${esc(v.by)} read ${esc(read)} on ${esc(v.where)}, without being told the extraction">✓ seen</span>${link}`;
+  if (v.status === "confirmed by the reviewer") return `<span class="pill ok" title="${esc(v.verdict?.reason || "")}">✓ sol confirms</span>${link}`;
+  if (v.status === "corrected") return `<span class="pill info" title="${esc(v.verdict?.reason || "")}">corrected on the image</span>${link}<div class="small muted">was ${esc(Object.entries(v.was || {}).map(([k, x]) => `${k} ${x}`).join(", "))}</div>`;
+  return `<span class="pill warn" title="${esc(v.verdict?.reason || "")}">the image differs</span>${link}<div class="small muted">${esc(v.verdict?.reason || "")}</div>`;
 }
 function factsCard(d) {
   const fs = E.facts.filter(f => f.document_id === d.id);
@@ -874,7 +918,7 @@ function factsCard(d) {
   for (const [cat, label] of Object.entries(CAT)) {
     const rows = fs.filter(f => f.category === cat).sort((a, b) => needsYou(b) - needsYou(a) || CRITICAL.includes(b.key) - CRITICAL.includes(a.key)); if (!rows.length) continue;
     html += `<details data-k="facts-${cat}" open style="margin-top:10px"><summary style="font-size:14px;color:var(--ink);font-weight:600">${label} <span class="muted small">(${rows.length})</span></summary>
-    <div class="scroll"><table><thead><tr><th>Item</th><th>Value</th><th>Source</th><th>Checks</th><th>The agents</th><th>Decision</th></tr></thead><tbody>${rows.map(factRow).join("")}</tbody></table></div></details>`;
+    <div class="scroll"><table><thead><tr><th>Item</th><th>Value</th><th>Source</th><th>Checks</th><th>On the image</th><th>The agents</th><th>Decision</th></tr></thead><tbody>${rows.map(factRow).join("")}</tbody></table></div></details>`;
   }
   return html;
 }
@@ -886,7 +930,7 @@ function factRow(f) {
   const decision = f.status === "approved" ? `<span class="pill ok">Approved${byAgents(f) ? " by the agents" : f.final ? " (changed)" : ""}</span> <button class="btn small ghost" data-f="${f.id}" data-a="reset">Undo</button>`
     : f.status === "rejected" ? `<span class="pill ${byAgents(f) ? "" : "bad"}">Rejected${byAgents(f) ? " by the agents" : ""}</span> <button class="btn small ghost" data-f="${f.id}" data-a="reset">Undo</button>`
     : `<div class="row" style="gap:4px"><button class="btn small" data-f="${f.id}" data-a="approve">Approve</button>${sug ? `<button class="btn small" data-f="${f.id}" data-a="use_suggestion">Use correction</button>` : ""}<button class="btn small" data-f="${f.id}" data-a="edit">Edit</button><button class="btn small ghost" data-f="${f.id}" data-a="reject">Reject</button></div>`;
-  const edit = state.factEdit === f.id ? `<tr><td colspan="6" style="background:var(--raised)"><form class="row" data-fe="${f.id}" style="align-items:flex-end">
+  const edit = state.factEdit === f.id ? `<tr><td colspan="7" style="background:var(--raised)"><form class="row" data-fe="${f.id}" style="align-items:flex-end">
     ${["value_text", "low_text", "high_text", "basis"].map(k => `<label class="small">${k.replace("_text", "")}<br><input type="text" name="${k}" value="${esc(v[k] || "")}" style="width:150px"></label>`).join("")}
     <label class="small">page<br><input type="text" name="page" value="${esc(v.page ?? "")}" style="width:60px"></label>
     <label class="small" style="flex:1;min-width:260px">quote (verbatim)<br><input type="text" name="quote" value="${esc(v.quote || "")}" style="width:100%"></label>
@@ -899,6 +943,7 @@ function factRow(f) {
     <td><b>${esc(v.value_text)}</b>${range}${v.basis ? `<div class="small muted">${esc(v.basis)}</div>` : ""}</td>
     <td class="small">p. ${esc(v.page ?? "?")}<div class="quote">${esc((v.quote || "").slice(0, 220))}</div></td>
     <td><ul class="checks">${(ch.items || []).map(i => `<li class="${i.ok ? "" : "no"}">${esc(i.text)}</li>`).join("")}</ul></td>
+    <td>${seen(f, f.document_id)}</td>
     <td class="small">${loop}${sug && !agreedFact(f) ? `<div class="small" style="margin-top:4px"><b>Reviewer suggests:</b> ${esc(sug.value_text)}${sug.low_text ? ` (${esc(sug.low_text)} – ${esc(sug.high_text)})` : ""}, p. ${esc(sug.page)}</div>` : ""}</td>
     <td>${decision}</td></tr>${edit}`;
 }

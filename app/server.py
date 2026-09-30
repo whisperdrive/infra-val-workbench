@@ -220,6 +220,15 @@ async def rebuild_workbook(eid: int, fid: int):
     return {"ok": True}
 
 
+@app.get("/api/documents/{did}/image/{kind}/{name}")
+def document_image(did: int, kind: str, name: str):
+    """One of a report's images: a table's (tables/...) or a page's (pages/...)."""
+    p = workbench.document_image(did, f"{kind}/{name}")
+    if not p:
+        raise HTTPException(404, "no such image")
+    return FileResponse(p, media_type="image/png")
+
+
 @app.get("/api/documents/{did}")
 async def get_document(did: int):
     return await _run(workbench.document, did)

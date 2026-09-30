@@ -15,7 +15,9 @@ The valuation follows the conventions the workbench is built for:
   - ex-distribution: the declared distribution comes off; the cum-distribution value is quoted once, in passing
   - the value of franking credits (tax paid x utilisation, discounted like the cash flows) is part of it
   - the report discloses the terminal value and the present values of the forecast and of the terminal value
-The standalone overlay reads the client model through real external links ([1]CashFlow!D9, with the link's
+In the PDF the key assumptions table (the discount rate is only there) is pasted as a picture, so it has to be read
+from the image; in the slides every table is the slide's own. The standalone overlay reads the client model through
+real external links ([1]CashFlow!D9, with the link's
 cached values), as Excel saves them. Every number the report quotes is computed here from the models, so
 report, overlay and client model agree.
     uv run python tests/make_pack.py
@@ -324,6 +326,21 @@ def report_content(v: dict, n: dict) -> dict:
     }
 
 
+def table_png(rows: list[list[str]], width: float = 7.0) -> bytes:
+    """A table as a picture, the way a report pastes one in: no text layer, so it has to be read from the image."""
+    plt.rcParams["text.parse_math"] = False
+    fig = plt.figure(figsize=(width, 0.42 * len(rows) + 0.3), dpi=200)
+    ax = fig.add_axes([0, 0, 1, 1]); ax.axis("off")
+    t = ax.table(cellText=rows[1:], colLabels=rows[0], loc="center", cellLoc="left")
+    t.auto_set_font_size(False); t.set_fontsize(10); t.scale(1, 1.5)
+    for (r, _), cell in t.get_celld().items():
+        cell.set_edgecolor("#c4c4cd")
+        if r == 0:
+            cell.set_facecolor("#2e2e38"); cell.get_text().set_color("white")
+    buf = io.BytesIO(); fig.savefig(buf, format="png"); plt.close(fig)
+    return buf.getvalue()
+
+
 def write_pdf(path: Path, c: dict) -> None:
     plt.rcParams["pdf.fonttype"] = 42  # TrueType, so the text layer can be read back
     plt.rcParams["text.parse_math"] = False  # "A$2,135.4m to A$2,475.9m" is not maths
@@ -364,7 +381,10 @@ def write_pdf(path: Path, c: dict) -> None:
         fig = page("2. Valuation approach", 3)
         y = text(fig, c["method"], 0.88)
         fig.text(0.08, y - 0.02, "Table 2: Key valuation assumptions", fontsize=10, weight="bold")
-        table(fig, c["assumptions"], y - 0.035, 0.18)
+        # pasted as a picture: the discount rate is only here, so it has to be read from the image
+        from PIL import Image
+        img = Image.open(io.BytesIO(table_png(c["assumptions"])))
+        ax = fig.add_axes([0.08, y - 0.3, 0.84, 0.26]); ax.axis("off"); ax.imshow(img)
         pdf.savefig(fig); plt.close(fig)
 
 

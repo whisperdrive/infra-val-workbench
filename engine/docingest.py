@@ -855,7 +855,7 @@ def _pdf(path: str, out_dir: Path, reader: Reader | None, progress, key_only: bo
                 blocks.append((0, "table", t["id"]))
             else:
                 ruled = [tuple(float(v) for v in tb.bbox) for tb in page.find_tables()]
-                ruled = [b for b in ruled if (b[2] - b[0]) > 60 and (b[3] - b[1]) > 20]
+                ruled = [_grow(b, words) for b in ruled if (b[2] - b[0]) > 60 and (b[3] - b[1]) > 20]
                 fixed = [(b, "text-layer table") for b in ruled]
                 # borderless tables across the page first: they are solid blocks, never cut into columns
                 fixed += [(b, "text-layer table") for b in _number_runs(_lines(words), ruled + imgs)]
@@ -909,6 +909,17 @@ def _pdf(path: str, out_dir: Path, reader: Reader | None, progress, key_only: bo
             pages.append({"n": pno, "blocks": sorted(blocks, key=lambda b: b[0])})
     _read_all(reader, jobs, out_dir, progress, pages, key_only)
     return {"kind": "pdf", "pages": pages, "tables": tables}
+
+
+def _grow(box, words) -> tuple:
+    """A ruled table's box widened to the words its rows hold that run over its ruling (a label longer than its cell):
+    words inside it top to bottom that cross its left or right edge. Its image is then read with whole labels."""
+    x0, top, x1, bottom = box
+    for w in words:
+        mid = (w["top"] + w["bottom"]) / 2
+        if top <= mid <= bottom and w["x1"] > box[0] and w["x0"] < box[2]:
+            x0, x1 = min(x0, w["x0"]), max(x1, w["x1"])
+    return (x0, top, x1, bottom)
 
 
 def _overlap(a, b) -> bool:
