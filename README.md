@@ -98,10 +98,14 @@ decided. Once a run is finished the app opens on the Result.
   and the Python module folded, each with its result on the fold.
 - **Result**: the value bridge (low, mid, high) and the cash-flow chart, the review, and how the files link up (the
   map) folded. A review point names the years and the bridge step it's about (checked against the run), and a click
-  marks them on the chart and the bridge.
+  marks them on the chart and the bridge. **Export workpaper** downloads it all as an Excel file: the summary (the
+  equity value low / mid / high: the report's, rebuilt, this year's and the move; the inputs; the dates; the review),
+  the bridge with a waterfall of the mid, the cash flows with their chart, the inputs with the cell each was sourced
+  from and every check on it, the reconciliation, the key facts, the files and their roles, the review and the run
+  log. Figures are values, not links back to the files; it carries a disclaimer that it's for the team to check.
 
-Evidence is folded away, never removed. New engagement, Models, the call log and Delete are in the ⋯ menu; Delete asks
-for the engagement's name.
+Evidence is folded away, never removed. New engagement, Models, the call log, the workpaper and Delete are in the ⋯
+menu; Delete asks for the engagement's name.
 
 ## Running it
 
@@ -139,6 +143,7 @@ uv run python tests/check_xlruntime.py  # Excel functions in the Python runtime
   - `context.py`: what the report says around a figure (the page, the letter, the scope, definitions).
   - `result.py`: the tie, the bridge and the cash flows.
   - `sourced.py`: the discount rate, terminal growth and franking credit utilisation, sourced and checked.
+  - `workpaper.py`: the Excel workpaper, built in memory from the engagement's result.
   - The rest came from the Valuation Desk: the workbook library and row map, the roles, the Python overlay
     (`xlcompile.py`, `xlruntime.py`, `overlay.py`), the DCF tracer, row finding and the map.
 - `web/charts.js`: the charts.

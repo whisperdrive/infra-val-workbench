@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
@@ -23,6 +23,7 @@ import library  # noqa: E402
 import orchestrator  # noqa: E402
 import usage  # noqa: E402
 import workbench  # noqa: E402
+import workpaper  # noqa: E402
 import xlruntime  # noqa: E402
 
 # Model deployments offered. gpt-6-luna extracts; gpt-6-sol reviews, gives second opinions and decides for the
@@ -174,6 +175,17 @@ async def patch_engagement(eid: int, body: EngagementPatch):
 @app.delete("/api/engagements/{eid}")
 async def delete_engagement(eid: int):
     return {"ok": True, **await _run(workbench.delete, eid)}
+
+
+@app.get("/api/engagements/{eid}/workpaper.xlsx")
+async def workpaper_xlsx(eid: int):
+    """The engagement's workpaper, as an Excel file: once the bridge is worked out (409 before)."""
+    g = await _run(workbench.get, eid)
+    if not workpaper.ready(g):
+        raise HTTPException(409, "the workpaper is ready once the bridge is worked out")
+    data = await _run(workpaper.build, eid)
+    return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{workpaper.filename(g)}"', **FRESH})
 
 
 @app.post("/api/engagements/{eid}/files")

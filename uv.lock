@@ -623,12 +623,12 @@ dependencies = [
     { name = "python-multipart" },
     { name = "python-pptx" },
     { name = "uvicorn" },
+    { name = "xlsxwriter" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "matplotlib" },
-    { name = "xlsxwriter" },
 ]
 
 [package.metadata]
@@ -644,13 +644,11 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "python-pptx", specifier = ">=1.0.2" },
     { name = "uvicorn", specifier = ">=0.54.0" },
+    { name = "xlsxwriter", specifier = ">=3.2" },
 ]
 
 [package.metadata.requires-dev]
-dev = [
-    { name = "matplotlib", specifier = ">=3.11.2" },
-    { name = "xlsxwriter", specifier = ">=3.2" },
-]
+dev = [{ name = "matplotlib", specifier = ">=3.11.2" }]
 
 [[package]]
 name = "isodate"

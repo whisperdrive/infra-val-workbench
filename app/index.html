@@ -126,6 +126,7 @@ main { max-width: 1360px; margin: 0; padding: 22px 24px 60px; display: grid; gap
 .btn.primary { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--on-accent); font-weight: 600; }
 .btn.primary:hover { filter: brightness(.95); }
 .btn.small { padding: 3px 9px; font-size: 12.5px; }
+a.btn { color: var(--ink); text-decoration: none; display: inline-block; }
 .btn.ghost { border-color: transparent; background: transparent; color: var(--link); padding-left: 4px; padding-right: 4px; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 input[type=text], input[type=date], select.in, textarea { background: var(--surface); border: 1px solid var(--rule-strong); border-radius: 4px; padding: 6px 9px; font-size: 14px; }
@@ -367,6 +368,7 @@ dialog#uploadDlg { border: 1px solid var(--rule-strong); border-radius: 10px; ba
       <button type="button" role="menuitem" id="newEng">New engagement</button>
       <button type="button" role="menuitem" id="modelsBtn" data-e aria-haspopup="true" aria-expanded="false" title="Which Azure models extract, review and decide">Models…</button>
       <button type="button" role="menuitem" id="callsBtn" data-e>Tokens and the call log</button>
+      <button type="button" role="menuitem" id="wpMenu" data-e data-r title="The result, the bridge, the cash flows, the inputs and their checks, the facts, the review and the run log, as an Excel file">Export the workpaper (Excel)</button>
       <button type="button" role="menuitem" id="delEng" class="danger" data-e title="Delete this engagement and everything worked out for it, to run the same files again from the start">Delete this engagement…</button>
     </div>
     <button class="hbtn icon" id="themeBtn" type="button" aria-pressed="false"></button>
@@ -570,6 +572,8 @@ function menu(open) { $("#menuPop").hidden = !open; $("#menuBtn").setAttribute("
 $("#menuBtn").onclick = e => { e.stopPropagation(); menu($("#menuPop").hidden); };
 document.addEventListener("click", e => { if (!$("#menuPop").hidden && !e.target.closest("#menuPop, #menuBtn")) menu(false); });
 $("#callsBtn").onclick = () => { menu(false); openCalls(); };
+$("#wpMenu").onclick = () => { menu(false); if (E) location.href = workpaperUrl(); };
+const workpaperUrl = () => `/api/engagements/${E.id}/workpaper.xlsx`;
 for (const [id, key, what] of [["mSel", "model", "Extraction model"], ["rSel", "reviewer_model", "Reviewer and orchestrator"], ["aSel", "arbiter_model", "Arbiter"]])
   $("#" + id).onchange = async e => { E = {...E, ...await api(`/api/engagements/${E.id}`, {method: "PATCH", body: {[key]: e.target.value}})}; toast(`${what}: ${e.target.value}`); };
 function go(step, eid = E?.id) {
@@ -608,7 +612,7 @@ function renderTabs() {
 }
 function render(creating = false) {
   $("#hdrCtl").hidden = !E;
-  document.querySelectorAll("#menuPop [data-e]").forEach(b => b.hidden = !E || creating);
+  document.querySelectorAll("#menuPop [data-e]").forEach(b => b.hidden = !E || creating || (b.hasAttribute("data-r") && !E.result?.bridges));
   if (!E) $("#modelCtl").hidden = true;
   if (E) { $("#mSel").value = E.model || CFG.default_model; $("#rSel").value = E.reviewer_model || CFG.default_reviewer;
     $("#aSel").value = E.arbiter_model || CFG.default_arbiter; }
@@ -1459,7 +1463,7 @@ function viewResult() {
   const tots = steps.filter(x => x.total && x.value != null), from = tots[0]?.value, to = tots[tots.length - 1]?.value;
   return `<div class="card" id="bridgeCard"><div class="row" style="justify-content:space-between;align-items:flex-start">
       <div><h2>Last year to this year</h2><p class="sub" style="margin:0">${esc(u)} · equity value, ${R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution"} · at last year's discount rate${B.valuation_date ? ` · to ${esc(B.valuation_date)}` : ""}</p></div>
-      <div class="row">${state.hl?.step ? hlNote(STEP_SHORT[state.hl.step] || state.hl.step) : ""}<div class="seg" role="group" aria-label="Which end">${["low", "mid", "high"].map(k => `<button type="button" data-end="${k}" class="${end === k ? "on" : ""}" aria-pressed="${end === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div></div></div>
+      <div class="row">${state.hl?.step ? hlNote(STEP_SHORT[state.hl.step] || state.hl.step) : ""}<a class="btn small" href="${workpaperUrl()}" download title="The result, the bridge, the cash flows, the inputs and their checks, the facts, the review and the run log, as an Excel file">Export workpaper</a><div class="seg" role="group" aria-label="Which end">${["low", "mid", "high"].map(k => `<button type="button" data-end="${k}" class="${end === k ? "on" : ""}" aria-pressed="${end === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div></div></div>
     ${from != null && to != null && !B.held ? `<div class="move"><span class="from">${vN(from)}</span><span class="muted">→</span><span class="to">${vN(to)}</span><span class="${to - from >= 0 ? "okt" : "warnt"}">${signed(to - from)}</span><span class="small muted">the ${end}${end === "mid" ? ", the midpoint of the low and the high" : ""}</span></div>` : ""}
     ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until the rows below are found: the bridge stops at last year's rebuilt value.</div>` : ""}
     <div class="grid2" style="margin-top:10px"><div id="brChart"></div><div class="scroll"><table class="bridge"><thead><tr><th>Step</th><th class="num">Change</th><th class="num">Value</th></tr></thead><tbody>${rows}</tbody></table>
