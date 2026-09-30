@@ -10,6 +10,9 @@
             gpt-sol decides an issue once per set of inputs, then a person does
   roles     where the second opinion disagrees, gpt-sol picks between the two on the evidence and the pick is
             checked in code before it's confirmed; a pick that fails the checks goes to a person
+  inside    the same run with the overlay inside a copy of the client model and the report as slides
+  ranges    a dash between two figures is a range in the fact checks ("7.25% - 7.75%"), not a minus; a bracket
+            or a dash after a word still is
 
     uv run python tests/make_pack.py && uv run python tests/check_workbench.py
 """
@@ -64,8 +67,9 @@ def _section(text: str, head: str, end: str | None) -> str:
 
 
 def _quote(page: str, needle: str) -> str:
-    """The sentence (or table row) on the page holding the needle, copied from the page."""
+    """The sentence (or table row, its cells separated by spaces) on the page holding the needle."""
     for line in page.splitlines():
+        line = re.sub(r"\s+", " ", re.sub(r"\s*\|\s*", " ", line)).strip()
         if needle in line:
             for part in re.split(r"(?<=\.) (?=[A-Z])", line):
                 if needle in part:
@@ -75,7 +79,8 @@ def _quote(page: str, needle: str) -> str:
 
 def fake_facts(doc: str) -> list[dict]:
     pages = {int(n): t for n, t in re.findall(r"<!-- page (\d+) -->\n(.*?)(?=<!-- page \d+ -->|\Z)", doc, re.S)}
-    where = lambda needle: next(n for n, t in pages.items() if needle in t)
+    flat = lambda t: re.sub(r"\s+", " ", re.sub(r"\s*\|\s*", " ", t))
+    where = lambda needle: next(n for n, t in pages.items() if needle in flat(t))
 
     def f(cat, key, label, needle, value_text="", low="", high="", unit="A$m", basis="", value=None):
         n = where(needle)
@@ -165,12 +170,17 @@ def status(v: dict) -> dict:
 
 # ---- the checks ----------------------------------------------------------------------------------------------------
 
-def run_check() -> int:
-    e = wb.create("Asset A, FY26")
+PACK_A = ("AssetA_valuation_report_FY25.pdf", "AssetA_BP25_client_model_Jun25.xlsx", "Alpha_valuation_overlay_FY25.xlsx",
+          "AssetA_BP26_client_model_Jun26.xlsx")
+PACK_B = ("AssetA_valuation_report_FY25.pptx", "AssetA_BP25_with_overlay.xlsx", "AssetA_BP26_client_model_Jun26.xlsx")
+
+
+def run_check(files=PACK_A, name="Asset A, FY26") -> int:
+    e = wb.create(name)
     eid = e["id"]
-    for name in ("AssetA_valuation_report_FY25.pdf", "AssetA_BP25_client_model_Jun25.xlsx",
-                 "Alpha_valuation_overlay_FY25.xlsx", "AssetA_BP26_client_model_Jun26.xlsx"):
-        upload(eid, name)
+    n0 = dict((c, CALLS.count(c)) for c in set(CALLS))
+    for f in files:
+        upload(eid, f)
     v = wait(eid, lambda v: status(v).get("review") in (*orc.SETTLED, "blocked", "failed") or
              any(s["status"] in ("blocked", "failed") for s in v["stages"]), "the run", 600)
     st = status(v)
@@ -180,7 +190,12 @@ def run_check() -> int:
     rl = e["roles"]
     assert len(rl) == 4 and all(r["confirmed"] and r["by"] == "orchestrator" and r["evidence"] for r in rl.values()), rl
     names = {w["id"]: w["filename"] for w in e["workbooks"]}
-    assert names[rl["prior_overlay"]["id"]].startswith("Alpha_") and names[rl["current_model"]["id"]].startswith("AssetA_BP26")
+    assert names[rl["prior_overlay"]["id"]] == files[2 if files == PACK_A else 1] and \
+        names[rl["current_model"]["id"]].startswith("AssetA_BP26"), (names, rl)
+    if files == PACK_B:
+        assert rl["prior_model"]["id"] == rl["prior_overlay"]["id"] and \
+            {"Val_Inputs", "DCF", "Summary"} <= set(rl["prior_overlay"]["sheets"]) and \
+            "CashFlow" in rl["prior_model"]["sheets"], rl
     approved = {f["key"] for f in e["facts"] if f["status"] == "approved" and f["decided_by"] == "agents"}
     assert {"equity_value", "discount_rate", "valuation_date", "franking_utilisation"} <= approved, approved
     res = e["result"]
@@ -201,9 +216,9 @@ def run_check() -> int:
     log = orc.history(eid, limit=200)
     assert any(h["stage"] == "roles" and h["event"] == "done" for h in log) and \
         any(h["stage"] == "review" and h["event"] == "decide" for h in log)
-    calls = {c: CALLS.count(c) for c in set(CALLS)}
+    calls = {c: CALLS.count(c) - n0.get(c, 0) for c in set(CALLS)}
     assert calls.get("report_facts") == 1 and calls.get("facts_review") == 1 and not calls.get("roles_decision"), calls
-    print(f"run: ok (facts agreed, roles confirmed on {len(rl['current_model']['evidence']['checks'])} checks and a "
+    print(f"{'run' if files == PACK_A else 'inside'}: ok (facts agreed, roles confirmed on {len(rl['current_model']['evidence']['checks'])} checks and a "
           f"second opinion; {res['where']['low']} / {res['where']['high']} tie; mid {v['report']['mid']:,.1f} -> "
           f"{v['this_year']['mid']:,.1f}; chart {len(ch['series']['last_year'])} + {len(ch['series']['this_year'])} years; "
           f"model calls {calls})")
@@ -267,7 +282,20 @@ def roles_check() -> None:
           "checks goes to a person)")
 
 
+def ranges_check() -> None:
+    import keyfacts
+    n = lambda t: keyfacts.numbers(keyfacts._unrange(t))
+    assert n("Discount rate 7.25% - 7.75% Post-tax") == ["7.25%", "7.75%"]
+    assert n("7.25%–7.75%") == ["7.25%", "7.75%"]
+    assert n("Less: net debt (850.0) (850.0)") == ["-850.0", "-850.0"]
+    assert n("Net debt at valuation - 850.0") == ["-850.0"], n("Net debt at valuation - 850.0")
+    got = n("FY25 - 30.0")
+    assert got == ["25", "30.0"], got  # a year then a figure reads as a range: the check only looks for the fact's own numbers
+    print("ranges: ok (a dash between figures is a range; a bracket, or a dash after a word, is a minus)")
+
+
 def main() -> None:
+    ranges_check()
     if not PACK.exists():
         sys.exit("run tests/make_pack.py first")
     sandbox()
@@ -277,6 +305,11 @@ def main() -> None:
     eid = run_check()
     gating_check(eid)
     roles_check()
+    other = run_check(PACK_B, "Asset A, FY26 (overlay inside)")
+    a, b = (wb.get(x)["result"]["values"]["this_year"]["mid"] for x in (eid, other))
+    assert abs(a - b) < 1e-6, f"the same files give different values in the two layouts: {a} vs {b}"
+    print("layouts: ok (the overlay standalone and inside the client model give the same value this year: the roll "
+          "moves the valuation date the discountings read)")
 
 
 if __name__ == "__main__":

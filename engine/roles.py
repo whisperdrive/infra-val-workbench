@@ -19,7 +19,6 @@ redone each time they change, until a person confirms.
 """
 import json
 import re
-import sqlite3
 
 import likeness
 import linkmap
@@ -289,7 +288,14 @@ def suggest(reports: list[dict], workbooks: list[dict], facts: list[dict]) -> di
             why.append("its file name says so")
         roles["prior_overlay"] = {"kind": "workbook", "id": ov_id, "sheets": o["overlay"], "why": why}
         host = st["shape"][ov_id].get("host")
-        if o["mode"] == "overlay inside the client model" and host is not None and info[host]["mode"] == "client model":
+        # a host dated after the overlay is this year's model, which is so alike it looks like the copy's source; last
+        # year's client model is then the client sheets inside the overlay's own workbook
+        after = lambda a, b: bool(a and b and a > b)
+        later = host is not None and (after(when[host]["valuation_date"], when[ov_id]["valuation_date"]) or (
+            not (when[host]["valuation_date"] and when[ov_id]["valuation_date"])
+            and after(when[host]["file_date"], when[ov_id]["file_date"])))
+        if o["mode"] == "overlay inside the client model" and host is not None and info[host]["mode"] == "client model" \
+                and not later:
             # the overlay was added to a copy of a client model that's here too: that file is the client's own. Its
             # valuation date can differ (an adviser builds on the model the client sent, then values at a later
             # date), so the date explains, it doesn't decide
@@ -304,7 +310,9 @@ def suggest(reports: list[dict], workbooks: list[dict], facts: list[dict]) -> di
         elif o["mode"] == "overlay inside the client model":
             prior_id = ov_id
             roles["prior_model"] = {"kind": "workbook", "id": ov_id, "sheets": o["client"],
-                                    "why": [f"same workbook as the overlay; client sheets: {', '.join(o['client'])}"]}
+                                    "why": [f"same workbook as the overlay; client sheets: {', '.join(o['client'])}"]
+                                    + ([f"{names[host]} is dated after it: this year's model, not the file it was copied from"]
+                                       if later else [])}
         else:
             # The workbook the overlay's external links read: same file name, or the cached values match.
             best, why = None, []
@@ -415,7 +423,11 @@ def _checks(roles: dict, info: dict, st: dict, when: dict, names: dict, facts: l
     pair = lambda a, b: st["pairs"].get((a, b)) or st["pairs"].get((b, a))
     if pr and cu:
         c = pair(pr, cu)
-        if c:
+        if c and pr == ov:  # the overlay's sheets are in last year's file too: how much of this year's model it holds
+            held = c["b_in_a"] if (pr, cu) in st["pairs"] else c["a_in_b"]
+            add(held >= CONTAINS, f"last year's file (with the overlay) holds {held}% of this year's model's line items"
+                + (" (versions of one model)" if held >= CONTAINS else ": are they the same model?"))
+        elif c:
             add(c["similarity"] >= FAMILY, f"the prior and current client models are {c['similarity']}% alike"
                 + (" (versions of one model)" if c["similarity"] >= FAMILY else ": are they the same model?"))
         a, b = when[pr], when[cu]

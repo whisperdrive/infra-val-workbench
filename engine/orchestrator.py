@@ -139,7 +139,7 @@ def inputs(eid: int, name: str, snap: dict, holds: bool = True) -> str:
         return _h([wb._roles_key(eid, snap["workbooks"], snap["documents"]),
                    [(k, r["id"], r["sheets"]) for k, r in rl.items() if r["confirmed"] and r.get("by") == "you"]])
     rebuild = [roles, built, _critical(snap["facts"]), _file_state(ov_dir / "holds.json") if holds else None,
-               (snap.get("profile") or {}).get("horizon")]
+               (snap.get("profile") or {}).get("horizon"), equity_pick(eid)]
     if name in ("rebuild", "map"):
         return _h(rebuild)
     picks = {k: v for k, v in wb._read_rowpicks(eid).items() if not (isinstance(v, dict) and v.get("by") == "agent")}
@@ -247,6 +247,10 @@ def tick(eid: int) -> None:
     st, note, needs = _facts_state(snap)
     if not ready["files"] and st == "waiting":
         note = "waiting for the files"
+    said = {h["issue"] for h in history(eid, "facts", limit=200) if h["event"] == "escalate"}
+    for n in needs:  # into the run log once: a fact the agents couldn't settle goes to a person
+        if n["severity"] != "info" and n["id"] not in said:
+            log(eid, "facts", "escalate", n["title"] + (f": {n['detail']}" if n.get("detail") else ""), issue=n["id"])
     _put(eid, "facts", status=st, note=note, data={"needs": needs})
     # facts that failed don't hold the roles up (structure alone can place the files); the rest wait for them
     ready["facts"] = ready["files"] and (st in SETTLED or st == "failed")
@@ -577,7 +581,10 @@ def _rebuild_job(eid: int, key: str):
     val = summary["validation"]
     off = val["cells"] - val["matched"] - val.get("text", 0)
     if off > 0:
-        core = inputs(eid, "rebuild", _snapshot(eid), holds=False)  # the doctor once per rebuild of the same files
+        # The doctor's gate is keyed on the rebuild's inputs WITHOUT the held cells, not on the stage's own key: holding
+        # cells changes the stage's key (so the rebuild runs again), and gating on it would run the doctor again after
+        # every hold, and hold again, for ever. Once per rebuild of the same files, roles and facts.
+        core = inputs(eid, "rebuild", _snapshot(eid), holds=False)
         if not [h for h in history(eid, "rebuild", "validation") if h["inputs"] == core and h["event"] == "note"]:
             log(eid, "rebuild", "note", f"{off} of {val['cells']:,} cells differ from Excel: the doctor looks at them",
                 issue="validation", inputs=core)
@@ -665,7 +672,9 @@ def equity_cells(eid: int) -> list[str]:
 def _rows_job(eid: int, key: str):
     cells = equity_cells(eid)
     if not cells:
-        return "blocked", "no equity value cells to roll forward", {}
+        return "blocked", "no equity value cells to roll forward", {"needs": [{
+            "id": "equity-rows", "stage": "rows", "severity": "block", "title": "Pick last year's equity value cells first",
+            "detail": "the rows to roll forward are the ones under the equity value", "go": {"step": "rebuild", "anchor": "equityPick"}}]}
     wb._rows_job(eid, cells)
     res = (wb.rows_view(eid).get("result") or {})
     n = len([d for d in res.get("decisions") or [] if d.get("decision")])

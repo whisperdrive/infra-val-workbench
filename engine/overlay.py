@@ -563,7 +563,9 @@ def build(out_dir: Path, overlay: dict, prior: dict | None, current: dict | None
         vd_lever = next((l for l in levers if l["key"] == "valuation_date"), None)
         roll = plan_roll(sess, prior, overlay, same_file, prior_val_date, (prior or {}).get("valuation_date"),
                          current.get("valuation_date"))
-        roll["valuation_date_cell"] = vd_lever["cell"] if vd_lever else None
+        # the date the discountings under the figures read is the one to move: a cell labelled like the valuation date
+        # elsewhere (a client inputs sheet holding the same date) would leave them discounting to last year's
+        roll["valuation_date_cell"] = discount_date_cell(overlay["db_path"], outputs) or (vd_lever["cell"] if vd_lever else None)
     summary = {"module": str(module), "stats": {k: v for k, v in stats.items() if k != "not_compiled"},
                "not_compiled": stats["not_compiled"][:50], "validation": val, "levers": levers, "outputs": outputs,
                "feeds": feeds, "roll": roll, "sheets": sheets,
@@ -572,6 +574,25 @@ def build(out_dir: Path, overlay: dict, prior: dict | None, current: dict | None
     (out_dir / "overlay.json").write_text(json.dumps(summary, default=str, indent=1), encoding="utf-8")
     progress(1.0, "Done")
     return summary, sess
+
+
+def discount_date_cell(path: str, outputs: list[dict]) -> str | None:
+    """The valuation date cell the discountings under the outputs read (dcftrace), the most common if they differ."""
+    import dcf
+    import dcftrace
+    seen = Counter()
+    with _ro(path) as db:
+        for o in outputs[:8]:
+            try:
+                cores = dcftrace.cores(dcftrace.trace(db, o["cell"]))
+            except ValueError:
+                continue
+            for c in cores:
+                v = (c.get("inputs") or {}).get("valuation_date")
+                r = dcf._ref(v, "") if isinstance(v, str) else None
+                if r:
+                    seen[_a1(r[0], r[1], r[2])] += 1
+    return seen.most_common(1)[0][0] if seen else None
 
 
 def horizon(prior: Workbook, current: Workbook, sheets, sheet_for=None) -> tuple[str | None, dict]:
