@@ -346,6 +346,29 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "
 const fmt = (v, d = 1) => v == null || v === "" ? "" : (typeof v === "number" ? v.toLocaleString(undefined, {maximumFractionDigits: d, minimumFractionDigits: Math.abs(v) < 10 && d ? Math.min(d, 2) : 0}) : String(v));
 const vN = x => x == null ? "–" : (Math.abs(x) < 0.05 ? 0 : Number(x)).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1});
 const vPct = x => x == null ? "–" : (x * 100).toFixed(2) + "%";
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+// Dates as people read them, dd MMMM yyyy (30 June 2025), wherever an ISO date (2025-06-30) reaches the page: in
+// what the page draws and in the server's own sentences, text and tooltips. Inputs keep ISO (a date field needs it);
+// cell references and formulas (.mono, code) are left as they are.
+const ISO_DATE = /\b(\d{4})-(\d{2})-(\d{2})\b/g;
+const niceDates = t => t.replace(ISO_DATE, (m, y, mo, d) => +mo >= 1 && +mo <= 12 && +d >= 1 && +d <= 31 ? `${d} ${MONTHS[+mo - 1]} ${y}` : m);
+const KEEP_ISO = "input, textarea, select, script, style, code, pre, .mono";
+function niceDatesIn(node) {
+  if (node.nodeType === 3) {
+    if (ISO_DATE.test(node.data) && !node.parentElement?.closest(KEEP_ISO)) node.data = niceDates(node.data);
+    ISO_DATE.lastIndex = 0;
+    return;
+  }
+  if (node.nodeType !== 1 || node.closest(KEEP_ISO)) return;
+  const walk = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+  for (let n; (n = walk.nextNode());) niceDatesIn(n);
+  for (const el of [node, ...node.querySelectorAll("[title]")]) {
+    const t = el.getAttribute("title");
+    if (t && /\d{4}-\d{2}-\d{2}/.test(t)) el.setAttribute("title", niceDates(t));
+  }
+}
+new MutationObserver(ms => ms.forEach(m => m.type === "characterData" ? niceDatesIn(m.target) : m.addedNodes.forEach(niceDatesIn)))
+  .observe(document.documentElement, {childList: true, subtree: true, characterData: true});
 const size = b => b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " KB";
 const busy = s => ["queued", "processing", "running"].includes(s);
 const kfmt = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n ?? 0);
@@ -756,7 +779,6 @@ function rolesCheckCard(sug, docs, wbs) {
     <ul class="checks">${checks.map(li).join("")}</ul>${op}</div>`;
 }
 const PROF = {stamp: null, data: null, loading: false};
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 function engProfileCard() {
   const head = `<h2>The engagement's profile</h2><p class="sub">Facts about the models that each step would otherwise guess on its own: detected from the files (no model calls), and yours to set where the detection is wrong. The financial-year end totals the cash-flow chart; the horizon drives the roll-forward.</p>`;
   const P = PROF.data;
@@ -986,7 +1008,7 @@ function viewRebuild() {
   return head + needsCard(["rebuild"]) + `
   <div class="tiles">
     <div class="tile"><b>${nfmt(val.matched)} / ${nfmt(val.cells)}</b><span>formula cells reproduced in Python</span></div>
-    <div class="tile"><b>${esc(w ? `${w.low}${w.high !== w.low ? ` / ${w.high}` : ""}` : "–")}</b><span>the equity value, low / high${w?.how ? ` (${esc(w.how)})` : ""}</span></div>
+    <div class="tile"><b>${R?.tie ? `${vN(R.tie.low.saved)} – ${vN(R.tie.high.saved)}` : "–"}</b><span>the equity value, low – high${R?.tie ? ` (mid ${vN((R.tie.low.saved + R.tie.high.saved) / 2)})` : ""}${R?.head?.units ? `, ${esc(R.head.units)}` : ""}, as Excel saved it${w ? ` in <span class="mono">${esc(w.low)}</span>${w.high !== w.low ? ` / <span class="mono">${esc(w.high)}</span>` : ""}` : ""}${w?.how ? `<br>${esc(w.how)}` : ""}</span></div>
     <div class="tile"><b>${R?.tie ? (R.tie.low.ok && R.tie.high.ok ? "Ties" : "Doesn't tie") : "–"}</b><span>to the report's figures, as Excel saved them</span></div>
     <div class="tile"><b>${esc(O.roll?.prior_valuation_date || "–")}</b><span>last year's valuation date</span></div>
   </div>
