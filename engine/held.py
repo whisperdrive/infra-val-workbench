@@ -147,9 +147,11 @@ def suggest(sess, item: dict, prior_vd: str | None, this_vd: str | None) -> dict
                 "text": f"{said}; this year's model's cell {ov._a1(s2, r2, col2)} holds no figure{others}"}
     this = {"cell": ov._a1(s2, r2, col2), "label": sess.current.labels().get((s2, r2), ""), "value": float(y)}
     value = abs(float(y)) * h["scale"] * (1 if v > 0 else -1) * (1 if (y > 0) == (h["value"] > 0) else -1)
-    status = "checked" if h["agrees"] else "figure only"
+    # checked only where one row holds last year's figure under a label that agrees: two such rows, a person picks
+    status = "checked" if h["agrees"] and sum(x["agrees"] for x in hits) == 1 else "figure only"
     how = (f"{value:,.1f} in this year's client model at {this_vd[:10]} ({this['cell']}): the row that holds last year's "
            f"figure as typed here, {said}" if status == "checked" else
-           f"{value:,.1f} in this year's client model at {this_vd[:10]} ({this['cell']}), the row of {said}; its label "
-           f"doesn't match this input's, so check it's the same thing")
+           f"{value:,.1f} in this year's client model at {this_vd[:10]} ({this['cell']}), the row of {said}; " + (
+               "another row with a label like this input's holds the same figure, so check it's the right one"
+               if h["agrees"] else "its label doesn't match this input's, so check it's the same thing"))
     return {"status": status, "value": value, "last": last, "this": this, "text": how + others}
