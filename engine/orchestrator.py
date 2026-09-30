@@ -726,17 +726,29 @@ def _result_job(eid: int, key: str):
                           "title": f"{r['label']} doesn't reconcile to the report",
                           "detail": "; ".join(bad) or "Python couldn't split the value this way",
                           "go": {"step": "rebuild", "anchor": "reconcileCard"}})
-    for end, r in ((res.get("rates") or {}).get("ends") or {}).items():
-        at = f"{100 * r['rate']:.2f}%" + (f" in {r['cell']}" if r.get("cell") else "") if r.get("rate") is not None else ""
-        if r.get("sourced") is False:
-            needs.append({"id": f"rate-{end}", "stage": "result", "severity": "check",
-                          "title": f"The {end} end's discount rate ({at}) isn't sourced to a cell",
-                          "detail": r.get("note") or "", "go": {"step": "rebuild", "anchor": "ratesCard"}})
-        elif r.get("ties") is False:
-            needs.append({"id": f"rate-{end}", "stage": "result", "severity": "check",
-                          "title": f"The {end} end's discount rate ({at}) isn't the report's {r['report']}",
-                          "detail": "the value at that end is at the " + ("higher" if end == "low" else "lower") +
-                                    " of the report's rates", "go": {"step": "rebuild", "anchor": "ratesCard"}})
+    names = {"rate": "discount rate", "growth": "terminal growth rate", "franking": "franking credit utilisation"}
+    for key, what in names.items():
+        for end, r in (((res.get("inputs") or {}).get(key) or {}).get("ends") or {}).items():
+            if r.get("ok") is not False:
+                continue
+            at = (f"{100 * r['value']:.2f}%" if r.get("value") is not None else "") + (f" in {r['cell']}" if r.get("cell") else "")
+            bad = [c["text"] for c in r.get("checks") or [] if c["ok"] is False]
+            needs.append({"id": f"{key}-{end}", "stage": "result", "severity": "check",
+                          "title": f"The {end} end's {what} ({at.strip()}) " + (
+                              "isn't sourced to a cell" if not r.get("sourced") else "doesn't check out"),
+                          "detail": "; ".join(bad) or r.get("note") or "", "go": {"step": "rebuild", "anchor": "inputsCard"}})
+    said = next((f for f in wb.reference(eid) if f["key"] == "valuation_date" and f.get("value")), None)
+    if said:
+        v = int(said["value"])
+        iso = f"{v // 10000:04d}-{v // 100 % 100:02d}-{v % 100:02d}"
+        off = sorted({(a.get("valuation_date"), a.get("valuation_date_source")) for e in ("low", "high")
+                      for a in (res.get("assumptions") or {}).get(e) or [] if a.get("valuation_date")
+                      and a["valuation_date"] != iso})
+        if off:
+            needs.append({"id": "date-overlay", "stage": "result", "severity": "check",
+                          "title": f"The overlay discounts to {off[0][0]} ({off[0][1]}), the report says {said.get('value_text')}",
+                          "detail": "the valuation date the discount factors read isn't the report's",
+                          "go": {"step": "workbench", "anchor": "datesCard"}})
     for end in ("low", "high"):
         t = res["tie"][end]
         if not t["ok"]:

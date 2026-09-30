@@ -140,7 +140,60 @@ def sourcing_check() -> None:
           "as numbers read no cell, so the rate isn't sourced, and a labelled cell holding the same number is only a hint)")
 
 
+def growth_check() -> None:
+    """The terminal growth rate is the cell the terminal value's formula reads as g in X x (1 + g) / (r - g), the
+    terminal value recomputed from it at the end's own discount rate; a growth rate typed into the formula isn't
+    sourced."""
+    import sourced
+    vd, rate, g, years = date(2025, 6, 30), 0.08, 0.025, list(range(2026, 2031))
+    got = {}
+    for how in ("cell", "typed"):
+        out = Path(tempfile.mkdtemp(prefix=f"trace_tv_{how}_"))
+        wb = xlsxwriter.Workbook(out / f"{how}.xlsx")
+        dt = wb.add_format({"num_format": "dd-mmm-yy"})
+        inp = wb.add_worksheet("Inputs")
+        for r, label, v in ((4, "Discount rate", rate), (5, "Terminal growth rate", g)):
+            inp.write(r, 0, label)
+            inp.write_number(r, 2, v)
+        inp.write(3, 0, "Valuation date")
+        inp.write_datetime(3, 2, vd, dt)
+        fl = wb.add_worksheet("Flows")
+        for r, label in ((2, "Period ending"), (7, "Free cash flow"), (8, "Terminal value"), (9, "Valuation cash flow"),
+                         (12, "Discount factor"), (13, "Present value"), (15, "Equity value")):
+            fl.write(r, 1, label)
+        total, last = 0.0, COL(3 + len(years) - 1)
+        for k, y in enumerate(years):
+            c, end = COL(3 + k), date(y, 6, 30)
+            f, cf = 1 / (1 + rate) ** ((end - vd).days / 365), 100.0 + 5 * k
+            tv = cf * (1 + g) / (rate - g) if k == len(years) - 1 else 0.0
+            fl.write_datetime(2, 3 + k, end, dt)
+            fl.write_number(7, 3 + k, cf)
+            if tv:
+                grow = "Inputs!$C$6" if how == "cell" else "0.025"
+                fl.write_formula(f"{c}9", f"={c}8*(1+{grow})/(Inputs!$C$5-{grow})", None, tv)
+            else:
+                fl.write_number(8, 3 + k, 0.0)
+            fl.write_formula(f"{c}10", f"={c}8+{c}9", None, cf + tv)
+            fl.write_formula(f"{c}13", f"=1/(1+Inputs!$C$5)^(({c}3-Inputs!$C$4)/365)", None, f)
+            fl.write_formula(f"{c}14", f"={c}10*{c}13", None, (cf + tv) * f)
+            total += (cf + tv) * f
+        fl.write_formula("C16", f"=SUM(D14:{last}14)", None, total)
+        wb.close()
+        db = sqlite3.connect(build_map.main(str(out / f"{how}.xlsx"), str(out / "db"))["db"])
+        cs = [c for c in dcftrace.cores(dcftrace.trace(db, "Flows!C16")) if c.get("inputs")]
+        rates = {"ends": {e: {"cell": "Inputs!C5", "value": rate} for e in ("low", "high")}}
+        facts = [{"key": "terminal_growth_rate", "value_text": "2.50%", "status": "approved"}]
+        got[how] = sourced.growth(db, {"low": cs, "high": cs}, rates, facts)["ends"]["low"]
+    cell, typed = got["cell"], got["typed"]
+    assert cell["sourced"] and cell["cell"] == "Inputs!C6" and cell["ok"] and cell["ties"], cell
+    assert not typed["sourced"] and typed["cell"] is None and abs(typed["value"] - g) < 1e-12 and not typed["ok"] and \
+        [c["ok"] for c in typed["checks"]] == [False, True, True, True], typed
+    print("growth: ok (the terminal value's growth rate is the cell its formula reads, recomputed at the end's own "
+          "discount rate; typed into the formula, it isn't sourced)")
+
+
 if __name__ == "__main__":
     main()
     mid_year_check()
     sourcing_check()
+    growth_check()

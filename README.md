@@ -36,10 +36,18 @@ takes it from there:
    opinion. It confirms the roles only when the evidence supports it.
 5. **Rebuilds last year in Python.** The overlay's formulas are compiled to a module and checked cell by cell against
    Excel. The report's equity value is found in it and tied; the Python rebuild feeds it again from last year's client
-   model. Each end's discount rate is sourced, not inferred: the cell its discount factors read, found by following
-   their formulas from the first and the last period's factor, then checked against the factors and the report's
-   rate for that end (the low value at the higher rate); a rate no cell holds comes to you. What the report
-   discloses of the value (the terminal value, the PV of the forecast and of the terminal value,
+   model. The inputs the report also states are sourced, not inferred (`sourced.py`): each is the cell the model's
+   formulas read, found by following them, not by looking for the number, then recomputed from it and checked
+   against the report. For each end:
+   - the discount rate: the cell the discount factors read (the first and the last period's), the factors
+     recomputed at it, the report's rate for that end (the low value at the higher rate);
+   - the terminal growth rate: the cell the terminal value's formula reads as g, the terminal value recomputed as
+     X × (1 + g) / (r − g) at that end's own discount rate;
+   - franking credit utilisation: the fraction every period's franking credits read; rerun at nil in Python, the
+     equity value must fall by exactly the value of franking credits.
+
+   One that isn't sourced to a cell (typed into a formula, say), or doesn't check out, comes to you. What the
+   report discloses of the value (the terminal value, the PV of the forecast and of the terminal value,
    the value of franking credits and its share) is reconciled to the same split of the overlay's discountings.
 6. **Rolls forward onto this year's client model.** Rows are found by label, history and numbers, with row agents for
    the ones in doubt. This year's value is shown only where the rows its cash flows come from were found.
@@ -72,12 +80,13 @@ on. Code, not the prompt, keeps it from going round in circles:
 
 ## The page
 
-- **Workbench**: files, roles, the engagement's profile, where the run is, what needs you, and what the orchestrator
-  did.
+- **Workbench**: files, roles, the valuation dates across the files (the report's the anchor: the overlay's, last
+  year's and this year's client models', the roll's), the engagement's profile, where the run is, what needs you,
+  and what the orchestrator did.
 - **The report**: the key facts, their checks, how each looks on its image, the agents' decisions, and the tables read
   from their images beside those images.
-- **Rebuild**: the tie to the report, the reconciliation of what it discloses, and the model's assumptions under the
-  equity value.
+- **Rebuild**: the tie to the report, the model's inputs sourced and checked, the reconciliation of what the report
+  discloses, and the model's assumptions under the equity value.
 - **Result**: the value bridge and the cash-flow chart.
 - **Map**: how the files link up and what changed in the client model, with the detail a click away.
 
@@ -113,6 +122,7 @@ uv run python tests/check_xlruntime.py  # Excel functions in the Python runtime
   - `visual.py`: the key tables read from their images, and each fact checked on its image.
   - `context.py`: what the report says around a figure (the page, the letter, the scope, definitions).
   - `result.py`: the tie, the bridge and the cash flows.
+  - `sourced.py`: the discount rate, terminal growth and franking credit utilisation, sourced and checked.
   - The rest came from the Valuation Desk: the workbook library and row map, the roles, the Python overlay
     (`xlcompile.py`, `xlruntime.py`, `overlay.py`), the DCF tracer, row finding and the map.
 - `web/charts.js`: the charts.

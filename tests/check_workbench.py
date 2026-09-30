@@ -265,10 +265,27 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     rates = {e: next(a["rate_source"] for a in res["assumptions"][e] if a.get("parts")) for e in ("low", "high")}
     assert rates == {"low": "Val_Inputs!C5", "high": "Val_Inputs!E5"}, rates
     # each end's rate sighted, sourced by following the factors' formulas, and checked again against the report
-    rc = res["rates"]["ends"]
-    assert res["rates"]["ok"] and [(rc[e]["cell"], rc[e]["sourced"], rc[e]["ties"], rc[e]["report"], rc[e]["sighted"]["heading"],
-                                    rc[e]["sighted"]["input"]) for e in ("low", "high")] == \
+    ins = res["inputs"]
+    rc = ins["rate"]["ends"]
+    assert ins["rate"]["ok"] and [(rc[e]["cell"], rc[e]["sourced"], rc[e]["ties"], rc[e]["report"], rc[e]["sighted"]["heading"],
+                                   rc[e]["sighted"]["input"]) for e in ("low", "high")] == \
         [("Val_Inputs!C5", True, True, "7.75%", "Low", True), ("Val_Inputs!E5", True, True, "7.25%", "High", True)], rc
+    # the terminal growth rate: the cell the terminal value reads as g, the terminal value at each end's own rate
+    gr = ins["growth"]["ends"]
+    assert ins["growth"]["ok"] and all(gr[e]["cell"] == "Val_Inputs!C6" and gr[e]["ties"] and
+                                       all(c["ok"] for c in gr[e]["checks"]) for e in ("low", "high")), gr
+    # franking credit utilisation: the fraction the franking credits read; at nil, the equity value falls by exactly
+    # the value of franking credits in the Python overlay, and is back where it was after
+    fk = ins["franking"]["ends"]
+    assert ins["franking"]["ok"] and all(fk[e]["cell"] == "Val_Inputs!C9" and fk[e]["ties"] and fk[e]["rerun"]["ok"] and
+                                         fk[e]["rerun"]["restored"] for e in ("low", "high")), fk
+    assert abs(fk["low"]["rerun"]["drop"] - 381.1203152392057) < 1e-6, fk["low"]["rerun"]
+    # the date line: the report's date the anchor, the overlay's the cell its discount factors read
+    dl = {d["step"]: d for d in wb.get(eid)["dates"]}
+    assert (dl["The report"]["date"], dl["Last year's overlay"]["date"], dl["Last year's overlay"]["where"],
+            dl["Last year's overlay"]["ok"], dl["Last year's client model"]["ok"], dl["This year's client model"]["date"],
+            dl["This year's client model"]["ok"], dl["The roll-forward runs to"]["date"]) == \
+        ("2025-06-30", "2025-06-30", "Val_Inputs!C4", True, True, "2026-06-30", True, "2026-06-30"), dl
     assert not [n for n in orc.view(eid)["needs"] if n["severity"] == "block"]
     log = orc.history(eid, limit=200)
     assert any(h["stage"] == "roles" and h["event"] == "done" for h in log) and \

@@ -265,8 +265,71 @@ def get(eid: int) -> dict | None:
         w["identity_why"] = conf.get("why") or []
         w["identity_check"] = ident.get("auto_check")  # the agents' check of the date, where it didn't confirm
     import orchestrator  # what runs, and what it's waiting for: the orchestrator's view (reading it starts nothing)
-    return {**e, "documents": documents(eid), "workbooks": wbs, "facts": facts(eid), "roles": roles(eid),
-            "session": _session(eid), "now": time.time(), "run": orchestrator.view(eid)}
+    rl = roles(eid)
+    return {**e, "documents": documents(eid), "workbooks": wbs, "facts": facts(eid), "roles": rl,
+            "session": _session(eid), "now": time.time(), "run": orchestrator.view(eid),
+            "dates": dates(eid, e.get("result"), wbs, rl)}
+
+
+def dates(eid: int, res: dict | None, wbs: list[dict], rl: dict) -> list[dict]:
+    """The valuation dates across the files, in one line, the report's the anchor: the report (last year's) → last
+    year's overlay (the cell its discount factors read, once they're traced; else the date found by its label) →
+    last year's client model (a day or so off is a note: a model can carry its start or balance date) → this year's
+    client model (after last year's, a year on, confirmed by whom) → the date the roll-forward runs to. Each step:
+    {"step", "date", "where", "how", "ok" (True / False / None: a note), "note"}. Shows what the checks found; the
+    rules that confirm a date are the orchestrator's."""
+    rep = next((f for f in reference(eid) if f["key"] == "valuation_date" and f.get("value")), None)
+    anchor = f"{int(rep['value']) // 10000:04d}-{int(rep['value']) // 100 % 100:02d}-{int(rep['value']) % 100:02d}" \
+        if rep else None
+    seen = next((f.get("visual") or {} for f in facts(eid) if rep and f["id"] == rep["id"]), {})
+    out = [{"step": "The report", "date": anchor, "where": f"page {rep['page']}" if rep and rep.get("page") else None,
+            "how": rep.get("value_text") if rep else None, "ok": True if rep else None,
+            "note": ("seen on its image" if str(seen.get("status", "")).startswith("confirmed") else
+                     "corrected on its image" if seen.get("status") == "corrected" else "read from its text")
+            if rep else "last year's valuation date isn't among the key facts yet"}]
+    wb_of = lambda role: next((w for w in wbs if (rl.get(role) or {}).get("kind") == "workbook"
+                               and w["id"] == rl[role]["id"]), None)
+    traced = sorted({(a.get("valuation_date"), a.get("valuation_date_source"), bool(a.get("valuation_date_sourced")))
+                     for e in ("low", "high") for a in ((res or {}).get("assumptions") or {}).get(e) or []
+                     if a.get("valuation_date")})
+    ovw = wb_of("prior_overlay")
+    if traced:
+        d, cell, src = traced[0]
+        out.append({"step": "Last year's overlay", "date": d, "where": cell,
+                    "how": "the cell its discount factors read" if src else "found by its label: the factors don't read it",
+                    "ok": d == anchor if anchor else None,
+                    "note": None if len(traced) == 1 else "its discountings read different dates: " +
+                                                          ", ".join(f"{x[0]} ({x[1]})" for x in traced)})
+    else:
+        d = (ovw or {}).get("valuation_date")
+        out.append({"step": "Last year's overlay", "date": d, "where": None,
+                    "how": "found by its label; its discountings aren't traced yet", "ok": (d == anchor) if d and anchor else None})
+    pm = wb_of("prior_model")
+    d = (pm or {}).get("valuation_date")
+    out.append({"step": "Last year's client model", "date": d, "where": None, "how": "its own date",
+                "ok": True if d and d == anchor else None,
+                "note": None if not d or not anchor or d == anchor else
+                "not the report's: a client model can carry its start or balance date, so this is a note"})
+    cm = wb_of("current_model")
+    d = (cm or {}).get("valuation_date")
+    chk = (cm or {}).get("identity_check") or {}
+    later = bool(d and anchor and d > anchor)
+    year_on = bool(d and anchor and d == _year_on(anchor))
+    who = (cm or {}).get("identity_by")
+    out.append({"step": "This year's client model", "date": d, "where": None,
+                "how": ("a year after the report's" if year_on else "after the report's, but not a year on" if later
+                        else "not after the report's" if d and anchor else "its own date"),
+                "ok": year_on if d and anchor and (year_on or not later) else None,
+                "note": "; ".join(filter(None, [
+                    f"confirmed by {'the agents' if who == 'agents' else who}" if who else "not confirmed yet",
+                    "agrees: " + "; ".join(chk["agree"]) if chk.get("agree") else None,
+                    "disagrees: " + "; ".join(chk["disagree"]) if chk.get("disagree") else None]))})
+    mine = this_year_date(eid)
+    used = ((res or {}).get("bridges") or {}).get("valuation_date") or mine
+    out.append({"step": "The roll-forward runs to", "date": used, "where": None,
+                "how": "the date you set" if mine and used == mine else "this year's client model's" if used else None,
+                "ok": None, "note": None if used else "not rolled forward yet"})
+    return out
 
 
 def delete(eid: int) -> None:

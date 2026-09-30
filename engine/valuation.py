@@ -250,7 +250,13 @@ def reads(db, cells=(), expr: str | None = None, here: str | None = None, depth:
 
 
 def _heading(db, sheet: str, row: int, col: int) -> str | None:
-    """The text heading a cell's column (the nearest text above it, a few rows up): "Low", "High", "FY26"."""
+    """The text heading a cell's column (the nearest text above it, a few rows up): "Low", "High", "FY26". Only
+    where the row has figures in the columns beside it (a range, a timeline): a single input on its row sits under
+    whatever heads another row's columns."""
+    if not any(isinstance(v, (int, float)) and not isinstance(v, bool) or dcf._as_date(v) for (v,) in db.execute(
+            "SELECT value FROM cells WHERE sheet=? AND row=? AND col BETWEEN ? AND ? AND col<>?",
+            (sheet, row, col - 3, col + 3, col))):
+        return None
     for (v,) in db.execute("SELECT value FROM cells WHERE sheet=? AND col=? AND row<? AND row>=? AND formula IS NULL "
                            "ORDER BY row DESC", (sheet, col, row, row - 6)):
         if isinstance(v, str) and v.strip() and not dcf._as_date(v):
