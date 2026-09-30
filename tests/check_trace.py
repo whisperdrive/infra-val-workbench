@@ -94,6 +94,53 @@ def mid_year_check() -> None:
     print("mid-year: ok (factors written (end - valuation date) / 365 - 0.5 read back as the mid-year convention)")
 
 
+def sourcing_check() -> None:
+    """The rate is the cell the factors read, followed through their formulas to the input; factors typed in as
+    numbers read no cell, so the rate isn't sourced, even where a labelled rate cell holds the same number."""
+    vd, rate, years = date(2025, 6, 30), 0.0725, list(range(2026, 2031))
+    got = {}
+    for how in ("via", "pasted"):
+        out = Path(tempfile.mkdtemp(prefix=f"trace_{how}_"))
+        wb = xlsxwriter.Workbook(out / f"{how}.xlsx")
+        dt = wb.add_format({"num_format": "dd-mmm-yy"})
+        inp = wb.add_worksheet("Inputs")
+        inp.write(3, 0, "Valuation date")
+        inp.write_datetime(3, 2, vd, dt)
+        inp.write(4, 0, "Discount rate")
+        inp.write_number(4, 2, rate)
+        fl = wb.add_worksheet("Flows")
+        for r, label in ((2, "Period ending"), (4, "Rate used"), (9, "Cash flow"), (12, "Discount factor"),
+                         (13, "Present value"), (15, "Equity value")):
+            fl.write(r, 1, label)
+        fl.write_formula("C5", "=Inputs!C5", None, rate)
+        total = 0.0
+        for k, y in enumerate(years):
+            c, end = COL(3 + k), date(y, 6, 30)
+            f = 1 / (1 + rate) ** ((end - vd).days / 365)
+            fl.write_datetime(2, 3 + k, end, dt)
+            fl.write_number(9, 3 + k, 80.0 + k)
+            if how == "via":
+                fl.write_formula(f"{c}13", f"=1/(1+$C$5)^(({c}3-Inputs!$C$4)/365)", None, f)
+            else:
+                fl.write_number(12, 3 + k, f)
+            fl.write_formula(f"{c}14", f"={c}10*{c}13", None, (80.0 + k) * f)
+            total += (80.0 + k) * f
+        fl.write_formula("C16", f"=SUM(D14:{COL(3 + len(years) - 1)}14)", None, total)
+        wb.close()
+        db = sqlite3.connect(build_map.main(str(out / f"{how}.xlsx"), str(out / "db"))["db"])
+        got[how] = next(c for c in dcftrace.cores(dcftrace.trace(db, "Flows!C16")) if c.get("kind") == "pv row")["method"]
+    via, pasted = got["via"], got["pasted"]
+    assert via["rate"] == "Inputs!C5" and via["rate_source"]["input"] and \
+        via["rate_source"]["chain"] == ["Flows!D14", "Flows!D13", "Flows!C5", "Inputs!C5"] and \
+        via["valuation_date_sourced"], via
+    assert isinstance(pasted["rate"], float) and abs(pasted["rate"] - rate) < 1e-9 and pasted["rate_source"] is None \
+        and pasted["rate_note"].startswith("not sourced") and "Inputs!C5 holds the same number" in pasted["rate_note"] \
+        and not pasted["valuation_date_sourced"], pasted
+    print("sourcing: ok (the rate followed from the factors through Flows!C5 to the input Inputs!C5; factors typed in "
+          "as numbers read no cell, so the rate isn't sourced, and a labelled cell holding the same number is only a hint)")
+
+
 if __name__ == "__main__":
     main()
     mid_year_check()
+    sourcing_check()

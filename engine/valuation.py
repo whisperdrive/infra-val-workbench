@@ -202,13 +202,95 @@ def _cell_term(db, ref, pv_key, vd, sign, depth):
 
 
 # ---- reading the discount factors back into assumptions -----------------------------------------------------
+#
+# The rate and the valuation date a discounting uses are sourced, not inferred: they're the cells its factors' formulas
+# read, found by following those formulas (reads()), and the fit to the factors only confirms them. A rate no cell
+# the factors read holds is shown as a number, "not sourced", and a person is asked: a labelled rate cell holding the
+# same number elsewhere is only a hint, never the source.
+
+SHORT = 12  # a range of at most this many cells is followed cell by cell; a longer one is a row of operands
+_IDENT = re.compile(r"(?<![\w.!$'\]])([A-Za-z_][\w.]*)(?![\w(!])")
+
+
+def reads(db, cells=(), expr: str | None = None, here: str | None = None, depth: int = 4, limit: int = 300) -> dict:
+    """The cells formulas read, followed through those cells' own formulas (single cells, short ranges and defined
+    names; a long range is a row of operands and isn't followed): starting from cells' formulas and/or expr (a formula
+    text on sheet here). -> {"Sheet!A1": {"sheet", "row", "col", "value", "formula", "depth", "via"}}, via the cell
+    that read it (None for the start)."""
+    try:
+        names = {n.lower(): r for n, r in db.execute("SELECT name, ref FROM names")}
+    except sqlite3.OperationalError:
+        names = {}
+    out, queue = {}, []
+
+    def push(text, sh, d, via):
+        text = re.sub(r'"[^"]*"', "", text or "")
+        found = [dcf._ref(m[0], sh) for m in dcf._FREF.finditer(text) if text[m.end():m.end() + 1] != "("]
+        found += [dcf._ref(names[m[1].lower()].lstrip("="), "") for m in _IDENT.finditer(text) if m[1].lower() in names]
+        for r in found:
+            if r and (r[3] - r[1] + 1) * (r[4] - r[2] + 1) <= SHORT:
+                queue.extend((r[0], rr, cc, d, via) for rr in range(r[1], r[3] + 1) for cc in range(r[2], r[4] + 1))
+
+    if expr:
+        push(expr, here, 1, None)
+    for sh, r, c in cells:
+        f = db.execute("SELECT formula FROM cells WHERE sheet=? AND row=? AND col=?", (sh, r, c)).fetchone()
+        push(f[0] if f else "", sh, 1, f"{sh}!{dcf._addr(c, r)}")
+    while queue and len(out) < limit:
+        sh, r, c, d, via = queue.pop(0)
+        ref = f"{sh}!{dcf._addr(c, r)}"
+        if ref in out:
+            continue
+        got = db.execute("SELECT formula, value FROM cells WHERE sheet=? AND row=? AND col=?", (sh, r, c)).fetchone()
+        out[ref] = {"sheet": sh, "row": r, "col": c, "formula": got[0] if got else None, "value": got[1] if got else None,
+                    "depth": d, "via": via}
+        if got and got[0] and d < depth:
+            push(got[0], sh, d + 1, ref)
+    return out
+
+
+def _heading(db, sheet: str, row: int, col: int) -> str | None:
+    """The text heading a cell's column (the nearest text above it, a few rows up): "Low", "High", "FY26"."""
+    for (v,) in db.execute("SELECT value FROM cells WHERE sheet=? AND col=? AND row<? AND row>=? AND formula IS NULL "
+                           "ORDER BY row DESC", (sheet, col, row, row - 6)):
+        if isinstance(v, str) and v.strip() and not dcf._as_date(v):
+            return v.strip()
+    return None
+
+
+def source_rate(db, walks: list[dict], rate: float) -> dict | None:
+    """The cell a discounting's rate is read from: in every walk (one per factor looked at: the first and the last
+    period's), a cell holding the rate; the input (a cell with no formula) nearest the factors, else the formula cell
+    nearest them. -> {"cell", "input", "formula", "label", "heading", "chain", "from"} or None where a walk reads no
+    cell holding it."""
+    picks = []
+    for w in walks:
+        hold = [(ref, n) for ref, n in w.items() if dcf._num(n["value"]) is not None and abs(dcf._num(n["value"]) - rate) < 1e-9]
+        if not hold:
+            return None
+        ref, n = min(hold, key=lambda x: (bool(x[1]["formula"]), x[1]["depth"]))
+        chain, at = [ref], n["via"]
+        while at and at in w and at not in chain:
+            chain.append(at)
+            at = w[at]["via"]
+        if at and at not in chain:
+            chain.append(at)
+        picks.append((ref, n, chain[::-1]))
+    if len({p[0] for p in picks}) != 1:
+        return None
+    ref, n, chain = picks[0]
+    return {"cell": ref, "input": not n["formula"], "formula": n["formula"], "label": dcf._row_label(db, n["sheet"], n["row"]),
+            "heading": _heading(db, n["sheet"], n["row"], n["col"]), "chain": chain, "from": len(picks)}
+
 
 def read_factors(db, df_ref, cols: list[int], theirs: dict | None = None, sheet: str | None = None,
-                 dates: str | None = None) -> dict | None:
+                 dates: str | None = None, starts: dict | None = None) -> dict | None:
     """Rate, valuation date, convention and cut-off that reproduce the workbook's factor row exactly; or, with
     theirs, factors given by column (e.g. computed inside a formula), timed by sheet's period dates. Only the
     factors there are count: a period with no cash flow shows no factor (pv / cash flow can't be taken), and isn't
-    a factor of 0."""
+    a factor of 0. starts: where the factors' formulas are, to source the rate and the date from: {"cells": {col:
+    (sheet, row, col)}} (a factor row, or a present-value row), or {"expr": text, "here": sheet} (factors computed
+    in one formula); a factor row's own cells without it."""
     sheet, row = (df_ref[0], df_ref[1]) if df_ref else (sheet, None)
     if theirs is None:
         theirs = {c: dcf._num(v) or 0.0 for c, v in db.execute(
@@ -218,6 +300,45 @@ def read_factors(db, df_ref, cols: list[int], theirs: dict | None = None, sheet:
     live = [c for c in sorted(ends) if 0 < theirs.get(c, 0.0) < 1]
     if not live:
         return None
+    last = max(live, key=lambda c: ends[c])
+    after = [c for c in ends if ends[c] > ends[last]]
+    td = ends[last] if after and all(c in theirs and not theirs[c] for c in after) else None  # zeros seen, not unseen
+    starts = starts or ({"cells": {c: (sheet, row, c) for c in cols}} if row else None)
+    first = min(live, key=lambda c: ends[c])
+    if starts and starts.get("expr"):
+        walks = [reads(db, expr=starts["expr"], here=starts.get("here") or sheet)]
+    elif starts and starts.get("cells"):
+        walks = [reads(db, cells=[starts["cells"][c]]) for c in dict.fromkeys((first, last)) if c in starts["cells"]]
+    else:
+        walks = []
+    read = {ref: n for w in walks for ref, n in w.items()}
+    # the dates the factors read first (the fit picks the valuation date among them), then any date cell by its label
+    walked = [{"ref": ref, "value": n["value"]} for ref, n in read.items() if dcf._as_date(n["value"])]
+    for vd_c in walked + [c for c in dcf.candidate_cells(db, "date", 20) if c["ref"] not in read]:
+        vd = dcf._as_date(vd_c["value"])
+        if not vd or ends[first] <= vd:
+            continue
+        for timing in dcf.TIMINGS:
+            for dc in dcf.DAY_COUNTS:
+                # back-solve the rate from the first live factor, then check every factor
+                probe = dcf.factors(ends, vd, 0.1, timing, dc, td)
+                t = math.log(probe[first]) / math.log(1 / 1.1)
+                rate = theirs[first] ** (-1 / t) - 1
+                ours = dcf.factors(ends, vd, rate, timing, dc, td)
+                if all(abs(ours[c] - theirs[c]) < 1e-9 for c in ends if c in theirs):
+                    src = source_rate(db, walks, rate) if walks else None
+                    hint = None if src else next((r["ref"] for r in dcf.candidate_cells(db, "rate", 40)
+                                                  if abs(dcf._num(r["value"]) - rate) < 1e-9), None)
+                    return {"rate": src["cell"] if src else round(rate, 12), "rate_source": src,
+                            "rate_note": None if src else "not sourced: " + (
+                                "no cell the factors read holds it" if walks else "the factors' formulas weren't found")
+                            + (f" ({hint} holds the same number, but the factors don't read it)" if hint else ""),
+                            "valuation_date": vd_c["ref"], "valuation_date_sourced": vd_c["ref"] in read,
+                            "timing": timing, "day_count": dc,
+                            "terminal_date": td.isoformat() if td else None, "ends_source": ends_src,
+                            "factor_row": f"{sheet}!r{row} {dcf._row_label(db, sheet, row)}".strip() if row
+                            else "factors computed in the formula"}
+    return None
     last = max(live, key=lambda c: ends[c])
     after = [c for c in ends if ends[c] > ends[last]]
     td = ends[last] if after and all(c in theirs and not theirs[c] for c in after) else None  # zeros seen, not unseen

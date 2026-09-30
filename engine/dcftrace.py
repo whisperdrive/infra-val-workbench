@@ -180,10 +180,12 @@ def _range(sheet, row, c1, c2) -> str:
     return f"{sheet}!{dcf._addr(c1, row)}:{dcf._addr(c2, row)}"
 
 
-def _method(db, factors: dict[int, float], sheet: str, cols: list[int], dates: str | None = None) -> dict | None:
-    """Rate, valuation date, convention and cut-off that reproduce these factors (valuation.read_factors)."""
+def _method(db, factors: dict[int, float], sheet: str, cols: list[int], dates: str | None = None,
+            starts: dict | None = None) -> dict | None:
+    """Rate, valuation date, convention and cut-off that reproduce these factors (valuation.read_factors), the rate
+    and the date sourced from the cells the factors' formulas read (starts)."""
     try:
-        return valuation.read_factors(db, None, cols, theirs=factors, sheet=sheet, dates=dates)
+        return valuation.read_factors(db, None, cols, theirs=factors, sheet=sheet, dates=dates, starts=starts)
     except (ValueError, ZeroDivisionError):
         return None
 
@@ -205,6 +207,7 @@ def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict 
                 cf, fac_row = a, b
                 fv = list(_values(db, *fac_row).values())
                 fac = {c: fv[i] if i < len(fv) else 0.0 for i, c in enumerate(range(cf[2], cf[3] + 1))}
+                starts = {"cells": {c: (fac_row[0], fac_row[1], fac_row[2] + i) for i, c in enumerate(range(cf[2], cf[3] + 1))}}
                 core.update(kind="sumproduct", what="SUMPRODUCT of a cash-flow row and a discount-factor row",
                             factor_row=_range(*fac_row))
             elif a or b:
@@ -214,6 +217,7 @@ def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict 
                 if len(vec) != len(cols) or not all(0 <= x <= 1.0000001 for x in vec if x):
                     return None
                 fac = dict(zip(cols, map(float, vec)))
+                starts = {"expr": expr, "here": here}
                 core.update(kind="sumproduct", what="SUMPRODUCT of a cash-flow row and factors computed in the formula",
                             factor_expression=expr)
             else:
@@ -221,7 +225,7 @@ def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict 
             flows = _values(db, *cf)
             pv = sum(flows.get(c, 0.0) * f for c, f in fac.items())
             cols = list(range(cf[2], cf[3] + 1))
-            m = _method(db, fac, cf[0], cols)
+            m = _method(db, fac, cf[0], cols, starts=starts)
             core.update(cashflow=_range(*cf), pv=pv, factors=fac, method=m)
             if m:
                 core["inputs"] = {"cashflow": [_range(*cf)], "rate": m["rate"], "valuation_date": m["valuation_date"],
@@ -243,14 +247,15 @@ def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict 
             d0 = dates[0]
             fac = {c: (1 + rate) ** (-((d - d0).days / 365)) if d else 0.0 for c, d in zip(vcols, dates)}
             pv = sum(flows.get(c, 0.0) * f for c, f in fac.items())
-            rate_ref = args[0].lstrip("+") if dcf._ref(args[0], here) else rate
-            if isinstance(rate_ref, str) and "!" not in rate_ref:
-                rate_ref = f"{here}!{rate_ref}"
+            src = valuation.source_rate(db, [valuation.reads(db, expr=args[0], here=here)], rate)
+            rate_ref = src["cell"] if src else rate
             first = flows.get(vcols[0], 0.0)
             core.update(kind="xnpv", what="XNPV: actual/365 from the first date", cashflow=_range(*vr), dates=_range(*dr),
                         rate=rate, valuation_date=d0.isoformat(), pv=pv, factors=fac,
-                        method={"rate": rate_ref, "valuation_date": _a1(dr[0], dr[1], dr[2]), "timing": "end",
-                                "day_count": "actual/365", "terminal_date": None})
+                        method={"rate": rate_ref, "rate_source": src, "rate_note": None if src else
+                                "not sourced: no cell the XNPV reads holds it", "valuation_date": _a1(dr[0], dr[1], dr[2]),
+                                "valuation_date_sourced": True, "timing": "end", "day_count": "actual/365",
+                                "terminal_date": None})
             core["inputs"] = {"cashflow": [_range(*vr)], "dates": _range(*dr), "rate": rate_ref,
                               "valuation_date": _a1(dr[0], dr[1], dr[2]), "timing": "end", "day_count": "actual/365",
                               "terminal_date": None, "compare_to": core["cell"] if whole else None,
@@ -293,7 +298,8 @@ def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict 
                 return None
             cf_row, flows, fac = best
             cols = list(range(pr[2], pr[3] + 1))
-            m = _method(db, fac, pr[0], cols)  # the factors seen: a period with no cash flow shows none
+            m = _method(db, fac, pr[0], cols, starts={"cells": {c: (pr[0], pr[1], c) for c in cols}})  # the factors seen:
+            # a period with no cash flow shows none
             core.update(kind="pv row", what="SUM of a present-value row (each column a cash flow times a factor)",
                         cashflow=_range(*cf_row), pv_row=_range(*pr), pv=sum(pvv.values()), factors=fac, method=m)
             if m:

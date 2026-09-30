@@ -976,6 +976,7 @@ function viewRebuild() {
     <div class="tile"><b>${esc(O.roll?.prior_valuation_date || "–")}</b><span>last year's valuation date</span></div>
   </div>
   ${R?.tie ? tieCard(R) : ""}
+  ${R?.rates ? ratesCard(R) : ""}
   ${R?.reconcile ? reconcileCard(R) : ""}
   ${R?.assumptions ? assumptionsCard(R) : ""}
   ${equityPickCard()}
@@ -991,6 +992,25 @@ function tieCard(R) {
     <div class="scroll"><table><thead><tr><th></th><th class="num">The report</th><th class="num">As Excel saved</th><th class="num">Rebuilt in Python</th></tr></thead><tbody>${row("low", R.tie.low)}${row("high", R.tie.high)}
     <tr class="tot"><td>Mid</td><td class="num">${vN(R.values.report.mid)}</td><td class="num">${vN((R.tie.low.saved + R.tie.high.saved) / 2)}</td><td class="num">${vN(R.values.rebuilt.mid)}</td></tr></tbody></table></div>
     ${(R.head?.why || []).length ? `<p class="small muted" style="margin:8px 0 0">${esc(R.head.why.join("; "))}.</p>` : ""}</div>`;
+}
+function ratesCard(R) {
+  const Q = R.rates, rep = Q.report || [];
+  const li = (ok, text) => `<li class="${ok === true ? "" : ok === false ? "no" : "unk"}">${text}</li>`;
+  const one = end => {
+    const r = Q.ends[end] || {}, s = r.sighted;
+    const head = `<h3 style="font-size:14px;margin:0 0 6px">${end === "low" ? "The low (at the higher rate)" : "The high (at the lower rate)"}</h3>`;
+    if (r.rate == null) return `<div>${head}<p class="small muted">${esc(r.why || "No discounting under it could be recomputed.")}</p></div>`;
+    const pct = `${(100 * r.rate).toFixed(2)}%`;
+    return `<div>${head}<div style="font-size:20px;font-weight:600">${pct} ${s ? `<span class="mono small muted">${esc(s.cell)}</span>` : `<span class="pill warn">not sourced</span>`}</div>
+      ${s ? `<p class="small" style="margin:4px 0 8px">${esc(s.label || "")}${s.heading ? `, under <b>${esc(s.heading)}</b>` : ""}: ${s.input ? "an input, typed in" : `a formula, <span class="mono">${esc(s.formula || "")}</span>`}<br><span class="muted">Read as ${s.chain.map(c => `<span class="mono">${esc(c)}</span>`).join(" → ")}</span></p>` : `<p class="small muted" style="margin:4px 0 8px">${esc(r.note || "")}</p>`}
+      <ul class="checks">
+        ${li(r.sourced, r.sourced ? `Sourced: the factors read this cell, the first and the last period's alike${r.discountings > 1 ? ` (${r.discountings} discountings${r.cells?.length > 1 ? `, reading ${r.cells.map(esc).join(" and ")}` : ""})` : ""}` : `Not sourced to a cell: ${esc(r.note || "")}`)}
+        ${li(r.reproduced, `Every discount factor recomputed at ${pct} matches the model's`)}
+        ${li(r.ties, r.report ? `The report's ${esc(r.report)}${rep.length > 1 ? ` (the ${end === "low" ? "higher" : "lower"} of ${rep.map(esc).join(" and ")})` : ""}${r.ties === false ? ": doesn't match" : ""}` : "The report's rate: not found among the key facts")}
+      </ul></div>`;
+  };
+  return `<div class="card" id="ratesCard"><h2>Discount rate: sourced and checked</h2><p class="sub">Each end's rate is the cell its discount factors read, found by following their formulas, not by looking for the number; then checked again against the factors and the report. A rate no cell holds is shown as not sourced and comes to you.</p>
+    <div class="grid2">${one("low")}${one("high")}</div></div>`;
 }
 function reconcileCard(R) {
   const C = R.reconcile, u = R.head?.units || "";
@@ -1015,8 +1035,8 @@ function assumptionsCard(R) {
     if (!A) return `<div><h3 style="font-size:14px;margin:0 0 6px">${end}</h3><p class="small muted">No discounting under it could be recomputed.</p></div>`;
     const others = rows.filter(r => r !== A && !r.error);
     return `<div><h3 style="font-size:14px;margin:0 0 6px">${end === "low" ? "The low" : "The high"} <span class="mono small muted">${esc(R.where[end])}</span></h3><dl class="kv">
-      <dt>Discount rate</dt><dd>${vPct(A.rate)} <span class="small muted">${esc(A.rate_source || "")}</span></dd>
-      <dt>Valuation date</dt><dd>${esc(A.valuation_date)} <span class="small muted">${esc(A.valuation_date_source || "")}</span></dd>
+      <dt>Discount rate</dt><dd>${vPct(A.rate)} <span class="small muted">${esc(A.rate_source || "")}</span>${A.rate_sighted ? "" : ` <span class="pill warn">not sourced</span>`}</dd>
+      <dt>Valuation date</dt><dd>${esc(A.valuation_date)} <span class="small muted">${esc(A.valuation_date_source || "")}${A.valuation_date_sourced === false ? " (found by its label: the factors don't read it)" : ""}</span></dd>
       <dt>Discounting</dt><dd>${esc(TIMING[A.timing] || A.timing)}, ${esc(DAYCOUNT[A.day_count] || A.day_count)}</dd>
       <dt>Cut-off</dt><dd>${esc(A.terminal_date || "none")}</dd>
       <dt>Forecast</dt><dd>${A.periods} periods, ${esc(A.first_period)} to ${esc(A.last_period)}</dd>

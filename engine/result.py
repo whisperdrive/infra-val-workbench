@@ -588,14 +588,53 @@ def assumptions(summary: dict, where: dict) -> dict:
                 rows.append({"cell": c["cell"], "error": str(e)})
                 continue
             tv = [p for p in (c.get("parts") or []) if TV_WORDS.search(p.get("label") or "")]
+            m = c.get("method") or {}
             rows.append({"cell": c["cell"], "kind": c.get("kind"), "label": c.get("cashflow_label"), **ov._brief(r),
                          "rate_source": c["inputs"].get("rate") if isinstance(c["inputs"].get("rate"), str) else
-                         (c.get("method") or {}).get("rate_note") or "a constant",
+                         m.get("rate_note") or "a constant",
+                         "rate_sighted": m.get("rate_source"), "rate_note": m.get("rate_note"),
                          "valuation_date_source": c["inputs"].get("valuation_date"),
+                         "valuation_date_sourced": m.get("valuation_date_sourced"),
                          "cashflow": c["inputs"]["cashflow"], "parts": [p.get("label") for p in c.get("parts") or []],
                          "terminal_value": tv[0]["total"] if tv else None, "terminal_value_row": tv[0]["row"] if tv else None})
         out[end] = rows
     return out
+
+
+def rates(asm: dict, facts: list[dict]) -> dict:
+    """Each end's discount rate, sighted, sourced and checked again, not inferred:
+      sourced    the cell the discountings' factors read, found by following their formulas from the first and the
+                 last period's factor (valuation.read_factors); a rate no cell the factors read holds isn't sourced
+      sighted    that cell's value, its line item and column heading, and whether it's an input or a formula
+      reproduced every discount factor recomputed at that rate matches the model's (what the fit requires)
+      report     the report's rate for that end: the low value is at the higher rate, the high value at the lower
+    -> {"ends": {end: {...}}, "report": [texts], "ok": bool | None}."""
+    f = next((x for x in facts if x.get("key") == "discount_rate" and x.get("status") != "rejected"), None)
+    v = (f.get("final") or f) if f else {}
+    said = [(float(n.rstrip("%")), t) for t in (v.get("low_text"), v.get("high_text")) if t
+            for n in keyfacts.numbers(keyfacts._unrange(t))[:1]]
+    if not said and v.get("value_text"):
+        said = [(float(n.rstrip("%")), n) for n in keyfacts.numbers(keyfacts._unrange(v["value_text"]))]
+    said = sorted(set(said))
+    want = {"low": said[-1] if said else None, "high": said[0] if said else None}  # the low value: the higher rate
+    ends = {}
+    for end in ("low", "high"):
+        rows = [r for r in asm.get(end) or [] if not r.get("error") and r.get("rate") is not None]
+        if not rows:
+            ends[end] = {"ok": None, "why": "no discounting under it could be recomputed"}
+            continue
+        top = next((r for r in rows if r.get("parts")), rows[0])
+        s_ = top.get("rate_sighted")
+        sourced = all(r.get("rate_sighted") for r in rows)
+        cells = sorted({r["rate_sighted"]["cell"] for r in rows if r.get("rate_sighted")})
+        rep = want[end]
+        ties = _ties(100 * top["rate"], rep[1]) if rep else None
+        ends[end] = {"rate": top["rate"], "cell": s_["cell"] if s_ else None, "sighted": s_, "sourced": sourced,
+                     "note": None if sourced else next(r.get("rate_note") for r in rows if not r.get("rate_sighted")),
+                     "cells": cells, "discountings": len(rows), "reproduced": True,
+                     "report": rep[1] if rep else None, "ties": ties, "ok": sourced and ties is not False}
+    oks = [e["ok"] for e in ends.values() if e.get("ok") is not None]
+    return {"ends": ends, "report": [t for _, t in said], "ok": all(oks) if oks else None}
 
 
 # ---- all of it --------------------------------------------------------------------------------------------------
@@ -634,8 +673,9 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
         rec = {"rows": [], "error": f"{type(ex).__name__}: {ex}"}
     ch = ov.deep(chart, sess, summary, where, figs, fy_end)
     this = {e: unit((figs.get("this_year") or {}).get(where[e])) for e in ("low", "high")} if figs.get("this_year") else None
+    asm = assumptions(summary, where)
     return {"head": head, "where": where, "tie": tie, "figures": figs, "bridges": br, "chart": ch, "reconcile": rec,
-            "assumptions": assumptions(summary, where),
+            "assumptions": asm, "rates": rates(asm, facts),
             "values": {"report": {e: head[e] for e in ("low", "mid", "high")},
                        "rebuilt": {"low": tie["low"]["rebuilt"], "high": tie["high"]["rebuilt"],
                                    "mid": (tie["low"]["rebuilt"] + tie["high"]["rebuilt"]) / 2

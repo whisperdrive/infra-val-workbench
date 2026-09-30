@@ -726,6 +726,17 @@ def _result_job(eid: int, key: str):
                           "title": f"{r['label']} doesn't reconcile to the report",
                           "detail": "; ".join(bad) or "Python couldn't split the value this way",
                           "go": {"step": "rebuild", "anchor": "reconcileCard"}})
+    for end, r in ((res.get("rates") or {}).get("ends") or {}).items():
+        at = f"{100 * r['rate']:.2f}%" + (f" in {r['cell']}" if r.get("cell") else "") if r.get("rate") is not None else ""
+        if r.get("sourced") is False:
+            needs.append({"id": f"rate-{end}", "stage": "result", "severity": "check",
+                          "title": f"The {end} end's discount rate ({at}) isn't sourced to a cell",
+                          "detail": r.get("note") or "", "go": {"step": "rebuild", "anchor": "ratesCard"}})
+        elif r.get("ties") is False:
+            needs.append({"id": f"rate-{end}", "stage": "result", "severity": "check",
+                          "title": f"The {end} end's discount rate ({at}) isn't the report's {r['report']}",
+                          "detail": "the value at that end is at the " + ("higher" if end == "low" else "lower") +
+                                    " of the report's rates", "go": {"step": "rebuild", "anchor": "ratesCard"}})
     for end in ("low", "high"):
         t = res["tie"][end]
         if not t["ok"]:

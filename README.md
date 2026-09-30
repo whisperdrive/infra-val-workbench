@@ -36,7 +36,10 @@ takes it from there:
    opinion. It confirms the roles only when the evidence supports it.
 5. **Rebuilds last year in Python.** The overlay's formulas are compiled to a module and checked cell by cell against
    Excel. The report's equity value is found in it and tied; the Python rebuild feeds it again from last year's client
-   model. What the report discloses of the value (the terminal value, the PV of the forecast and of the terminal value,
+   model. Each end's discount rate is sourced, not inferred: the cell its discount factors read, found by following
+   their formulas from the first and the last period's factor, then checked against the factors and the report's
+   rate for that end (the low value at the higher rate); a rate no cell holds comes to you. What the report
+   discloses of the value (the terminal value, the PV of the forecast and of the terminal value,
    the value of franking credits and its share) is reconciled to the same split of the overlay's discountings.
 6. **Rolls forward onto this year's client model.** Rows are found by label, history and numbers, with row agents for
    the ones in doubt. This year's value is shown only where the rows its cash flows come from were found.

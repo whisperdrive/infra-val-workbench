@@ -264,6 +264,11 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     assert this["pv_tv"] and this["pv_forecast"] and abs(this["pv"] - (this["pv_tv"] + this["pv_forecast"])) < 1e-6, this
     rates = {e: next(a["rate_source"] for a in res["assumptions"][e] if a.get("parts")) for e in ("low", "high")}
     assert rates == {"low": "Val_Inputs!C5", "high": "Val_Inputs!E5"}, rates
+    # each end's rate sighted, sourced by following the factors' formulas, and checked again against the report
+    rc = res["rates"]["ends"]
+    assert res["rates"]["ok"] and [(rc[e]["cell"], rc[e]["sourced"], rc[e]["ties"], rc[e]["report"], rc[e]["sighted"]["heading"],
+                                    rc[e]["sighted"]["input"]) for e in ("low", "high")] == \
+        [("Val_Inputs!C5", True, True, "7.75%", "Low", True), ("Val_Inputs!E5", True, True, "7.25%", "High", True)], rc
     assert not [n for n in orc.view(eid)["needs"] if n["severity"] == "block"]
     log = orc.history(eid, limit=200)
     assert any(h["stage"] == "roles" and h["event"] == "done" for h in log) and \
