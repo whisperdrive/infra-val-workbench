@@ -80,15 +80,25 @@ on. Code, not the prompt, keeps it from going round in circles:
 
 ## The page
 
-- **Workbench**: files, roles, the valuation dates across the files (the report's the anchor: the overlay's, last
-  year's and this year's client models', the roll's), the engagement's profile, where the run is, what needs you,
-  and what the orchestrator did.
-- **The report**: the key facts, their checks, how each looks on its image, the agents' decisions, and the tables read
-  from their images beside those images.
-- **Rebuild**: the tie to the report, the model's inputs sourced and checked, the reconciliation of what the report
-  discloses, and the model's assumptions under the equity value.
-- **Result**: the value bridge and the cash-flow chart.
-- **Map**: how the files link up and what changed in the client model, with the detail a click away.
+A strip at the top of every page shows the seven stages on a track, each with what it found, and the mascot at the
+one that matters. Beside it is the one thing that matters now: the files to upload, what needs you, how long is left,
+or the answer (last year's equity value to this year's, with this year's low to high). A stage is a link to its card.
+Once a run is finished the app opens on the Result.
+
+- **Run**: the four files as four slots (each file, how it was read, its role and who confirmed it, its valuation
+  date where the roll-forward reads it), the valuation dates across the files, and, folded, changing the roles, the
+  checks behind them, the engagement's profile and what happened. Upload files opens a window to drop or browse; a
+  file dropped anywhere on the page opens it too.
+- **Report**: what the report says (the equity value low / mid / high, the valuation date, the discount rate,
+  terminal growth and franking utilisation, each with its page and image check) and how much was checked; a fact that
+  needs you opens in full; every fact and table is folded below.
+- **Rebuild**: the tie to the report and the model inputs sourced and checked; the reconciliation, the assumptions
+  and the Python module folded, each with its result on the fold.
+- **Result**: the value bridge (low, mid, high) and the cash-flow chart, the review, and how the files link up (the
+  map) folded.
+
+Evidence is folded away, never removed. New engagement, Models, the call log and Delete are in the ⋯ menu; Delete asks
+for the engagement's name.
 
 ## Running it
 
@@ -99,7 +109,7 @@ uv run python engine/llm.py     # sign in once (device code)
 uv run uvicorn app.server:app --port 8003
 ```
 
-Then open http://localhost:8003. **Delete**, beside New in the header, removes an engagement and everything worked
+Then open http://localhost:8003. **Delete this engagement**, in the ⋯ menu, removes an engagement and everything worked
 out for it (its reports and key facts, the models only it uses, the Python overlay and your picks on it, the run
 log and call log), so the same files can be uploaded and run again from the start; a model another engagement also
 uses stays, and the report-reading rules learned so far stay. It waits until nothing of the engagement is running. Files stay on this machine, in `uploads/` and `out/`, both git-ignored. Model calls go

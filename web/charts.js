@@ -43,9 +43,21 @@ function chartConfig(spec, d, kind, o) {
       steps.push(v);
     });
     const labels = [...d.labels];
-    if (!tot.size) { bars.push([0, run]); colours.push(o.total); steps.push(run); labels.push("Total"); }
-    return base([{label: s.name, data: bars, backgroundColor: colours, borderWidth: 0, steps}], labels,
-      {x, y: axis({beginAtZero: true})}, {legend: false, tip: c => ` ${c.label}: ${o.fmt(c.dataset.steps[c.dataIndex])}${o.unit}`});
+    if (!tot.size) { bars.push([0, run]); colours.push(o.total); steps.push(run); labels.push("Total"); tot.add(labels.length - 1); }
+    // every bar named (a long name on two lines) and its value written above it: a bridge is read step by step
+    const wrap = l => { if (typeof l !== "string" || l.length <= 10 || !l.includes(" ")) return l;
+      const w = l.split(" "), half = Math.ceil(w.length / 2); return [w.slice(0, half).join(" "), w.slice(half).join(" ")]; };
+    const values = {id: "wfValues", afterDatasetsDraw(chart) {
+      const ctx = chart.ctx, meta = chart.getDatasetMeta(0);
+      ctx.save(); ctx.font = `600 11.5px ${o.font?.family || "sans-serif"}`; ctx.fillStyle = o.ink; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+      meta.data.forEach((bar, i) => { const v = steps[i]; if (v == null) return;
+        ctx.fillText(tot.has(i) ? o.fmt(v) : (v > 0 ? "+" : "") + o.fmt(v), bar.x, Math.min(bar.y, bar.base) - 4); });
+      ctx.restore(); }};
+    const cfg = base([{label: s.name, data: bars, backgroundColor: colours, borderWidth: 0, steps}], labels.map(wrap),
+      {x: {...x, ticks: {...x.ticks, autoSkip: false, maxRotation: 0}}, y: axis({beginAtZero: true, grace: "10%"})},
+      {legend: false, tip: c => ` ${[].concat(c.label).join(" ")}: ${o.fmt(c.dataset.steps[c.dataIndex])}${o.unit}`});
+    cfg.plugins = [...cfg.plugins, values];
+    return cfg;
   }
 
   const stacking = ["stacked", "area", "combo"].includes(kind);

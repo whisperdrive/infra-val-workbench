@@ -86,26 +86,26 @@ footer.disclaimer b { color: var(--ink); font-weight: 600; }
 .popover { position: absolute; right: 24px; top: 58px; z-index: 30; background: var(--surface); color: var(--ink); border: 1px solid var(--rule-strong);
   border-radius: 6px; padding: 12px 14px; width: 260px; display: grid; gap: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
 .popover label { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.menu-list { width: 240px; padding: 5px; gap: 0; }
+.menu-list button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 8px 10px; border-radius: 4px; cursor: pointer; color: var(--ink); font-size: 14px; }
+.menu-list button:hover { background: var(--raised); }
+.menu-list .danger { color: var(--bad); border-top: 1px solid var(--rule); border-radius: 0 0 4px 4px; margin-top: 4px; }
+.btn.danger { background: #a3261c; border-color: #a3261c; color: #fff; font-weight: 600; }
+dialog#delDlg { border: 1px solid var(--rule-strong); border-radius: 10px; background: var(--surface); color: var(--ink); padding: 0; width: min(520px, calc(100vw - 32px)); }
+dialog#delDlg .dlg-body { gap: 12px; }
 
-/* the shell: navigation on the left, the page */
-.shell { display: grid; grid-template-columns: 210px minmax(0, 1fr); max-width: 1600px; margin: 0 auto; }
+/* the pages: tabs in the header, under the brand row */
+.tabs { display: flex; gap: 2px; max-width: 1360px; margin: 0 auto; padding: 0 24px; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs button { background: none; border: 0; border-bottom: 3px solid transparent; color: var(--bar-muted); font-size: 14px; font-weight: 600;
+  padding: 7px 14px 8px; cursor: pointer; white-space: nowrap; display: inline-flex; gap: 7px; align-items: center; }
+.tabs button:hover { color: var(--bar-ink); }
+.tabs button.on { color: var(--bar-ink); border-bottom-color: var(--accent); }
+.tabs .cnt { background: var(--warn-bg); color: var(--warn); border-radius: 99px; font-size: 11.5px; padding: 0 7px; line-height: 18px; }
+.tabs .cnt.bad { background: var(--bad-bg); color: var(--bad); }
+.shell { max-width: 1360px; margin: 0 auto; }
 .content { min-width: 0; }
-nav.side { position: sticky; top: 62px; align-self: start; max-height: calc(100vh - 62px); overflow-y: auto; padding: 18px 10px 30px 18px; }
-nav.side button { display: flex; width: 100%; gap: 8px; align-items: center; background: none; border: 0; border-radius: 4px; padding: 7px 8px;
-  color: var(--ink); cursor: pointer; font-size: 14px; text-align: left; }
-nav.side button:hover { background: var(--raised); }
-nav.side button.on { background: var(--surface); box-shadow: inset 3px 0 0 var(--accent); font-weight: 600; }
-nav.side button:disabled { opacity: .45; cursor: not-allowed; }
-nav.side .nm { flex: 1; }
-nav.side .cnt { background: var(--warn-bg); color: var(--warn); border-radius: 99px; font-size: 11.5px; padding: 0 7px; font-weight: 600; }
-nav.side .cnt.bad { background: var(--bad-bg); color: var(--bad); }
-@media (max-width: 900px) { .shell { grid-template-columns: minmax(0, 1fr); } nav.side { position: static; max-height: none; display: flex; flex-wrap: wrap; gap: 4px; padding: 10px 16px; }
-  nav.side button { width: auto; } }
-.dot { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #74747f; display: inline-grid; place-items: center; font-size: 11px; font-weight: 600; flex: none; }
-.dot.done { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--on-accent); }
-.dot.work { border-color: var(--blue); color: var(--blue); animation: glow 1.8s ease-out infinite; }
-.dot.done.flag, .dot.you { background: var(--warn-bg); border-color: #e0b400; color: var(--warn); }
-.dot.bad { background: var(--bad-bg); border-color: var(--bad); color: var(--bad); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 main { max-width: 1360px; margin: 0; padding: 22px 24px 60px; display: grid; gap: 18px; }
 .lede { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
@@ -158,9 +158,32 @@ tr.flash > td { background: var(--info-bg); transition: background .4s; }
 .drop { border: 2px dashed var(--rule-strong); border-radius: 6px; padding: 22px; text-align: center; background: var(--raised); cursor: pointer; }
 .drop.over { border-color: var(--accent); background: var(--info-bg); }
 .drop b { font-size: 16px; }
-.slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 10px; margin-top: 14px; text-align: left; }
-.slot { border: 1px solid var(--rule); border-radius: 4px; padding: 9px 12px; background: var(--surface); font-size: 13px; }
-.slot b { display: block; font-size: 13.5px; }
+.slotrow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 1100px) { .slotrow { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .slotrow { grid-template-columns: minmax(0, 1fr); } }
+.slot { border: 1px solid var(--rule); border-radius: 6px; padding: 10px 12px; background: var(--raised); display: grid; gap: 5px; align-content: start; min-width: 0; font-size: 13px; }
+.slot .role { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+.slot .fn { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
+.slot.vacant { border-style: dashed; background: transparent; color: var(--muted); }
+.slot-top { justify-content: space-between; flex-wrap: nowrap; }
+.slot details > summary { font-size: 12.5px; }
+.loose { margin-top: 10px; display: grid; gap: 6px; }
+.menu { position: relative; }
+.menu > summary { list-style: none; cursor: pointer; padding: 0 7px; border-radius: 4px; color: var(--muted); font-size: 16px; line-height: 20px; }
+.menu > summary::-webkit-details-marker { display: none; }
+.menu[open] > summary, .menu > summary:hover { background: var(--code-bg); color: var(--ink); }
+.menu-pop { position: absolute; right: 0; top: 24px; z-index: 15; background: var(--surface); border: 1px solid var(--rule-strong); border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.14); padding: 4px; display: grid; min-width: 190px; }
+.menu-pop button { background: none; border: 0; text-align: left; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 13px; color: var(--ink); white-space: nowrap; }
+.menu-pop button:hover { background: var(--raised); }
+details.fold { padding: 12px 18px; }
+details.fold > summary { list-style: none; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; color: var(--ink); font-size: 14px; }
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::before { content: "▸"; color: var(--muted); display: inline-block; width: 10px; transition: transform .15s; }
+details.fold[open] > summary::before { transform: rotate(90deg); }
+details.fold > summary .ft { font-weight: 600; }
+details.fold > summary .fm { font-size: 13px; color: var(--muted); }
+details.fold > .fold-body { margin-top: 12px; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 .tile { border: 1px solid var(--rule); border-radius: 4px; padding: 10px 14px; background: var(--surface); }
 .tile b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; line-height: 1.2; }
@@ -171,6 +194,16 @@ tr.flash > td { background: var(--info-bg); transition: background .4s; }
 .head .k { font-size: 12.5px; color: var(--muted); }
 .head .v { font-size: 26px; font-weight: 600; margin: 2px 0; font-variant-numeric: tabular-nums; }
 .head .s { font-size: 12.5px; color: var(--muted); }
+.eqrow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; margin-top: 12px; }
+.eqrow > div { padding: 10px 14px; border-right: 1px solid var(--rule); display: grid; min-width: 0; }
+.eqrow > div:last-child { border-right: 0; }
+.eqrow .mid { background: var(--info-bg); }
+.eqrow .k { font-size: 12.5px; color: var(--muted); }
+.eqrow b { font-size: 22px; font-variant-numeric: tabular-nums; }
+.eqrow .mid b { font-size: 26px; }
+.conf { display: flex; gap: 6px 20px; flex-wrap: wrap; font-size: 13.5px; margin-top: 12px; padding: 9px 12px; border-radius: 6px; background: var(--raised); border: 1px solid var(--rule); }
+.conf b { font-variant-numeric: tabular-nums; }
+.okt { color: var(--ok); font-weight: 600; } .warnt { color: var(--warn); font-weight: 600; } .infot { color: var(--info); font-weight: 600; }
 .checks { list-style: none; padding: 0; margin: 0; font-size: 12.5px; }
 .checks li::before { content: "✓ "; color: var(--ok); font-weight: 700; }
 .checks li.no::before { content: "✗ "; color: var(--bad); }
@@ -234,30 +267,45 @@ details > summary { cursor: pointer; color: var(--link); font-size: 13px; }
 .copy-panel { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .copy-panel textarea { height: 140px; }
 
-/* the run: the stages, what's happening now, what needs you, the run log */
-.nowbox { max-width: 1360px; margin: 16px 0 0; padding: 0 24px; }
-.pipe { list-style: none; margin: 0; padding: 12px 14px 10px; display: flex; align-items: flex-start; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px 6px 0 0; overflow-x: auto; }
-.pipe > li { flex: none; }
-.pipe > li.link { flex: 1 1 24px; min-width: 14px; height: 2px; background: var(--rule-strong); margin: 15px 2px 0; }
-.pipe > li.link.done { background: var(--accent); }
-.pipe > li.link.flowing { background: repeating-linear-gradient(90deg, var(--blue) 0 6px, transparent 6px 12px); background-size: 12px 2px; animation: flow .7s linear infinite; }
-.st { display: grid; justify-items: center; gap: 2px; background: none; border: 0; cursor: pointer; padding: 2px 6px; min-width: 104px; text-align: center; color: inherit; }
-.st:hover .nm { text-decoration: underline; }
-.st .ic { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; border: 2px solid var(--rule-strong); font-weight: 700; font-size: 12.5px; position: relative; color: var(--muted); background: var(--surface); }
-.st.done .ic { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--on-accent); }
-.st.you .ic { border-color: #e0b400; color: var(--warn); background: var(--warn-bg); animation: glowy 1.8s ease-out infinite; }
-.st.error .ic { border-color: var(--bad); color: var(--bad); background: var(--bad-bg); }
-.st.running .ic { border-color: var(--rule); }
-.st.running .ic::after { content: ""; position: absolute; inset: -2px; border-radius: 50%; border: 2px solid var(--blue); border-top-color: transparent; border-right-color: transparent; animation: spin .9s linear infinite; }
-.st .nm { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
-.st .ln { font-size: 11.5px; color: var(--muted); max-width: 150px; line-height: 1.3; }
-.st.you .ln { color: var(--warn); font-weight: 600; }
-.now-row { display: flex; gap: 10px 18px; align-items: center; flex-wrap: wrap; justify-content: space-between; padding: 10px 14px; background: var(--raised); border: 1px solid var(--rule); border-top: 0; border-radius: 0 0 6px 6px; }
-.live { flex: 1 1 420px; min-width: 0; }
-.live-head { display: flex; gap: 8px; align-items: center; font-size: 13.5px; flex-wrap: wrap; }
-.todo { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.dot-idle { width: 8px; height: 8px; border-radius: 50%; background: var(--rule-strong); display: inline-block; }
-.pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); animation: pulse 1s infinite alternate; flex: none; }
+/* the hero: the stages on a track (the only picture of the run), and what's next beside it */
+.nowbox { margin: 18px 0 0; padding: 0 24px; }
+.hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, 330px); background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; position: relative; }
+.trackwrap { position: relative; min-width: 0; }
+.track { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); padding: 34px 8px 14px; }
+.stg { position: relative; display: grid; justify-items: center; align-content: start; gap: 3px; background: none; border: 0; padding: 0 4px;
+  cursor: pointer; color: inherit; text-align: center; font: inherit; min-width: 0; border-radius: 4px; }
+.stg::before { content: ""; position: absolute; top: 13px; right: 50%; width: 100%; height: 3px; background: var(--rule); }
+.stg:first-child::before { display: none; }
+.stg.reached::before { background: var(--accent); }
+.stg.flowing::before { background: repeating-linear-gradient(90deg, var(--accent) 0 8px, transparent 8px 14px); background-size: 14px 3px; animation: flow .8s linear infinite; }
+.stg.gated::before { background: repeating-linear-gradient(90deg, var(--rule-strong) 0 3px, transparent 3px 7px); }
+.stg .ic { position: relative; z-index: 1; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--rule-strong); background: var(--surface);
+  display: grid; place-items: center; font-size: 12.5px; font-weight: 700; color: var(--muted); }
+.stg.done .ic { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--on-accent); }
+.stg.look .ic { background: var(--accent-fill); border-color: #e0b400; color: var(--on-accent); box-shadow: 0 0 0 2px var(--warn-bg); }
+.stg.you .ic { background: var(--warn-bg); border-color: #e0b400; color: var(--warn); animation: glowy 1.8s ease-out infinite; }
+.stg.error .ic { background: var(--bad-bg); border-color: var(--bad); color: var(--bad); }
+.stg.running .ic { border-color: var(--accent); background: conic-gradient(var(--accent) calc(var(--p, 0) * 1turn), var(--surface) 0); }
+.stg.running.indet .ic::after { content: ""; position: absolute; inset: -2px; border-radius: 50%; border: 2px solid var(--accent); border-top-color: transparent; border-right-color: transparent; animation: spin .9s linear infinite; }
+.stg .nm { font-size: 12.5px; font-weight: 600; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.stg .ln { font-size: 11.5px; color: var(--muted); line-height: 1.3; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stg.you .ln, .stg.error .ln { color: var(--warn); font-weight: 600; }
+.stg.error .ln { color: var(--bad); }
+.stg:hover .nm { text-decoration: underline; }
+.mascot { position: absolute; top: 4px; width: 32px; height: auto; pointer-events: none; transition: left 1.2s ease-in-out;
+  left: calc(8px + (var(--at, 0) + .5) * (100% - 16px) / 7 - 16px); }
+.hero-side { border-left: 1px solid var(--rule); padding: 14px 16px; background: var(--raised); border-radius: 0 8px 8px 0; display: grid; gap: 6px; align-content: center; min-width: 0; }
+.hero-side .t { font-weight: 600; font-size: 15px; }
+.hero-side .big { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.hero-side .from { font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.hero-line { display: none; }
+.band { position: relative; height: 6px; border-radius: 3px; background: var(--info-bg); margin: 8px 2px 18px; }
+.band i { position: absolute; top: -4px; width: 3px; height: 14px; background: var(--accent-fill); border-radius: 2px; }
+.band span { position: absolute; top: 11px; font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--link); cursor: pointer; font: inherit; font-size: 13px; text-decoration: underline; }
+.needs-pop { position: absolute; right: 10px; top: calc(100% + 6px); z-index: 20; width: min(560px, calc(100vw - 32px)); background: var(--surface);
+  border: 1px solid var(--rule-strong); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 6px; }
+.btn.warn { background: var(--warn-bg); color: var(--warn); border-color: #e0b400; font-weight: 600; }
 .needs { list-style: none; margin: 0; padding: 0; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
 .needs li { border-top: 1px solid var(--rule); padding: 10px 12px; display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: baseline; }
 .needs li:first-child { border-top: 0; }
@@ -271,22 +319,34 @@ details > summary { cursor: pointer; color: var(--link); font-size: 13px; }
 .log li.decide .txt, .log li.verify .txt { color: var(--info); }
 .log li.escalate .txt, .log li.blocked .txt, .log li.failed .txt { color: var(--bad); }
 .log li.person .txt { color: var(--ink); font-weight: 600; }
+.move { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-top: 10px; font-variant-numeric: tabular-nums; }
+.move .from { font-size: 20px; color: var(--muted); } .move .to { font-size: 28px; font-weight: 600; } .move .okt, .move .warnt { font-size: 18px; }
 .bridge td.step { padding-left: 22px; }
 .bridge tr.tot td { background: var(--raised); }
 .lh { display: flex; gap: 6px; align-items: center; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@keyframes flow { to { background-position: 12px 0; } }
+@keyframes flow { to { background-position: 14px 0; } }
 @keyframes pulse { from { opacity: .25; } to { opacity: 1; } }
 @keyframes glow { 0% { box-shadow: 0 0 0 0 rgba(26, 154, 250, .55); } 70%, 100% { box-shadow: 0 0 0 7px rgba(26, 154, 250, 0); } }
 @keyframes glowy { 0% { box-shadow: 0 0 0 0 rgba(224, 180, 0, .6); } 70%, 100% { box-shadow: 0 0 0 7px rgba(224, 180, 0, 0); } }
-@media (prefers-reduced-motion: reduce) { .st.running .ic::after, .pipe > li.link.flowing, .st.you .ic, .dot.work, .pulse { animation: none; } .bar i { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .stg.running .ic::after, .stg.flowing::before, .stg.you .ic, .pulse { animation: none; } .bar i, .mascot { transition: none; } }
 dialog#callsDlg { border: 1px solid var(--rule-strong); border-radius: 8px; background: var(--ground); color: var(--ink); padding: 0; width: min(1100px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
-dialog#callsDlg::backdrop { background: rgb(0 0 0 / .4); }
+dialog#callsDlg::backdrop, dialog#uploadDlg::backdrop, dialog#delDlg::backdrop { background: rgb(0 0 0 / .4); }
+dialog#uploadDlg { border: 1px solid var(--rule-strong); border-radius: 10px; background: var(--ground); color: var(--ink); padding: 0; width: min(920px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
 .dlg-head { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--rule); background: var(--surface); position: sticky; top: 0; z-index: 1; }
 .dlg-head h2 { margin: 0; font-size: 16px; flex: 1; }
 .dlg-body { padding: 16px 18px 22px; display: grid; gap: 16px; }
 .transcript pre { white-space: pre-wrap; word-break: break-word; background: var(--code-bg); padding: 10px 12px; border-radius: 4px; font: 12px/1.5 var(--mono); max-height: 420px; overflow: auto; margin: 4px 0 10px; }
-@media (max-width: 640px) { .hbar, main { padding-left: 16px; padding-right: 16px; } .nowbox { padding: 0 16px; } .st { min-width: 84px; } .log li { grid-template-columns: 50px 1fr; } .log .ev { display: none; } }
+@media (max-width: 640px) { .hbar { flex-wrap: nowrap; gap: 8px; padding: 8px 56px 8px 16px; } .brand .name, .brand .sub, .hctl .lbl, #hdrCtl { display: none; }
+  .brand .logo { height: 30px; } .hctl { flex: 0 1 auto; min-width: 0; } .hctl select { max-width: 100%; min-width: 0; } #themeBtn { top: 9px; }
+  main, .tabs { padding-left: 16px; padding-right: 16px; } .nowbox { padding: 0 16px; } .log li { grid-template-columns: 50px 1fr; } .log .ev { display: none; }
+  .hero { grid-template-columns: minmax(0, 1fr); } .hero-side { border-left: 0; border-top: 1px solid var(--rule); border-radius: 0 0 8px 8px; }
+  .track { padding: 30px 2px 10px; } .stg .nm, .stg .ln { display: none; } .stg .ic { width: 22px; height: 22px; font-size: 11px; } .stg::before { top: 10px; }
+  .mascot { width: 24px; top: 5px; left: calc(2px + (var(--at, 0) + .5) * (100% - 4px) / 7 - 12px); }
+  .hero-line { display: block; padding: 0 12px 10px; font-size: 13px; }
+  .eqrow b { font-size: 18px; } .eqrow .mid b { font-size: 20px; } .eqrow > div { padding: 8px 10px; }
+  table.stack-sm thead { display: none; } table.stack-sm tr { display: block; border-bottom: 1px solid var(--rule); padding: 8px 0; }
+  table.stack-sm td { display: block; border: 0; padding: 3px 0; } table.stack-sm tr:last-child { border-bottom: 0; } }
 </style>
 </head>
 <body>
@@ -296,16 +356,21 @@ dialog#callsDlg::backdrop { background: rgb(0 0 0 / .4); }
       <button class="logo-edit" id="logoEdit" type="button" aria-haspopup="true" aria-expanded="false" title="Change the logo" aria-label="Change the logo">✎</button></div>
     <div class="hsp"></div>
     <div class="hctl">
-      <label for="engSel">Engagement</label><select id="engSel"></select>
-      <button class="btn small" id="newEng" style="background:#2e2e38;color:#fff;border-color:#4a4a57">New</button>
-      <button class="btn small" id="delEng" type="button" hidden title="Delete this engagement and everything worked out for it, to run the same files again from the start" style="background:transparent;color:#ffb4b4;border-color:#6a3a3a">Delete</button>
+      <label for="engSel" class="lbl">Engagement</label><select id="engSel"></select>
     </div>
     <div class="hctl" id="hdrCtl" hidden>
       <button class="chip" id="spend" type="button" title="Tokens, time and the log of every model call">$0.00</button>
-      <button class="hbtn" id="modelsBtn" type="button" aria-haspopup="true" aria-expanded="false" title="Which Azure models extract, review and decide">⚙ Models</button>
+    </div>
+    <div class="hctl"><button class="hbtn" id="menuBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More: new engagement, models, call log, delete">⋯</button></div>
+    <div class="popover menu-list" id="menuPop" hidden role="menu">
+      <button type="button" role="menuitem" id="newEng">New engagement</button>
+      <button type="button" role="menuitem" id="modelsBtn" data-e aria-haspopup="true" aria-expanded="false" title="Which Azure models extract, review and decide">Models…</button>
+      <button type="button" role="menuitem" id="callsBtn" data-e>Tokens and the call log</button>
+      <button type="button" role="menuitem" id="delEng" class="danger" data-e title="Delete this engagement and everything worked out for it, to run the same files again from the start">Delete this engagement…</button>
     </div>
     <button class="hbtn icon" id="themeBtn" type="button" aria-pressed="false"></button>
   </div>
+  <nav class="tabs" id="steps" aria-label="Pages" hidden></nav>
   <div class="accent-rule"></div>
   <div class="popover" id="logoCtl" hidden role="dialog" aria-label="The logo">
     <p class="small" style="margin:0"><b>Your firm's logo</b> goes here, in place of the mascot.</p>
@@ -321,11 +386,19 @@ dialog#callsDlg::backdrop { background: rgb(0 0 0 / .4); }
     <label for="aSel" title="Settles what the extractor and reviewer can't">Arbitrates facts</label><select id="aSel" class="in"></select>
   </div>
 </header>
+<dialog id="delDlg" aria-labelledby="delTitle"><div class="dlg-body">
+  <h2 id="delTitle" style="margin:0;font-size:17px">Delete this engagement?</h2>
+  <p class="small" style="margin:0">Its reports and key facts, the models only it uses (their row maps and identity), the Python overlay and what you picked on it, the run log and the call log all go. The report-reading rules learned so far stay. To run it again from the start, upload the same files to a new engagement. This can't be undone.</p>
+  <label class="small" for="delName">Type its name to confirm: <b id="delNameShow"></b></label>
+  <input type="text" id="delName" autocomplete="off" spellcheck="false">
+  <div class="row" style="justify-content:flex-end"><button class="btn" type="button" id="delCancel">Cancel</button><button class="btn danger" type="button" id="delGo" disabled>Delete</button></div>
+</div></dialog>
+<dialog id="uploadDlg" aria-labelledby="upTitle"><div class="dlg-head"><h2 id="upTitle">Upload the four files</h2><button class="btn small" type="button" id="upClose">Close</button></div><div class="dlg-body" id="upBody"></div></dialog>
 <dialog id="callsDlg" aria-labelledby="callsTitle"><div class="dlg-head"><h2 id="callsTitle">Tokens, time and the call log</h2><button class="btn small" type="button" id="callsClose">Close</button></div><div class="dlg-body" id="callsBody"><p class="muted">Loading…</p></div></dialog>
 <div class="shell" id="shell">
-  <nav class="side" id="steps" aria-label="Engagement"></nav>
-  <div class="content"><div id="now" class="nowbox" hidden aria-live="polite"></div><main id="main"></main></div>
+  <div class="content"><div id="now" class="nowbox" hidden></div><main id="main"></main></div>
 </div>
+<div id="announce" class="sr-only" aria-live="polite"></div>
 <footer class="disclaimer">
   <p><b>Experimental.</b> Infra Val Workbench is a prototype under active development. Its figures, row matches,
     readings of reports and written summaries are produced with automated rules and AI models, can be incomplete or
@@ -386,22 +459,20 @@ async function api(path, opts = {}) {
   return r.json();
 }
 
-// the pages, and which of the orchestrator's stages each shows
-const NAV = [
-  {id: "workbench", name: "Workbench", stages: ["files", "roles"]},
-  {id: "report", name: "The report", stages: ["facts"]},
-  {id: "rebuild", name: "Rebuild", stages: ["rebuild"]},
-  {id: "result", name: "Result", stages: ["rows", "result", "review"]},
-  {id: "map", name: "Map", stages: ["map"]}];
+// the pages, and where each of the orchestrator's stages is shown (the Map is folded into the Result)
+const NAV = [{id: "workbench", name: "Run"}, {id: "report", name: "Report"}, {id: "rebuild", name: "Rebuild"}, {id: "result", name: "Result"}];
 const RAIL = ["files", "facts", "roles", "rebuild", "rows", "result", "review"];  // the Map runs beside, not in line
-const STAGE_PAGE = {files: "workbench", facts: "report", roles: "workbench", rebuild: "rebuild", rows: "result", result: "result", review: "result", map: "map"};
+const RAIL_NAME = {files: "Files", facts: "Key facts", roles: "Roles", rebuild: "Rebuild", rows: "Roll forward", result: "Bridge", review: "Review"};
+const STAGE_PAGE = {files: "workbench", facts: "report", roles: "workbench", rebuild: "rebuild", rows: "result", result: "result", review: "result", map: "result"};
+const STAGE_ANCHOR = {files: "filesCard", facts: "reportCard", roles: "filesCard", rebuild: "tieCard", rows: "rowsCard", result: "bridgeCard", review: "reviewCard", map: "mapFold"};
+const pageOf = s => s === "map" ? "result" : NAV.some(n => n.id === s) ? s : null;
 const ROLE_HELP = {
   prior_report: "Last year's final report: the equity value, the discount rate and the assumptions.",
   prior_model: "The client's model behind last year's valuation.",
   prior_overlay: "Our workings from the client model to the report: a separate workbook, or sheets inside the client model.",
   current_model: "This year's client model, to roll the valuation forward.",
 };
-let CFG, E = null, state = {step: "workbench", factEdit: null, bridgeEnd: "mid"};
+let CFG, E = null, state = {step: null, factEdit: null, bridgeEnd: "mid", needsOpen: false};
 let uploads = [], pollTimer = null;
 
 // ---- boot / navigation -------------------------------------------------------------------------------------
@@ -409,9 +480,22 @@ async function boot() {
   CFG = await api("/api/config");
   for (const id of ["mSel", "rSel", "aSel"]) $("#" + id).innerHTML = CFG.models.map(m => `<option>${esc(m)}</option>`).join("");
   const h = new URLSearchParams(location.hash.slice(1));
-  state.step = NAV.some(n => n.id === h.get("s")) ? h.get("s") : "workbench";
+  state.step = pageOf(h.get("s"));  // none given: where the engagement is decides (landing)
   await loadList(+h.get("e") || null);
 }
+// Where an engagement opens when the link doesn't say: the page of what blocks it, else the answer once there is one,
+// else the Run page
+function landing() {
+  const block = (E.run?.needs || []).find(n => n.severity === "block");
+  if (block) return block.go?.step || STAGE_PAGE[block.stage] || "workbench";
+  return ["done", "attention"].includes(stageOf("result").status) && E.result?.values ? "result" : "workbench";
+}
+window.addEventListener("popstate", async () => {  // Back, Forward, or a link to another page or engagement
+  const h = new URLSearchParams(location.hash.slice(1)), eid = +h.get("e") || null;
+  state.step = pageOf(h.get("s"));
+  if (eid && eid !== E?.id) { $("#engSel").value = eid; await open(eid); }
+  else { state.step ||= "workbench"; render(); }
+});
 async function loadList(select, openOne = true) {
   const list = await api("/api/engagements");
   $("#engSel").innerHTML = list.length ? list.map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join("") : `<option value="">No engagements yet</option>`;
@@ -419,7 +503,11 @@ async function loadList(select, openOne = true) {
   const id = select && list.some(e => e.id === select) ? select : list[0]?.id;
   if (id) { $("#engSel").value = id; await open(id); } else { E = null; render(); }
 }
-async function open(id) { E = await api(`/api/engagements/${id}`); E._fetched = Date.now(); render(); schedule(); spend(); }
+async function open(id) {
+  E = await api(`/api/engagements/${id}`); E._fetched = Date.now();
+  if (!state.step) { state.step = landing(); history.replaceState(null, "", `#e=${id}&s=${state.step}`); }
+  render(); schedule(); spend();
+}
 function editing() {
   const a = document.activeElement;
   return state.factEdit != null || !!(a && a.closest("main") && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
@@ -429,7 +517,7 @@ async function refresh(force = false) {
   const before = JSON.stringify([E.run?.stages, E.run?.needs?.length, E.run?.log?.[0]?.id, E.updated_at]);
   E = await api(`/api/engagements/${E.id}`); E._fetched = Date.now();
   const after = JSON.stringify([E.run?.stages, E.run?.needs?.length, E.run?.log?.[0]?.id, E.updated_at]);
-  if (!force && editing()) { renderSteps(); renderNow(); }
+  if (!force && editing()) { renderTabs(); renderNow(); }
   else if (force || before !== after || filesMoving()) render();
   else { renderNow(); tickTimers(); }
   schedule();
@@ -446,13 +534,22 @@ async function spend() {
     $("#spend").textContent = `$${(s.cost_usd || 0).toFixed(3)} · ${((s.input_tokens || 0) + (s.output_tokens || 0)).toLocaleString()} tokens`;
     $("#spend").title = `Azure model spend for this engagement: ${s.calls || 0} calls (list prices). Click for the call log.`; } catch {}
 }
-$("#engSel").onchange = e => { if (e.target.value) { go(state.step, +e.target.value); open(+e.target.value); } };
-$("#newEng").onclick = () => { E = null; state.step = "workbench"; render(true); };
-$("#delEng").onclick = async () => {
+$("#engSel").onchange = e => { if (e.target.value) { state.step = null; open(+e.target.value); } };
+$("#newEng").onclick = () => { menu(false); E = null; state.step = "workbench"; render(true); };
+$("#delEng").onclick = () => {
   if (!E) return;
-  if (!confirm(`Delete "${E.name}" and everything worked out for it?\n\nIts reports and key facts, the models only it uses (their row maps and identity), the Python overlay and what you picked on it, the run log and the model-call log. The report-reading rules learned so far stay.\n\nTo run it again from the start, upload the same files to a new engagement. This can't be undone.`)) return;
+  menu(false);
+  $("#delNameShow").textContent = E.name; $("#delName").value = ""; $("#delGo").disabled = true;
+  $("#delDlg").showModal(); $("#delName").focus();
+};
+$("#delName").oninput = () => { $("#delGo").disabled = $("#delName").value.trim() !== E?.name.trim(); };
+$("#delCancel").onclick = () => $("#delDlg").close();
+$("#delGo").onclick = async () => {
+  if (!E || $("#delName").value.trim() !== E.name.trim()) return;
+  $("#delGo").disabled = true;
   try {
     const r = await api(`/api/engagements/${E.id}`, {method: "DELETE"});
+    $("#delDlg").close();
     clearTimeout(pollTimer);
     E = null; state.step = "workbench"; history.replaceState(null, "", "#s=workbench");
     await loadList(null, false);
@@ -460,11 +557,20 @@ $("#delEng").onclick = async () => {
     $("#newName").value = r.name;  // ready to start it again
     toast(`Deleted ${r.name}: ${r.reports} report(s) and ${r.models} model(s), with everything worked out for them` +
           (r.kept?.length ? `. Kept ${r.kept.join(", ")}: another engagement uses it` : ""), 8000);
-  } catch (err) { toast(err.message, 8000); }
+  } catch (err) { toast(err.message, 8000); $("#delGo").disabled = false; }
 };
+function menu(open) { $("#menuPop").hidden = !open; $("#menuBtn").setAttribute("aria-expanded", String(open)); }
+$("#menuBtn").onclick = e => { e.stopPropagation(); menu($("#menuPop").hidden); };
+document.addEventListener("click", e => { if (!$("#menuPop").hidden && !e.target.closest("#menuPop, #menuBtn")) menu(false); });
+$("#callsBtn").onclick = () => { menu(false); openCalls(); };
 for (const [id, key, what] of [["mSel", "model", "Extraction model"], ["rSel", "reviewer_model", "Reviewer and orchestrator"], ["aSel", "arbiter_model", "Arbiter"]])
   $("#" + id).onchange = async e => { E = {...E, ...await api(`/api/engagements/${E.id}`, {method: "PATCH", body: {[key]: e.target.value}})}; toast(`${what}: ${e.target.value}`); };
-function go(step, eid = E?.id) { state.step = step; history.replaceState(null, "", `#e=${eid || ""}&s=${step}`); render(); window.scrollTo({top: 0}); }
+function go(step, eid = E?.id) {
+  state.step = step;
+  const h = `#e=${eid || ""}&s=${step}`;
+  if (location.hash !== h) history.pushState(null, "", h);
+  render(); window.scrollTo({top: 0});
+}
 function jumpTo(step, anchor) {  // a needs-you item: its page, then the element itself, highlighted
   if (step !== state.step) go(step);
   if (!anchor) return;
@@ -481,38 +587,32 @@ function jumpTo(step, anchor) {  // a needs-you item: its page, then the element
 }
 
 // ---- the stages as the orchestrator has them ----------------------------------------------------------------
-const stageOf = name => (E?.run?.stages || []).find(s => s.stage === name) || {status: "waiting"};
-const needsOf = pages => (E?.run?.needs || []).filter(n => pages.includes(STAGE_PAGE[n.stage]));
-const LOOK = {done: "done", attention: "you", blocked: "you", failed: "error", running: "running", queued: "running", waiting: "idle"};
-const ICON = {done: "✓", you: "!", error: "×", idle: "", running: ""};
-function pageState(nav) {
-  const st = nav.stages.map(s => stageOf(s).status);
-  if (st.some(s => s === "failed")) return "bad";
-  if (st.some(s => busy(s))) return "work";
-  if (st.every(s => ["done", "attention"].includes(s))) return st.some(s => s === "attention") ? "flag" : "done";
-  if (st.some(s => s === "blocked")) return "you";
-  return "";
-}
-function renderSteps() {
-  $("#steps").innerHTML = NAV.map(s => {
-    const p = E ? pageState(s) : "", n = E ? needsOf([s.id]).filter(x => x.severity !== "info") : [], block = n.some(x => x.severity === "block");
-    const dot = p === "done" || p === "flag" ? `<span class="dot done ${p === "flag" ? "flag" : ""}">✓</span>` : `<span class="dot ${p}">${p === "bad" ? "×" : p === "you" ? "!" : ""}</span>`;
-    return `<button data-s="${s.id}" class="${state.step === s.id ? "on" : ""}" ${!E ? "disabled" : ""} ${state.step === s.id ? 'aria-current="page"' : ""}>${dot}<span class="nm">${esc(s.name)}</span>${n.length ? `<span class="cnt ${block ? "bad" : ""}" title="${n.length} for you">${n.length}</span>` : ""}</button>`;
+const stageOf = name => (E?.run?.stages || []).find(s => s.stage === name) || {stage: name, status: "waiting"};
+const needsOf = pages => (E?.run?.needs || []).filter(n => pages.includes(n.go?.step || STAGE_PAGE[n.stage]));
+function renderTabs() {
+  const el = $("#steps");
+  el.hidden = !E;
+  if (!E) { el.innerHTML = ""; return; }
+  el.innerHTML = NAV.map(s => {
+    const n = needsOf([s.id]).filter(x => x.severity !== "info"), block = n.some(x => x.severity === "block");
+    return `<button type="button" data-s="${s.id}" class="${state.step === s.id ? "on" : ""}" ${state.step === s.id ? 'aria-current="page"' : ""}>${esc(s.name)}${n.length ? `<span class="cnt ${block ? "bad" : ""}" title="${n.length} for you">${n.length}</span>` : ""}</button>`;
   }).join("");
-  $("#steps").querySelectorAll("button").forEach(b => b.onclick = () => go(b.dataset.s));
+  el.querySelectorAll("button").forEach(b => b.onclick = () => go(b.dataset.s));
 }
 function render(creating = false) {
   $("#hdrCtl").hidden = !E;
-  $("#delEng").hidden = !E || creating;
+  document.querySelectorAll("#menuPop [data-e]").forEach(b => b.hidden = !E || creating);
   if (!E) $("#modelCtl").hidden = true;
   if (E) { $("#mSel").value = E.model || CFG.default_model; $("#rSel").value = E.reviewer_model || CFG.default_reviewer;
     $("#aSel").value = E.arbiter_model || CFG.default_arbiter; }
-  renderSteps();
-  renderNow();
   const m = $("#main");
-  if (!E || creating) { m.innerHTML = viewNew(); bindNew(); $("#now").hidden = true; return; }
-  const views = {workbench: viewWorkbench, report: viewReport, rebuild: viewRebuild, result: viewResult, map: viewMap};
+  if (!E || creating) { $("#steps").hidden = true; m.innerHTML = viewNew(); bindNew(); $("#now").hidden = true; return; }
+  state.step ||= "workbench";
+  renderTabs();
+  renderNow();
+  const views = {workbench: viewWorkbench, report: viewReport, rebuild: viewRebuild, result: viewResult};
   keepOpen(m, () => { m.innerHTML = (views[state.step] || viewWorkbench)(); bind[state.step]?.(); });
+  refreshUpload();
   tickTimers();
 }
 function keepOpen(root, draw) {  // a redraw keeps each <details> as you left it
@@ -523,58 +623,139 @@ function keepOpen(root, draw) {  // a redraw keeps each <details> as you left it
   if (was.size) window.scrollTo({top: y});
 }
 
-// ---- the status panel on every page: the stages, what's running now, what needs you --------------------------
-let nowHtml = "";
+// ---- the hero: the stages on a track, the mascot at the one that matters, and what's next beside them -------------
+// The only picture of where the run is. Each stage says what it found; a click goes to its card. The panel beside
+// says the one thing that matters now: what to upload, what needs you, how long is left, or the answer.
+const LOOK = {done: "done", attention: "look", blocked: "you", failed: "error", running: "running", queued: "running"};
+const ICON = {done: "✓", look: "✓", you: "!", error: "×"};
+const cut = (t, n = 26) => t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t;
+const signed = v => (v > 0.05 ? "+" : "") + vN(v);
+function stagePct(s) {  // how far a running stage is, where it's known (the files carry their own progress)
+  if (s.stage !== "files") return null;
+  const items = [...E.documents, ...E.workbooks].filter(x => busy(x.status));
+  return items.length ? items.reduce((a, x) => a + (x.pct || 0), 0) / items.length : null;
+}
+function stageLast(s) {  // how long it took last time, where that's kept
+  if (s.stage === "facts") return E.documents.find(d => d.id === E.roles.prior_report?.id)?.facts_secs || E.documents[0]?.facts_secs || null;
+  return null;
+}
+function nodeNote(s) {  // what a stage found, in a few words (the whole note is its tooltip)
+  const n = s.note || "", look = LOOK[s.status];
+  if (look === "you") return "needs you";
+  if (look === "error") return "failed";
+  if (s.status === "queued") return "in line";
+  if (look === "running") return n ? cut(n) : "working…";
+  if (!look) return "";
+  if (s.stage === "files") return `${E.documents.length + E.workbooks.length} files read`;
+  if (s.stage === "facts") { const m = n.match(/(\d+) of (\d+)/); return m ? `${m[1]} of ${m[2]} approved` : cut(n); }
+  if (s.stage === "roles") return Object.values(E.roles).some(r => r.by === "you") ? "confirmed by you" : "confirmed";
+  if (s.stage === "rebuild") { const m = n.match(/([\d,]+) of ([\d,]+) cells/); return m ? `${m[1]} / ${m[2]} cells` : cut(n); }
+  if (s.stage === "rows") return /found/.test(n) ? "rows found" : cut(n);
+  if (s.stage === "result") { const v = E.result?.values; return v?.this_year?.mid != null ? `${signed(v.this_year.mid - v.report.mid)}` : cut(n); }
+  if (s.stage === "review") { const k = (E.run?.needs || []).filter(x => x.stage === "review").length; return k ? `${k} to check` : "no concerns"; }
+  return cut(n);
+}
+function heroNeeds() {
+  const n = (E.run?.needs || []).filter(x => x.severity !== "info");
+  return [...n.filter(x => x.severity === "block"), ...n.filter(x => x.severity !== "block")];
+}
+function heroSide(st, needs) {
+  const files = E.documents.length + E.workbooks.length;
+  const blocks = needs.filter(n => n.severity === "block");
+  const running = st.find(s => s.status === "running") || st.find(s => s.status === "queued");
+  const upload = primary => `<div><button class="btn ${primary ? "primary" : ""}" type="button" data-upload>Upload files</button></div>`;
+  const forYou = needs.length ? `<div class="row small"><button class="linkbtn" type="button" data-needs-pop aria-expanded="${state.needsOpen}">${needs.length} for you</button></div>` : "";
+  if (!files) return `<div class="t">Drop the four files to start</div><div class="small muted">Last year's report, overlay and client model, and this year's client model.</div>${upload(true)}`;
+  if (blocks.length) return `<div class="t">Waiting for you</div><div><button class="btn warn" type="button" data-need="${esc(blocks[0].id)}">${esc(blocks[0].title)}</button></div>${forYou}`;
+  if (running) {
+    const pct = stagePct(running), last = stageLast(running);
+    return `<div class="t">${esc(RAIL_NAME[running.stage] || running.label)}${running.status === "queued" ? " · in line" : ""}</div>
+      ${running.note ? `<div class="small muted">${esc(cut(running.note, 90))}</div>` : ""}
+      ${running.status === "running" && running.started_at ? `<div>${runTimer(running.started_at, pct, last)}</div>` : ""}${forYou}`;
+  }
+  const v = E.result?.values;
+  if (v?.this_year?.mid != null && ["done", "attention"].includes(stageOf("result").status)) {
+    const t = v.this_year, span = t.high - t.low, at = x => span > 0 ? Math.max(0, Math.min(100, 100 * (x - t.low) / span)) : 50;
+    return `<div class="small muted">${esc(E.result.head?.units || "")} · equity value, mid</div>
+      <div><span class="from">${vN(v.report.mid)} →</span> <span class="big">${vN(t.mid)}</span></div>
+      <div class="band" role="img" aria-label="This year from ${vN(t.low)} to ${vN(t.high)}, mid ${vN(t.mid)}"><i style="left:0"></i><i style="left:calc(${at(t.mid)}% - 1px)"></i><i style="left:calc(100% - 3px)"></i>
+        <span style="left:0">${vN(t.low)}</span><span style="right:0">${vN(t.high)}</span></div>
+      <div class="row"><button class="btn primary small" type="button" data-go-bridge>See the bridge</button>${needs.length ? `<button class="pill warn" type="button" data-needs-pop aria-expanded="${state.needsOpen}">${needs.length} to check</button>` : ""}</div>`;
+  }
+  if (files < 4) return `<div class="t">${files} of 4 files in</div><div class="small muted">The run starts once the report and the models are read.</div>${upload(true)}`;
+  const waiting = st.find(s => !LOOK[s.status]);
+  return `<div class="t">Nothing running</div><div class="small muted">${waiting ? `${esc(RAIL_NAME[waiting.stage])}: ${esc(waiting.note || "waiting for the step before it")}` : "Up to date with the files."}</div>${forYou}`;
+}
+function needsList(needs) {
+  const pill = s => s === "block" ? `<span class="pill bad">Blocking</span>` : s === "check" ? `<span class="pill warn">Check</span>` : `<span class="pill">Note</span>`;
+  return `<ul class="needs">${needs.map(x => `<li>${pill(x.severity)}<span class="t">${esc(x.title)}</span>${x.retry ? `<button class="btn small" type="button" data-retry-stage="${esc(x.retry)}">Try again</button>` : `<button class="btn small" type="button" data-need="${esc(x.id)}">Go</button>`}${x.detail ? `<span class="d">${esc(x.detail)}</span>` : ""}</li>`).join("")}</ul>`;
+}
+let nowHtml = "", said = "";
 function renderNow() {
   const box = $("#now");
   if (!E) { box.hidden = true; nowHtml = ""; return; }
   box.hidden = false;
-  const st = RAIL.map(stageOf), running = st.find(s => s.status === "running") || st.find(s => s.status === "queued");
-  const needs = (E.run?.needs || []).filter(n => n.severity !== "info");
-  const last = (E.run?.log || [])[0];
-  const html = `<ol class="pipe" aria-label="Where the engagement is">${st.map((s, i) => { const look = LOOK[s.status] || "idle";
-      return `${i ? `<li class="link ${["done", "attention"].includes(st[i - 1].status) ? "done" : ""} ${busy(s.status) ? "flowing" : ""}" aria-hidden="true"></li>` : ""}
-      <li><button class="st ${look}" data-go="${STAGE_PAGE[s.stage]}" title="${esc(s.label)}: ${esc(s.note || "")}"><span class="ic">${ICON[look] || i + 1}</span><span class="nm">${esc(s.label)}</span><span class="ln">${esc(shortLine(s))}</span></button></li>`; }).join("")}</ol>
-    <div class="now-row">
-      <div class="live">${running ? `<div class="live-head"><span class="pulse"></span><b>Now</b><span>${esc(running.label)}: ${esc(running.note || "starting")}</span>${running.started_at && running.status === "running" ? runTimer(running.started_at, null, null) : ""}</div>`
-        : `<div class="live-head muted"><span class="dot-idle"></span>${needs.length ? "The orchestrator is waiting for you." : "Nothing running. Everything is up to date with the files."}</div>`}
-        ${last ? `<div class="small muted" style="margin-top:4px">Last: ${esc(LOGSTAGE[last.stage] || last.stage)} · ${esc(last.text)}</div>` : ""}</div>
-      <div class="todo">${needs.length ? `<span class="small muted">For you</span>${needs.slice(0, 3).map((n, i) => `<button class="btn ${i ? "small" : "primary"}" data-need="${esc(n.id)}">${esc(n.title)}</button>`).join("")}` : ""}</div>
-    </div>`;
+  const st = RAIL.map(stageOf), needs = heroNeeds();
+  const files = E.documents.length + E.workbooks.length;
+  const firstBlocked = st.findIndex(s => s.status === "blocked" || s.status === "failed");
+  const nodes = st.map((s, i) => {
+    const look = LOOK[s.status] || "idle", pct = look === "running" ? stagePct(s) : null;
+    const prev = st[i - 1], reached = prev && ["done", "attention"].includes(prev.status);
+    const cls = [look, reached ? "reached" : "", look === "running" && reached ? "flowing" : "", firstBlocked >= 0 && i > firstBlocked ? "gated" : "",
+      look === "running" && pct == null ? "indet" : ""].filter(Boolean).join(" ");
+    const tip = `${RAIL_NAME[s.stage]}: ${s.note || s.status}`;
+    return `<button type="button" role="listitem" class="stg ${cls}" data-stage="${s.stage}" title="${esc(tip)}" aria-label="${esc(tip)}" ${pct != null ? `style="--p:${pct.toFixed(3)}"` : ""}>
+      <span class="ic">${ICON[look] || (look === "running" ? "" : i + 1)}</span><span class="nm">${esc(RAIL_NAME[s.stage])}</span><span class="ln">${esc(nodeNote(s))}</span></button>`;
+  }).join("");
+  // the mascot stands at the stage that matters: what blocks, else what runs, else the last one reached
+  const lastReached = st.reduce((k, s, i) => ["done", "attention"].includes(s.status) ? i : k, -1);
+  const at = !files ? 0 : firstBlocked >= 0 ? firstBlocked : st.findIndex(s => busy(s.status)) >= 0 ? st.findIndex(s => busy(s.status)) : Math.max(0, lastReached);
+  const here = st[at], line = `Stage ${at + 1} of 7 · ${RAIL_NAME[here.stage]}${nodeNote(here) ? ` · ${nodeNote(here)}` : ""}`;
+  const side = heroSide(st, needs), pop = state.needsOpen && needs.length ? `<div class="needs-pop" id="needsPop">${needsList(needs)}</div>` : "";
+  const html = `${nodes}|${side}|${pop}|${line}`;
+  if (!box.querySelector(".hero")) {
+    box.innerHTML = `<div class="hero"><div class="trackwrap"><img class="mascot" src="/mascot.svg" alt="" aria-hidden="true"><div class="track" role="list" aria-label="Where the run is"></div><div class="hero-line"></div></div><div class="hero-side"></div><div class="pop"></div></div>`;
+    nowHtml = "";
+  }
+  box.querySelector(".mascot").style.setProperty("--at", at);
   if (html === nowHtml) return;
   nowHtml = html;
-  box.innerHTML = html;
+  box.querySelector(".track").innerHTML = nodes;
+  box.querySelector(".hero-line").textContent = line;
+  box.querySelector(".hero-side").innerHTML = side;
+  box.querySelector(".pop").innerHTML = pop;
   tickTimers(box);
-  box.querySelectorAll("[data-go]").forEach(b => b.onclick = () => go(b.dataset.go));
-  box.querySelectorAll("[data-need]").forEach(b => b.onclick = () => goNeed(b.dataset.need));
+  box.querySelectorAll("[data-stage]").forEach(b => b.onclick = () => jumpTo(STAGE_PAGE[b.dataset.stage], STAGE_ANCHOR[b.dataset.stage]));
+  box.querySelectorAll("[data-need]").forEach(b => b.onclick = () => { state.needsOpen = false; nowHtml = ""; goNeed(b.dataset.need); });
+  box.querySelectorAll("[data-retry-stage]").forEach(b => b.onclick = () => act(() => api(`/api/engagements/${E.id}/run/retry/${b.dataset.retryStage}`, {method: "POST"})));
+  box.querySelectorAll("[data-needs-pop]").forEach(b => b.onclick = e => { e.stopPropagation(); state.needsOpen = !state.needsOpen; nowHtml = ""; renderNow(); });
+  box.querySelectorAll("[data-upload]").forEach(b => b.onclick = () => openUpload());
+  box.querySelector("[data-go-bridge]")?.addEventListener("click", () => jumpTo("result", "bridgeCard"));
+  // a screen reader hears when the run moves on, not every tick of the clock
+  const say = firstBlocked >= 0 ? `${RAIL_NAME[st[firstBlocked].stage]} needs you` : st.some(s => busy(s.status)) ? `${RAIL_NAME[here.stage]} running`
+    : lastReached === st.length - 1 ? "The run is finished" : "";
+  if (say !== said) { said = say; $("#announce").textContent = say; }
 }
-function shortLine(s) {
-  const n = s.note || "";
-  return {done: n.length > 40 ? "done" : n, attention: "done · look", blocked: "needs you", failed: "failed", running: "running", queued: "in line", waiting: "waiting"}[s.status] ?? n;
-}
+document.addEventListener("click", e => { if (state.needsOpen && !e.target.closest("#needsPop, [data-needs-pop]")) { state.needsOpen = false; nowHtml = ""; renderNow(); } });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && state.needsOpen) { state.needsOpen = false; nowHtml = ""; renderNow(); } });
 function goNeed(id) {
   const n = (E.run?.needs || []).find(x => x.id === id); if (!n) return;
-  jumpTo(n.go?.step || STAGE_PAGE[n.stage], n.go?.anchor);
+  jumpTo(n.go?.step || STAGE_PAGE[n.stage], n.go?.anchor || STAGE_ANCHOR[n.stage]);
 }
 const LOGSTAGE = {files: "Files", facts: "Key facts", roles: "Roles", rebuild: "Rebuild", rows: "Roll forward", result: "Bridge", review: "Review", map: "Map"};
-const EVWORD = {start: "started", done: "done", attention: "done, look", blocked: "needs you", failed: "failed", decide: "gpt-sol decided", verify: "checked in code",
+const EVWORD = {start: "started", done: "done", attention: "done, look", blocked: "needs you", failed: "failed", decide: "the orchestrator decided", verify: "checked in code",
   escalate: "to a person", person: "you", note: "note"};
-function needsCard(pages) {
-  const n = pages ? needsOf(pages) : (E.run?.needs || []);
-  if (!n.length) return "";
-  const pill = s => s === "block" ? `<span class="pill bad">Blocking</span>` : s === "check" ? `<span class="pill warn">Check</span>` : `<span class="pill">Note</span>`;
-  return `<div class="card" id="needsCard"><h2>For you</h2><p class="sub">What the orchestrator couldn't settle on the evidence, or wants a person to see. Blocking items hold the steps after them; the rest don't.</p>
-    <ul class="needs">${n.map(x => `<li>${pill(x.severity)}<span class="t">${esc(x.title)}</span>${x.retry ? `<button class="btn small" data-retry-stage="${esc(x.retry)}">Try again</button>` : `<button class="btn small" data-need="${esc(x.id)}">Go</button>`}${x.detail ? `<span class="d">${esc(x.detail)}</span>` : ""}</li>`).join("")}</ul></div>`;
-}
 function bindNeeds() {
   document.querySelectorAll("main [data-need]").forEach(b => b.onclick = () => goNeed(b.dataset.need));
   document.querySelectorAll("main [data-retry-stage]").forEach(b => b.onclick = () => act(() => api(`/api/engagements/${E.id}/run/retry/${b.dataset.retryStage}`, {method: "POST"})));
 }
-function logCard(n = 30) {
+function logFold(n = 40) {
   const log = E.run?.log || [];
-  const t = s => new Date(s * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
-  return `<div class="card" id="logCard"><h2>What the orchestrator did</h2><p class="sub">The run log: every step started and finished, every decision gpt-sol made and how code checked it, what went to a person, and what you did. It's also the orchestrator's memory: a step doesn't run again on the same inputs, and a decision isn't asked twice.</p>
-    ${log.length ? `<ul class="log">${log.slice(0, n).map(h => `<li class="${esc(h.event)}"><span class="when">${t(h.at)}</span><span class="ev"><span class="pill ${h.event === "decide" || h.event === "verify" ? "info" : ["failed", "blocked", "escalate"].includes(h.event) ? "bad" : h.event === "done" ? "ok" : h.event === "attention" ? "warn" : ""}">${esc(LOGSTAGE[h.stage] || h.stage)} · ${esc(EVWORD[h.event] || h.event)}</span></span><span class="txt">${esc(h.text)}</span></li>`).join("")}</ul>` : `<p class="muted small" style="margin:0">Nothing yet: upload the files.</p>`}</div>`;
+  const t = x => new Date(x * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  const body = `<p class="sub">Every step started and finished, every decision the orchestrator made and how code checked it, what went to a person, and what you did. It's also the orchestrator's memory: a step doesn't run again on the same inputs.</p>
+    ${log.length ? `<ul class="log">${log.slice(0, n).map(h => `<li class="${esc(h.event)}"><span class="when">${t(h.at)}</span><span class="ev"><span class="pill ${h.event === "decide" || h.event === "verify" ? "info" : ["failed", "blocked", "escalate"].includes(h.event) ? "bad" : h.event === "done" ? "ok" : h.event === "attention" ? "warn" : ""}">${esc(LOGSTAGE[h.stage] || h.stage)} · ${esc(EVWORD[h.event] || h.event)}</span></span><span class="txt">${esc(h.text)}</span></li>`).join("")}</ul>` : `<p class="muted small" style="margin:0">Nothing yet: upload the files.</p>`}`;
+  const last = log[0];
+  return fold("log", "What happened", log.length ? `${log.length} events${last ? ` · last: ${esc(LOGSTAGE[last.stage] || last.stage)} ${esc(EVWORD[last.event] || last.event)} at ${t(last.at)}` : ""}` : "", body, false, "logCard");
 }
 
 // ---- new engagement ----------------------------------------------------------------------------------------
@@ -627,46 +808,109 @@ function tickTimers(root = document) {
 setInterval(() => tickTimers(), 1000);
 const runTimer = (started, pct, last) => started ? `<span class="small muted nowrap" data-timer="${started}|${pct ?? ""}|${last ?? ""}">${timing(started, pct, last)}</span>` : "";
 
-// ---- the Workbench: files, roles, the profile, the run, what needs you ------------------------------------------
-function resultTeaser() {
-  const R = E.result; if (!R?.values) return "";
-  const v = R.values, u = R.head?.units || "", basis = R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution";
-  const th = v.this_year?.mid;
-  return `<div class="heads">
-    <div class="head"><div class="k">Last year, per the report (mid)</div><div class="v">${vN(v.report.mid)}</div><div class="s">${esc(u)} · equity value, ${basis} · ${vN(v.report.low)} – ${vN(v.report.high)}</div></div>
-    <div class="head"><div class="k">Last year, rebuilt in Python (mid)</div><div class="v">${vN(v.rebuilt.mid)}</div><div class="s">${R.tie?.low?.ok && R.tie?.high?.ok ? "ties to the report, low and high" : "see Rebuild: doesn't tie"}</div></div>
-    <div class="head main"><div class="k">This year, rolled forward (mid)</div><div class="v">${th != null ? vN(th) : "–"}</div><div class="s">${th != null ? `at last year's discount rate · to ${esc(R.bridges?.valuation_date || "")}` : "held back: rows to find (Result)"}</div></div>
-    <div class="head"><div class="k">The move</div><div class="v">${th != null ? (th - v.report.mid > 0 ? "+" : "") + vN(th - v.report.mid) : "–"}</div><div class="s"><a href="#" data-go-result>The bridge and the cash flows →</a></div></div></div>`;
+// ---- the Run page: the four files as four slots, the valuation dates, the roles and the profile folded ------------
+const SLOTS = ["prior_report", "prior_overlay", "prior_model", "current_model"];
+const SLOT_NAME = {prior_report: "Last year's report", prior_overlay: "Last year's overlay", prior_model: "Last year's client model", current_model: "This year's client model"};
+const fold = (key, title, meta, body, open = false, id = "") => `<details class="card fold" data-k="${key}"${id ? ` id="${id}"` : ""} ${open ? "open" : ""}><summary><span class="ft">${title}</span>${meta ? ` <span class="fm">${meta}</span>` : ""}</summary><div class="fold-body">${body}</div></details>`;
+function slotFile(role) {  // the file in a role: as saved (confirmed, or suggested and kept), else as suggested
+  const r = E.roles[role] || E.roles_suggested?.roles?.[role]; if (!r) return null;
+  const doc = r.kind === "document", f = (doc ? E.documents : E.workbooks).find(x => x.id === r.id);
+  return f ? {r, f, doc, saved: E.roles[role]} : null;
 }
-function viewWorkbench() {
-  return `<div class="lede"><div><h1><b>${esc(E.name)}</b></h1><p>Drop the four files. The orchestrator reads the report's key facts, works out which file is which, rebuilds last year's valuation in Python and ties it to the report, rolls it forward onto this year's client model, and bridges last year's value to this year's. It asks you only where the evidence doesn't settle something; you can change anything it decided.</p></div></div>
-  ${resultTeaser()}
-  ${needsCard()}
-  <div class="grid2">${filesCard()}${logCard(24)}</div>
-  <div class="sect">Roles</div>
-  ${viewRoles()}`;
+function fileState(f, doc) {  // a file being read, or failed; nothing once it's ready
+  if (f.status === "error") return `<div class="small" style="color:var(--bad)"><span class="pill bad">Failed</span> ${esc(f.error || "")}</div><div><button class="btn small" type="button" ${doc ? `data-retry="${f.id}"` : `data-retrywb="${f.id}"`}>Try again</button></div>`;
+  if (!busy(f.status)) return "";
+  const last = doc ? f.doc_secs : f.build_secs;
+  return `<div class="small muted">${f.status === "queued" ? "Queued" : esc(f.step || "Reading")}</div><div class="bar"><i style="width:${Math.round((f.pct || 0) * 100)}%"></i></div>
+    ${f.status === "processing" && f.started_at ? `<div class="small muted" data-timer="${f.started_at}|${f.pct ?? ""}|${last ?? ""}">${timing(f.started_at, f.pct, last)}</div>` : ""}`;
+}
+function fileMeta(f, doc) {
+  return doc ? `${f.kind.toUpperCase()}${f.pages ? ` · ${f.pages} pages` : ""} · ${size(f.size)}`
+    : [f.sheets && `${f.sheets} sheets`, f.line_items && `${nfmt(f.line_items)} line items`].filter(Boolean).join(" · ") || size(f.size || 0);
+}
+function fileMenu(f, doc) {
+  const items = doc
+    ? [f.status === "done" && `<button type="button" data-view="${f.id}">Key facts</button>`,
+       f.status === "done" && !busy(f.facts_status) && `<button type="button" data-rebuilddoc="${f.id}">Read it again</button>`,
+       !busy(f.status) && `<button type="button" data-rmdoc="${f.id}">Remove</button>`]
+    : [f.status === "done" && `<button type="button" data-rebuildwb="${f.id}">Reprocess</button>`,
+       !busy(f.status) && `<button type="button" data-rmwb="${f.id}">Remove from the engagement</button>`];
+  const on = items.filter(Boolean);
+  return on.length ? `<details class="menu" data-k="m-${doc ? "d" : "w"}${f.id}"><summary aria-label="Actions for ${esc(f.filename)}" title="Actions">⋯</summary><div class="menu-pop">${on.join("")}</div></details>` : "";
+}
+const firstWhy = r => (r.why || []).find(w => !/^unlike |^the report$/.test(w)) || "";
+function slotCard(role, seen) {
+  const x = slotFile(role);
+  if (!x) return `<div class="slot vacant"><span class="role">${SLOT_NAME[role]}</span><span class="small">${esc(ROLE_HELP[role])}</span></div>`;
+  const {r, f, doc, saved} = x, key = (doc ? "doc-" : "wb-") + f.id, first = !seen.has(key);
+  seen.add(key);
+  const who = saved?.confirmed ? `<span class="pill ok" title="Confirmed by ${saved.by === "orchestrator" ? "the orchestrator, on the evidence" : "you"}">✓ ${saved.by === "orchestrator" ? "orchestrator" : "you"}</span>` : `<span class="pill info">suggested</span>`;
+  const inside = role === "prior_model" && (E.roles.prior_overlay || E.roles_suggested?.roles?.prior_overlay)?.id === f.id;
+  const date = !doc && f.status === "done" && first
+    ? (rollReads(f) ? `<div class="row" style="gap:4px"><span class="small muted">Valuation date</span><input type="date" class="in" data-vdwb="${f.id}" value="${esc(f.valuation_date || "")}" aria-label="Valuation date of ${esc(f.filename)}" style="padding:2px 4px;font-size:12px">${dateCheck(f)}</div>`
+      : f.valuation_date ? `<span class="small muted">Valuation date ${esc(f.valuation_date)}</span>` : "") : "";
+  const ev = saved?.evidence, reasons = r.why || [];
+  const why = reasons.length > 1 || ev ? `<details data-k="why-${role}"><summary>Why</summary><ul class="why">${reasons.map(w => `<li>${esc(w)}</li>`).join("")}</ul>
+    ${ev?.checks?.length ? `<ul class="checks" style="margin-top:6px">${ev.checks.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
+    ${ev?.second_opinion ? `<div class="small muted" style="margin-top:4px">Second opinion: ${esc(ev.second_opinion)}</div>` : ""}${ev?.decided_by ? `<div class="small" style="margin-top:4px;color:var(--info)">The orchestrator decided: ${esc(ev.decided_by)}</div>` : ""}</details>` : "";
+  return `<div class="slot"${first ? ` id="${key}"` : ""}><div class="row slot-top"><span class="role">${SLOT_NAME[role]}</span>${first ? fileMenu(f, doc) : ""}</div>
+    <span class="fn">${esc(f.filename)}</span><span class="small muted">${inside ? "the same workbook as the overlay" : fileMeta(f, doc)}</span>
+    ${fileState(f, doc)}${f.status === "done" ? `<div class="row">${who}</div>` : ""}${firstWhy(r) ? `<span class="small">${esc(firstWhy(r))}</span>` : ""}${date}${why}</div>`;
+}
+function looseFiles() {  // files no role holds yet
+  const held = new Set(SLOTS.map(slotFile).filter(Boolean).map(x => (x.doc ? "d" : "w") + x.f.id));
+  return [...E.documents.map(f => ({f, doc: true})), ...E.workbooks.map(f => ({f, doc: false}))].filter(x => !held.has((x.doc ? "d" : "w") + x.f.id));
 }
 function filesCard() {
-  const docs = E.documents, wbs = E.workbooks;
-  const up = uploads.filter(u => !u.done || u.error);
-  return `<div class="card" id="filesCard"><h2>Files</h2><p class="sub">Reports are read from their text layer (no model calls); models get a row map, their links and their target and valuation date.</p>
-  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Upload files"><b>Drop files here</b> or click to choose<div class="muted small">PDF or PPTX reports · XLSX or XLSM models</div>
-    <div class="slots">${Object.entries(CFG.roles).map(([k, v]) => `<div class="slot"><b>${esc(v)}</b><span class="muted">${esc(ROLE_HELP[k])}</span></div>`).join("")}</div></div>
-  ${up.length ? `<div style="margin-top:10px">${up.map(u => `<div class="small">${u.error ? `<span class="pill bad">Failed</span> ${esc(u.name)}: ${esc(u.error)}` : `<span class="pill info">Uploading</span> ${esc(u.name)}`}</div>`).join("")}</div>` : ""}
-  <h3 style="font-size:14px;margin:14px 0 4px">Reports</h3>
-  ${docs.length ? `<div class="scroll"><table><thead><tr><th>File</th><th class="num">Pages</th><th>Status</th><th></th></tr></thead><tbody>
-  ${docs.map(d => `<tr><td><b>${esc(d.filename)}</b><div class="small muted">${d.kind.toUpperCase()} · ${size(d.size)}</div></td><td class="num">${d.pages ?? ""}</td>
-    <td>${statusCell(d.status, d.step, d.pct, d.error, d.started_at, d.doc_secs, d.doc_secs)}</td>
-    <td class="nowrap">${d.status === "done" ? `<button class="btn small" data-view="${d.id}">Key facts</button>` : ""}${d.status === "error" ? `<button class="btn small" data-retry="${d.id}">Retry</button>` : ""}
-    ${d.status === "done" && !busy(d.facts_status) ? `<button class="btn small ghost" data-rebuilddoc="${d.id}" title="Read it again and extract the key facts again">Read again</button>` : ""}
-    ${!busy(d.status) ? `<button class="btn small ghost" data-rmdoc="${d.id}">Remove</button>` : ""}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted small">No report yet.</p>`}
-  <h3 style="font-size:14px;margin:14px 0 4px">Models</h3>
-  ${wbs.length ? `<div class="scroll"><table><thead><tr><th>File</th><th>Target · valuation date</th><th>Status</th><th></th></tr></thead><tbody>
-  ${wbs.map(w => `<tr id="wb-${w.id}"><td><b>${esc(w.filename)}</b><div class="small muted">${size(w.size || 0)}${w.sheets ? ` · ${w.sheets} sheets` : ""}${w.line_items ? ` · ${w.line_items.toLocaleString()} line items` : ""}</div></td>
-    <td class="small">${esc(w.target_name || "")}${w.status === "done" ? `<div class="row" style="gap:4px;margin-top:2px"><input type="date" class="in" data-vdwb="${w.id}" value="${esc(w.valuation_date || "")}" aria-label="Valuation date of ${esc(w.filename)}" style="padding:2px 4px;font-size:12px">${dateCheck(w)}</div>` : w.valuation_date ? `<div class="muted">${esc(w.valuation_date)}</div>` : ""}</td>
-    <td>${statusCell(w.status, w.step, w.pct, w.error, w.started_at, w.started_at && w.processed_at > w.started_at ? w.processed_at - w.started_at : w.build_secs, null)}</td>
-    <td class="nowrap">${w.status === "error" ? `<button class="btn small" data-retrywb="${w.id}">Retry</button>` : ""}${w.status === "done" ? `<button class="btn small ghost" data-rebuildwb="${w.id}" title="Process it again from scratch">Rebuild</button>` : ""}${!busy(w.status) ? `<button class="btn small ghost" data-rmwb="${w.id}">Remove</button>` : ""}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted small">No models yet.</p>`}</div>`;
+  const placed = SLOTS.filter(r => slotFile(r)).length, loose = looseFiles(), seen = new Set();
+  return `<div class="card" id="filesCard"><div class="row" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">Files</h2>
+      <div class="row">${placed ? `<span class="pill ${placed === 4 ? "ok" : ""}">${placed} of 4 in place</span>` : ""}<button class="btn small ${placed < 4 ? "primary" : ""}" type="button" data-upload>Upload files</button></div></div>
+    <div class="slotrow">${SLOTS.map(r => slotCard(r, seen)).join("")}</div>
+    ${loose.length ? `<div class="loose">${loose.map(({f, doc}) => `<div class="row small"><span class="pill">${busy(f.status) ? "reading" : f.status === "error" ? "failed" : "not placed yet"}</span><b style="font-weight:600">${esc(f.filename)}</b><span class="muted">${fileMeta(f, doc)}</span>${fileMenu(f, doc)}</div>`).join("")}
+      ${loose.some(x => !busy(x.f.status)) ? `<p class="small muted" style="margin:4px 0 0">Place a file under "Change the roles" below.</p>` : ""}</div>` : ""}</div>`;
 }
+function viewWorkbench() {
+  return `${filesCard()}
+  ${datesCard()}
+  ${rolesEditor()}
+  ${rolesCheckFold()}
+  ${fold("profile", "The engagement's profile", `<span id="engProfileLine">${profileLine()}</span>`, `<div id="engProfile">${engProfileCard()}</div>`)}
+  ${fold("likeness", "How alike the workbooks are, and what each looks like", "", likenessCard(E.roles_suggested, E.workbooks.filter(w => w.status === "done")) + profilesCard(E.roles_suggested, E.workbooks.filter(w => w.status === "done")))}
+  ${logFold()}`;
+}
+
+// the upload window: drop or browse, and the four slots filling in as the files are read and placed
+function uploadBody() {
+  const loose = looseFiles();
+  return `<div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose files to upload"><b>Drop the files here</b> or click to browse<div class="muted small">Reports as PDF or PPTX, models as XLSX or XLSM</div></div>
+    ${uploads.length ? `<div class="stack" style="gap:6px">${uploads.map(u => `<div class="small">${u.error ? `<span class="pill bad">Failed</span> ${esc(u.name)}: ${esc(u.error)}` : `<span class="pill info">Uploading</span> ${esc(u.name)}`}</div>`).join("")}</div>` : ""}
+    <div class="slotrow">${SLOTS.map(role => { const x = slotFile(role);
+      if (!x) return `<div class="slot vacant"><span class="role">${SLOT_NAME[role]}</span><span class="small">${esc(ROLE_HELP[role])}</span></div>`;
+      return `<div class="slot"><span class="role">${SLOT_NAME[role]}</span><span class="fn">${esc(x.f.filename)}</span>${fileState(x.f, x.doc) || `<span class="small muted">${fileMeta(x.f, x.doc)}</span>`}
+        ${x.f.status === "done" ? `<div class="row">${x.saved?.confirmed ? `<span class="pill ok">✓ in place</span>` : `<span class="pill info">suggested</span>`}</div>` : ""}${firstWhy(x.r) ? `<span class="small">${esc(firstWhy(x.r))}</span>` : ""}</div>`; }).join("")}</div>
+    ${loose.length ? `<div class="stack" style="gap:6px">${loose.map(({f, doc}) => `<div class="small"><b style="font-weight:600">${esc(f.filename)}</b> <span class="muted">${busy(f.status) ? "being read, then placed" : "not placed yet"}</span>${fileState(f, doc)}</div>`).join("")}</div>` : ""}
+    <p class="small muted" style="margin:0">Close this window at any time: the orchestrator carries on, and the strip at the top shows where it is.</p>`;
+}
+function openUpload() {
+  const d = $("#uploadDlg");
+  $("#upBody").innerHTML = uploadBody(); bindUpload();
+  if (!d.open) d.showModal();
+}
+function bindUpload() {
+  const drop = $("#drop"); if (!drop) return;
+  drop.onclick = () => $("#picker").click();
+  drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#picker").click(); } };
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = e => { e.preventDefault(); e.stopPropagation(); drop.classList.remove("over"); send([...e.dataTransfer.files]); };
+  document.querySelectorAll("#upBody [data-retry]").forEach(b => b.onclick = () => act(() => api(`/api/documents/${b.dataset.retry}/retry`, {method: "POST"})));
+  document.querySelectorAll("#upBody [data-retrywb]").forEach(b => b.onclick = () => act(() => api(`/api/engagements/${E.id}/workbooks/${b.dataset.retrywb}/retry`, {method: "POST"})));
+  tickTimers($("#upBody"));
+}
+function refreshUpload() { if ($("#uploadDlg").open) { $("#upBody").innerHTML = uploadBody(); bindUpload(); } }
+// a file dragged anywhere onto an engagement opens the window; dropped, it's uploaded
+window.addEventListener("dragover", e => { if (E && [...(e.dataTransfer?.types || [])].includes("Files")) { e.preventDefault(); if (!$("#uploadDlg").open) openUpload(); } });
+window.addEventListener("drop", e => { if (!E || !e.dataTransfer?.files?.length) return; e.preventDefault(); send([...e.dataTransfer.files]); });
 // a workbook's valuation date: checked where the roll-forward reads it (this year's client model; last year's overlay
 // where the report gives no valuation date), confirmed by you or by the agents' check of the evidence
 function rollReads(w) {
@@ -685,7 +929,7 @@ $("#picker").onchange = e => { send([...e.target.files]); e.target.value = ""; }
 async function act(fn) { try { await fn(); } catch (err) { toast(err.message, 6000); } await refresh(true); }
 async function send(files) {
   for (const f of files) {
-    const u = {name: f.name, done: false}; uploads.push(u); render();
+    const u = {name: f.name, done: false}; uploads.push(u); render(); refreshUpload();
     const fd = new FormData(); fd.append("file", f);
     try { const r = await api(`/api/engagements/${E.id}/files`, {method: "POST", body: fd}); u.done = true;
       if (r.status === "duplicate") toast(`${f.name} was already uploaded; using the existing copy.`); }
@@ -704,15 +948,10 @@ function bindFiles() {
     await api(`/api/engagements/${E.id}/workbooks/${inp.dataset.vdwb}/date`, {method: "POST", body: {valuation_date: inp.value}});
     toast("Valuation date set: the roll-forward runs again with it");
   }));
-  const drop = $("#drop"); if (!drop) return;
-  drop.onclick = () => $("#picker").click();
-  drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#picker").click(); } };
-  drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
-  drop.ondragleave = () => drop.classList.remove("over");
-  drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); send([...e.dataTransfer.files]); };
+  document.querySelectorAll("main [data-upload]").forEach(b => b.onclick = () => openUpload());
   document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => go("report"));
-  document.querySelectorAll("[data-retry]").forEach(b => b.onclick = () => act(() => api(`/api/documents/${b.dataset.retry}/retry`, {method: "POST"})));
-  document.querySelectorAll("[data-retrywb]").forEach(b => b.onclick = () => act(() => api(`/api/engagements/${E.id}/workbooks/${b.dataset.retrywb}/retry`, {method: "POST"})));
+  document.querySelectorAll("main [data-retry]").forEach(b => b.onclick = () => act(() => api(`/api/documents/${b.dataset.retry}/retry`, {method: "POST"})));
+  document.querySelectorAll("main [data-retrywb]").forEach(b => b.onclick = () => act(() => api(`/api/engagements/${E.id}/workbooks/${b.dataset.retrywb}/retry`, {method: "POST"})));
   document.querySelectorAll("[data-rebuilddoc]").forEach(b => b.onclick = () => {
     const d = E.documents.find(x => x.id === +b.dataset.rebuilddoc);
     if (!confirm(`Read ${d.filename} again and extract its key facts again?\n\nYour decisions on its facts are replaced; the steps after it run again.`)) return;
@@ -720,16 +959,16 @@ function bindFiles() {
   });
   document.querySelectorAll("[data-rebuildwb]").forEach(b => b.onclick = () => {
     const w = E.workbooks.find(x => x.id === +b.dataset.rebuildwb), took = w.started_at && w.processed_at > w.started_at ? w.processed_at - w.started_at : w.build_secs;
-    if (!confirm(`Process ${w.filename} again from scratch?\n\nIts row map, links, target and valuation date are rebuilt${took ? ` (last time this took ${dur(took)})` : ""}; the steps that use it run again.`)) return;
+    if (!confirm(`Reprocess ${w.filename} from scratch?\n\nIts row map, links, target and valuation date are worked out again${took ? ` (last time this took ${dur(took)})` : ""}; the steps that use it run again.`)) return;
     act(() => api(`/api/engagements/${E.id}/workbooks/${w.id}/rebuild`, {method: "POST"}));
   });
   document.querySelectorAll("[data-rmdoc]").forEach(b => b.onclick = () => { if (confirm("Remove this report and its key facts?")) act(() => api(`/api/documents/${b.dataset.rmdoc}`, {method: "DELETE"})); });
   document.querySelectorAll("[data-rmwb]").forEach(b => b.onclick = () => { if (confirm("Remove this model from the engagement?")) act(() => api(`/api/engagements/${E.id}/workbooks/${b.dataset.rmwb}`, {method: "DELETE"})); });
 }
 
-// ---- roles: the suggestion, its checks, the second opinion, and who confirmed each ----------------------------
+// ---- roles: who's who is in the slots above; changing it, and the checks behind it, fold away ------------------
 let roleDraft = null;
-function viewRoles() {
+function rolesEditor() {
   const docs = E.documents.filter(d => d.status === "done"), wbs = E.workbooks.filter(w => w.status === "done");
   const r = E.roles, sug = E.roles_suggested;
   if (!roleDraft || roleDraft._eid !== E.id || (!roleDraft._dirty && roleDraft._key !== JSON.stringify([sug?.at || null, r])))
@@ -737,7 +976,6 @@ function viewRoles() {
   const ov = roleDraft.prior_overlay, pm = roleDraft.prior_model;
   const node = role => {
     const cur = roleDraft[role], opts = role === "prior_report" ? docs.map(d => [d.id, d.filename]) : wbs.map(w => [w.id, w.filename]);
-    const saved = r[role];
     let extra = "";
     if ((role === "prior_overlay" || role === "prior_model") && cur) {
       const w = wbs.find(x => x.id === cur.id); const names = w?.sheet_names || [];
@@ -745,36 +983,31 @@ function viewRoles() {
       if (role === "prior_overlay") extra = `<div class="small muted" style="margin-top:6px">${inside ? "Sits inside the prior client model" : (cur.sheets ? "Separate workbook (overlay sheets below)" : "Separate workbook")}</div>`;
       if (names.length && (inside || cur.sheets)) extra += `<div class="sheets">${names.map(s => `<label><input type="checkbox" data-role="${role}" data-sheet="${esc(s)}" ${!cur.sheets || cur.sheets.includes(s) ? "checked" : ""}>${esc(s)}</label>`).join("")}</div>`;
     }
-    const who = saved?.confirmed ? (saved.by === "orchestrator" ? `<span class="pill ok" title="Confirmed by the orchestrator on the evidence below">✓ orchestrator</span>` : `<span class="pill ok">✓ you</span>`)
-      : saved ? `<span class="pill warn">Suggested</span>` : "";
-    const ev = saved?.confirmed && saved.by === "orchestrator" && saved.evidence ? `<details data-k="ev-${role}" style="margin-top:6px"><summary>The evidence it confirmed on</summary><ul class="checks" style="margin-top:4px">${(saved.evidence.checks || []).map(c => `<li>${esc(c)}</li>`).join("")}</ul>
-      ${saved.evidence.second_opinion ? `<div class="small muted" style="margin-top:4px">Second opinion: ${esc(saved.evidence.second_opinion)}</div>` : ""}${saved.evidence.decided_by ? `<div class="small" style="margin-top:4px;color:var(--info)">gpt-sol decided: ${esc(saved.evidence.decided_by)}</div>` : ""}</details>` : "";
-    return `<div class="node"><h3>${esc(CFG.roles[role])} ${who}</h3>
-      <select class="in" data-pick="${role}"><option value="">Not assigned</option>${opts.map(([id, n]) => `<option value="${id}" ${cur?.id === id ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
-      ${extra}${cur?.why?.length ? `<ul class="why">${cur.why.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : `<p class="small muted" style="margin:6px 0 0">${esc(ROLE_HELP[role])}</p>`}${ev}</div>`;
+    return `<div class="node"><h3>${esc(SLOT_NAME[role])}</h3>
+      <select class="in" data-pick="${role}" aria-label="${esc(SLOT_NAME[role])}"><option value="">Not assigned</option>${opts.map(([id, n]) => `<option value="${id}" ${cur?.id === id ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>${extra}</div>`;
   };
-  const rs = stageOf("roles");
-  const status = busy(rs.status) ? `<span class="pill info">The orchestrator is weighing the roles…</span>`
-    : rs.status === "blocked" ? `<span class="pill warn">The orchestrator wants you to confirm</span>`
-    : rs.status === "done" ? `<span class="small muted">${esc(rs.note || "")}</span>`
-    : `<span class="small muted">A suggestion appears once the files and the report's facts are in.</span>`;
-  return `<div class="card" id="rolesCard"><div class="row" style="justify-content:space-between"><div><h2>Who's who</h2><p class="sub" style="max-width:860px">The rules suggest which file plays which part, from how alike the workbooks are, their dates, their links and where the report's figures sit; a second model gives its opinion on the same evidence. The orchestrator confirms the roles itself when both agree and the checks give evidence for it; otherwise gpt-sol weighs the two, and its choice is checked in code, or you're asked. Change anything and confirm: yours stands, and the steps after it run again.</p></div></div>
-  <div class="row" style="margin-bottom:12px"><button class="btn" id="suggest">Look again</button>
-  <button class="btn primary" id="confirmRoles" ${Object.keys(CFG.roles).some(k => roleDraft[k]) ? "" : "disabled"}>Confirm these roles</button>${status}</div>
-  <div class="flow">${["prior_report", "prior_overlay", "prior_model", "current_model"].map(node).join("")}</div></div>
-  ${rolesCheckCard(sug, docs, wbs)}
-  ${datesCard()}
-  <div class="card" id="engProfile">${engProfileCard()}</div>
-  <details class="card" data-k="likeness"><summary style="font-size:14px">How alike the workbooks are, and what each looks like</summary>${likenessCard(sug, wbs)}${profilesCard(sug, wbs)}</details>`;
+  const rs = stageOf("roles"), ask = rs.status === "blocked" || !!roleDraft._dirty;
+  const meta = rs.status === "done" ? esc(rs.note || "") : busy(rs.status) ? "the orchestrator is weighing them" : rs.status === "blocked" ? "the orchestrator wants you to confirm" : "a suggestion appears once the files and the report's facts are in";
+  return fold("roles-edit", "Change the roles", meta, `<p class="sub">Pick a different file for a role, or the overlay's sheets, and confirm: yours stands, and the steps after it run again.</p>
+    <div class="flow">${SLOTS.map(node).join("")}</div>
+    <div class="row" style="margin-top:12px"><button class="btn" type="button" id="suggest">Look again</button>
+      <button class="btn primary" type="button" id="confirmRoles" ${Object.keys(CFG.roles).some(k => roleDraft[k]) ? "" : "disabled"}>Confirm these roles</button></div>`, ask, "rolesCard");
+}
+function rolesCheckFold() {
+  const sug = E.roles_suggested; if (!sug?.roles) return "";
+  const checks = sug.checks || [], so = sug.second_opinion, against = checks.filter(c => c.ok === false).length;
+  const meta = `${checks.filter(c => c.ok).length} for, ${against} against${so && !so.error ? `, second opinion ${so.differs?.length ? "differs" : "agrees"}` : ""}`;
+  return fold("roles-check", "Checks on the roles", meta, rolesCheckCard(sug, E.documents.filter(d => d.status === "done"), E.workbooks.filter(w => w.status === "done")),
+    against > 0 || !!so?.differs?.length);
 }
 function datesCard() {
   const D = E.dates || [];
   if (!D.length) return "";
   const mark = ok => ok === true ? `<span class="pill ok">✓</span>` : ok === false ? `<span class="pill bad">✗</span>` : "";
-  return `<div class="card" id="datesCard"><h2>Valuation dates</h2><p class="sub">The report's date is the anchor: the overlay's should be it (the cell its discount factors read, once they're traced), last year's client model's usually is, and this year's client model's should be a year on. The roll-forward runs to the last.</p>
+  return `<div class="card" id="datesCard"><h2>Valuation dates</h2><p class="sub">The report's date is the anchor; this year's client model's should be a year on.</p>
     <div class="dateline">${D.map(d => `<div><div class="k">${esc(d.step)}</div><div class="v">${esc(d.date || "–")} ${mark(d.ok)}</div>
       ${d.where || d.how ? `<div class="small">${d.where ? `<span class="${d.where.includes("!") ? "mono" : ""}">${esc(d.where)}</span>${d.how ? ", " : ""}` : ""}${esc(d.how || "")}</div>` : ""}
-      ${d.note ? `<div class="small muted">${esc(d.note)}</div>` : ""}</div>`).join("")}</div></div>`;
+      ${d.note ? `<div class="small muted" title="${esc(d.note)}">${esc(d.note.split("; ")[0])}</div>` : ""}</div>`).join("")}</div></div>`;
 }
 function rolesCheckCard(sug, docs, wbs) {
   if (!sug?.roles) return "";
@@ -792,12 +1025,16 @@ function rolesCheckCard(sug, docs, wbs) {
       ${diff.length ? `<ul class="why" style="color:var(--ink)">${diff.map(k => `<li><b>${ROLE[k]}:</b> ${k === "overlay_sheets" ? esc((so.overlay_sheets || []).join(", ")) : esc(so[k] || "none")} <span class="muted">(suggested: ${k === "overlay_sheets" ? esc((sug.roles.prior_overlay?.sheets || []).join(", ")) : esc(file(k, sug.roles[k]?.id) || "none")})</span></li>`).join("")}</ul>` : ""}
       <ul class="why">${(so.reasons || []).map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>`;
   }
-  return `<div class="card" id="rolesCheck"><h2>Checks on the suggestion</h2><p class="sub">Plain tests of the assignment, then a second model's view of the same evidence. The orchestrator confirms on its own only when no check is against it, at least two are for it, and the second opinion agrees.</p>
-    <ul class="checks">${checks.map(li).join("")}</ul>${op}</div>`;
+  return `<p class="sub">Plain tests of the assignment, then a second model's view of the same evidence. The orchestrator confirms on its own only when no check is against it, at least two are for it, and the second opinion agrees.</p>
+    <ul class="checks">${checks.map(li).join("")}</ul>${op}`;
 }
 const PROF = {stamp: null, data: null, loading: false};
+function profileLine() {
+  const f = PROF.data?.fields; if (!f) return PROF.loading ? "reading the models…" : "";
+  return esc(Object.values(f).filter(x => x.shown).slice(0, 4).map(x => `${x.label} ${x.shown}`).join(" · "));
+}
 function engProfileCard() {
-  const head = `<h2>The engagement's profile</h2><p class="sub">Facts about the models that each step would otherwise guess on its own: detected from the files (no model calls), and yours to set where the detection is wrong. The financial-year end totals the cash-flow chart; the horizon drives the roll-forward.</p>`;
+  const head = `<p class="sub">Facts about the models each step would otherwise guess: detected from the files, and yours to set where the detection is wrong.</p>`;
   const P = PROF.data;
   if (!P) return head + `<p class="muted small" style="margin:0">${PROF.loading ? "Reading the models…" : ""}</p>`;
   const f = P.fields, detected = {fy_end_month: v => MONTHS[v - 1], horizon: v => v};
@@ -815,6 +1052,7 @@ async function loadProfile(force) {
   try { PROF.data = await api(`/api/engagements/${E.id}/profile`); } catch (e) { PROF.data = null; }
   PROF.loading = false;
   if ($("#engProfile")) { $("#engProfile").innerHTML = engProfileCard(); bindEngProfile(); }
+  if ($("#engProfileLine")) $("#engProfileLine").innerHTML = profileLine();
 }
 function bindEngProfile() {
   document.querySelectorAll("#engProfile [data-prof]").forEach(s => s.onchange = async () => {
@@ -822,6 +1060,7 @@ function bindEngProfile() {
     try { PROF.data = await api(`/api/engagements/${E.id}/profile`, {method: "PUT", body: {fields: {[k]: v}}});
       toast("Saved. The steps it drives run again with it.", 5000); } catch (e) { toast(e.message, 6000); }
     $("#engProfile").innerHTML = engProfileCard(); bindEngProfile();
+    if ($("#engProfileLine")) $("#engProfileLine").innerHTML = profileLine();
   });
 }
 function likenessCard(sug, wbs) {
@@ -837,7 +1076,7 @@ function likenessCard(sug, wbs) {
     const tip = `<b>${esc(shortName(name(a)))}</b> vs <b>${esc(shortName(name(b)))}</b>: ${p.similarity}% alike<br>sheets ${p.sheets}% · line items ${p.line_items}% · formulas ${p.formulas}%<br>${p.a_in_b}% of the first's line items are in the second; ${p.b_in_a}% the other way`;
     return `<td style="background:var(--q${k});color:${white ? "#fff" : "#1a1a24"};width:auto;padding:4px 10px" data-tip="${esc(tip)}">${p.similarity}%</td>`;
   };
-  return `<h3 style="font-size:15px;margin:14px 0 2px">How alike the workbooks are</h3><p class="sub">Sheet names, line items and formula shapes in common, ignoring years and period labels. Hover a cell for the detail.</p>
+  return `<p class="sub">Sheet names, line items and formula shapes in common, ignoring years and period labels. Hover a cell for the detail.</p>
   <div class="scroll" id="likeHeat"><table class="heat"><thead><tr><th></th>${ids.map(b => `<th class="col" title="${esc(name(b))}">${esc(shortName(name(b)))}</th>`).join("")}</tr></thead>
   <tbody>${ids.map(a => `<tr><th style="text-align:right" title="${esc(name(a))}">${esc(shortName(name(a)))}</th>${ids.map(b => cell(a, b)).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
@@ -905,20 +1144,45 @@ const CAT = {conclusion: "The equity value, and what the report discloses of it"
 const CRITICAL = ["valuation_date", "equity_value", "discount_rate"];
 function viewReport() {
   const ready = E.documents.filter(d => d.status === "done");
-  if (!ready.length) return `<div class="card empty">Upload last year's report (PDF or PPTX) on the Workbench first.</div>`;
+  if (!ready.length) return `<div class="card empty">The report's key facts appear here once it's read. <button class="btn small primary" type="button" data-upload>Upload files</button></div>`;
   const d = ready.find(x => x.id === E.roles.prior_report?.id) || ready[0];
-  const H = E.result?.head;
-  return `<div class="lede"><div><h1><b>The report</b></h1><p>Only what the workbench needs from last year's report: who and when, the equity value (low, high and the midpoint), the discount rate, the terminal growth rate and the franking credit utilisation, and, where the report discloses them, the terminal value, the present values of the forecast and of the terminal value, and the value of franking credits. The key tables are read from their images first (a text layer can scramble a table, and a pasted picture has none); one model extracts the facts, code checks each against its page, a second model reviews, and they loop on what's open; then each fact is looked up, blind, on the image of where it sits, and the reviewer settles any difference. What they agree on is approved; what they can't settle comes to you, with the image.</p></div></div>
-  ${needsCard(["report"])}
-  ${H ? `<div class="callout info"><b>The equity value the bridge starts from:</b> ${vN(H.low)} – ${vN(H.high)} ${esc(H.units || "")}, mid ${vN(H.mid)}, ${H.basis === "cum" ? "cum-distribution" : "ex-distribution"}. ${esc((H.why || []).join("; "))}.</div>` : ""}
-  <div class="card" id="factsCard">${factsCard(d)}</div>
-  <div class="card" id="imagesCard">${imagesCard(d)}</div>`;
+  const fs = E.facts.filter(f => f.document_id === d.id), you = fs.filter(needsYou);
+  const cols = `<thead><tr><th>Item</th><th>Value</th><th>Source</th><th>Checks</th><th>On the image</th><th>The agents</th><th>Decision</th></tr></thead>`;
+  return `${reportSummary(d, fs)}
+  ${you.length ? `<div class="card" id="factsYou"><h2>${you.length === 1 ? "A fact" : `${you.length} facts`} for you</h2><p class="sub">The agents couldn't settle ${you.length === 1 ? "it" : "these"}: the evidence, the image and the buttons to decide.</p>
+    <div class="scroll"><table class="stack-sm">${cols}<tbody>${you.map(factRow).join("")}</tbody></table></div></div>` : ""}
+  ${fs.length || d.facts_status === "error" ? fold("facts-all", `All ${fs.length} facts`, `who and when, the value, the assumptions, with every check and review thread${you.length ? `; the ${you.length} for you ${you.length === 1 ? "is" : "are"} above` : ""}`, `<div id="factsCard">${factsCard(d)}</div>`, d.facts_status === "error") : ""}
+  ${fold("images", "Tables read from their images", imagesMeta(d), `<div id="imagesCard">${imagesCard(d)}</div>`, (d.loop?.visual?.tables?.flagged || 0) > 0)}`;
+}
+function imagesMeta(d) {
+  const V = d.loop?.visual || {}, T = V.tables || {}, F = V.facts;
+  if (V.error) return "couldn't read them";
+  return [T.read ? `${T.read} read, ${(T.verified || 0) + (T.resolved || 0)} checked${T.flagged ? `, ${T.flagged} not settled` : ""}` : "",
+    F ? `${F.confirmed} facts confirmed on the image${F.corrected ? `, ${F.corrected} corrected` : ""}` : ""].filter(Boolean).join(" · ");
+}
+// what the report says, and how sure we are: the equity value, the four figures the rebuild needs, the counts
+const seenShort = f => { const v = f?.visual; if (!v) return ""; if (String(v.status).startsWith("confirmed")) return `<span class="okt">✓ image</span>`;
+  if (v.status === "corrected") return `<span class="infot">corrected on the image</span>`; if (v.status === "native") return "slide text"; return `<span class="warnt">the image differs</span>`; };
+function reportSummary(d, fs) {
+  const F = k => { const f = fs.find(x => x.key === k && x.status !== "rejected"); return f && f.status === "approved" && f.final ? {...f, ...f.final} : f; };
+  if (!fs.length) return `<div class="card" id="reportCard"><h2>What the report says</h2><p class="muted small" style="margin:0">${d.facts_status === "error" ? "Reading its key facts failed: see All facts below." : "The key facts appear here once the report is read."}</p></div>`;
+  const eq = F("equity_value"), H = E.result?.head, units = H?.units || F("currency_units")?.value_text || "";
+  const basis = /cum/i.test(H?.basis || eq?.basis || "") ? "cum-distribution" : "ex-distribution";
+  const [low, mid, high] = H ? [vN(H.low), vN(H.mid), vN(H.high)] : [eq?.low_text || "–", eq?.value_text || "–", eq?.high_text || "–"];
+  const tile = (k, label) => { const f = F(k), v = f ? f.value_text || [f.low_text, f.high_text].filter(Boolean).join(" – ") : "";
+    return `<div class="tile"><span>${label}</span><b>${esc(v || "–")}</b><span>${f ? `p. ${esc(f.page ?? "?")} · ${seenShort(f) || "not looked at"}` : "not in the report's facts"}</span></div>`; };
+  const n = {page: fs.filter(f => f.check?.ok).length, image: fs.filter(f => ["confirmed", "confirmed by the reviewer", "corrected"].includes(f.visual?.status)).length, you: fs.filter(needsYou).length};
+  return `<div class="card" id="reportCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">What the report says</h2><span class="small muted">${esc(d.filename)}${units ? ` · ${esc(units)}` : ""} · ${basis}</span></div>
+    <div class="eqrow"><div><span class="k">Low</span><b>${esc(low)}</b></div><div class="mid"><span class="k">Mid, the midpoint</span><b>${esc(mid)}</b></div><div><span class="k">High</span><b>${esc(high)}</b></div></div>
+    <div class="small muted" style="margin-top:6px">Equity value${eq?.page ? `, p. ${esc(eq.page)}` : ""}${eq ? ` · ${seenShort(eq) || "not looked at"}` : ""}</div>
+    <div class="tiles" style="margin-top:12px">${tile("valuation_date", "Valuation date")}${tile("discount_rate", "Discount rate")}${tile("terminal_growth_rate", "Terminal growth")}${tile("franking_utilisation", "Franking utilisation")}</div>
+    <div class="conf"><span><b>${fs.length}</b> facts</span><span><b>${n.page}</b> checked against the page</span><span><b>${n.image}</b> confirmed on the image</span><span${n.you ? ` class="warnt"` : ""}><b>${n.you}</b> need you</span></div></div>`;
 }
 // the key tables read from their images (visual.read_tables), loaded with the document
 const DOCV = {id: null, doc: null, stamp: null, loading: false};
 function imagesCard(d) {
   const V = d.loop?.visual || {}, T = V.tables || {};
-  const head = `<h2>Read from the report's images</h2><p class="sub">A report's text layer can scramble a table (columns, merged headings) and has nothing for a table pasted as a picture, so the tables most likely to hold the key figures are read from their images: luna reads each one; code checks the read against the page's own characters where there are any, otherwise sol reads it again, independently, and the two are compared; what doesn't check out goes round the table loop. Then each fact above is looked up, blind, on the image of where it sits.</p>`;
+  const head = `<p class="sub">A text layer can scramble a table and has nothing for one pasted as a picture, so the tables most likely to hold the key figures are read from their images. One model reads each; code checks the read against the page's own characters, or a second model reads it again and the two are compared; what doesn't check out goes round the table loop. Then each fact is looked up, blind, on its image.</p>`;
   if (V.error) return head + `<div class="callout warn small">${esc(V.error)}</div>`;
   if (!T.read) return head + `<p class="small muted" style="margin:0">${d.kind === "pptx" ? "The slides' own tables and text are exact (read from the file); no picture held a key table." : "No key table to read yet."}</p>`;
   if (DOCV.id !== d.id || DOCV.stamp !== JSON.stringify(d.loop?.visual?.at)) loadDocV(d);
@@ -954,26 +1218,25 @@ function seen(f, did) {  // the fact on its image (visual.confirm)
   const link = v.image ? ` <a class="small" href="/api/documents/${did}/image/${esc(v.image)}" target="_blank" rel="noopener">image</a>` : "";
   const read = v.read ? ["value", "low", "high"].filter(k => v.read[k]).map(k => `${k === "value" ? "" : k + " "}${esc(v.read[k])}`).join(", ") : "";
   if (v.status === "confirmed") return `<span class="pill ok" title="${esc(v.by)} read ${esc(read)} on ${esc(v.where)}, without being told the extraction">✓ seen</span>${link}`;
-  if (v.status === "confirmed by the reviewer") return `<span class="pill ok" title="${esc(v.verdict?.reason || "")}">✓ sol confirms</span>${link}`;
+  if (v.status === "confirmed by the reviewer") return `<span class="pill ok" title="${esc(v.verdict?.reason || "")}">✓ the reviewer confirms</span>${link}`;
   if (v.status === "corrected") return `<span class="pill info" title="${esc(v.verdict?.reason || "")}">corrected on the image</span>${link}<div class="small muted">was ${esc(Object.entries(v.was || {}).map(([k, x]) => `${k} ${x}`).join(", "))}</div>`;
   return `<span class="pill warn" title="${esc(v.verdict?.reason || "")}">the image differs</span>${link}<div class="small muted">${esc(v.verdict?.reason || "")}</div>`;
 }
 function factsCard(d) {
   const fs = E.facts.filter(f => f.document_id === d.id);
   const running = busy(d.facts_status);
-  const head = `<div class="row" style="justify-content:space-between"><div><h2>Key facts from ${esc(d.filename)}</h2><p class="sub">Extracted by <b>${esc(E.model)}</b>, reviewed by <b>${esc(E.reviewer_model)}</b> (the header's Models).</p></div>
-    <div class="row">${running ? `<span class="pill info">${esc(d.facts_step || "Working")}</span> ${d.facts_status === "running" ? runTimer(d.facts_started_at, null, d.facts_secs) : ""}` : d.facts_secs ? `<span class="small muted">took ${dur(d.facts_secs)}</span>` : ""}</div></div>`;
+  const head = `<p class="sub">One model extracts, code checks each fact against its page, a second model reviews, and they loop on what's open (${esc(E.model)} and ${esc(E.reviewer_model)}, set under Models).${!running && d.facts_secs ? ` Took ${dur(d.facts_secs)}.` : ""}</p>`;
   if (d.facts_status === "error") return head + `<div class="callout bad">${esc(d.facts_error)} <button class="btn small" data-retry-stage="facts">Try again</button></div>`;
   if (!fs.length) return head + `<p class="muted">${running ? "Reading the report… about a minute." : "Waiting to start."}</p>`;
   const n = {approved: 0, pending: 0, rejected: 0}; fs.forEach(f => n[f.status]++);
   const nYou = fs.filter(needsYou).length, nAgentsOk = fs.filter(f => f.status === "approved" && byAgents(f)).length;
   let html = head + `<div class="row small" style="margin-bottom:8px">${nAgentsOk ? `<span class="pill ok">${nAgentsOk} approved by the agents</span>` : ""}${n.approved - nAgentsOk ? `<span class="pill ok">${n.approved - nAgentsOk} approved by you</span>` : ""}${nYou ? `<span class="pill warn">${nYou} need you</span>` : `<span class="pill">nothing needs you</span>`}${n.rejected ? `<span class="pill">${n.rejected} rejected</span>` : ""}</div>`;
   const L = d.loop || {};
-  if (L.facts) html += `<div class="callout info small" style="margin-bottom:8px"><b>The review loop:</b> ${L.facts.rounds ? `${L.facts.rounds} round(s); ${L.facts.settled_in_loop} fact(s) settled between the agents` : "the reviewer and the checks agreed with every fact at first reading"}${L.facts.arbitrated ? `; the arbiter settled ${L.facts.arbitrated} more` : ""}${L.facts.escalated ? `; ${L.facts.escalated} they couldn't settle are yours (first below)` : ""}. Undo any decision to take it over.</div>`;
+  if (L.facts) html += `<p class="small" style="margin:0 0 8px"><b>The review loop:</b> ${L.facts.rounds ? `${L.facts.rounds} round(s); ${L.facts.settled_in_loop} fact(s) settled between the agents` : "the reviewer and the checks agreed with every fact at first reading"}${L.facts.arbitrated ? `; the arbiter settled ${L.facts.arbitrated} more` : ""}${L.facts.escalated ? `; ${L.facts.escalated} they couldn't settle are yours` : ""}. Undo any decision to take it over.</p>`;
   for (const [cat, label] of Object.entries(CAT)) {
-    const rows = fs.filter(f => f.category === cat).sort((a, b) => needsYou(b) - needsYou(a) || CRITICAL.includes(b.key) - CRITICAL.includes(a.key)); if (!rows.length) continue;
+    const rows = fs.filter(f => f.category === cat && !needsYou(f)).sort((a, b) => CRITICAL.includes(b.key) - CRITICAL.includes(a.key)); if (!rows.length) continue;
     html += `<details data-k="facts-${cat}" open style="margin-top:10px"><summary style="font-size:14px;color:var(--ink);font-weight:600">${label} <span class="muted small">(${rows.length})</span></summary>
-    <div class="scroll"><table><thead><tr><th>Item</th><th>Value</th><th>Source</th><th>Checks</th><th>On the image</th><th>The agents</th><th>Decision</th></tr></thead><tbody>${rows.map(factRow).join("")}</tbody></table></div></details>`;
+    <div class="scroll"><table class="stack-sm"><thead><tr><th>Item</th><th>Value</th><th>Source</th><th>Checks</th><th>On the image</th><th>The agents</th><th>Decision</th></tr></thead><tbody>${rows.map(factRow).join("")}</tbody></table></div></details>`;
   }
   return html;
 }
@@ -1003,11 +1266,11 @@ function factRow(f) {
     <td>${decision}</td></tr>${edit}`;
 }
 function bindReport() {
-  document.querySelectorAll("#factsCard [data-f]").forEach(b => b.onclick = () => {
+  document.querySelectorAll("main [data-f]").forEach(b => b.onclick = () => {
     if (b.dataset.a === "edit") { state.factEdit = +b.dataset.f; render(); document.querySelector(`[data-fe="${b.dataset.f}"] input`)?.focus(); return; }
     act(() => api(`/api/facts/${b.dataset.f}`, {method: "PUT", body: {action: b.dataset.a}}));
   });
-  document.querySelectorAll("#factsCard [data-fe]").forEach(form => {
+  document.querySelectorAll("main [data-fe]").forEach(form => {
     form.onsubmit = ev => { ev.preventDefault(); const fields = Object.fromEntries(new FormData(form)); fields.page = fields.page ? +fields.page : null;
       state.factEdit = null; act(() => api(`/api/facts/${form.dataset.fe}`, {method: "PUT", body: {action: "edit", fields}})); };
     form.querySelector("[data-cancel]").onclick = () => { state.factEdit = null; render(); };
@@ -1018,31 +1281,31 @@ function bindReport() {
 const EQ = {cands: null, eid: null};
 function viewRebuild() {
   const O = E.overlay, R = E.result, rb = stageOf("rebuild");
-  const head = `<div class="lede"><div><h1><b>Last year, rebuilt</b></h1><p>The overlay's formulas compiled to Python and checked cell by cell against the values Excel saved; the report's equity value found in it (low and high on one row where they are); its discountings read back from their factors; and the whole fed again from last year's client model, which should give the same figures.</p></div></div>`;
-  if (!O) return head + needsCard(["rebuild"]) + `<div class="card empty">${busy(rb.status) ? `Rebuilding: ${esc(rb.note || "")}` : "Waiting for the roles."}</div>`;
+  if (!O) return `<div class="card empty">${busy(rb.status) ? `Rebuilding last year in Python: ${esc(rb.note || "")}` : "Last year is rebuilt once the roles are settled."}</div>`;
   const val = O.validation || {}, off = (val.cells || 0) - (val.matched || 0);
   const w = R?.where || rb.data?.where;
-  return head + needsCard(["rebuild"]) + `
+  const rec = R?.reconcile?.rows || [], recOk = rec.filter(r => r.ok === true).length, recBad = rec.filter(r => r.ok === false).length;
+  return `
   <div class="tiles">
     <div class="tile"><b>${nfmt(val.matched)} / ${nfmt(val.cells)}</b><span>formula cells reproduced in Python</span></div>
-    <div class="tile"><b>${R?.tie ? `${vN(R.tie.low.saved)} – ${vN(R.tie.high.saved)}` : "–"}</b><span>the equity value, low – high${R?.tie ? ` (mid ${vN((R.tie.low.saved + R.tie.high.saved) / 2)})` : ""}${R?.head?.units ? `, ${esc(R.head.units)}` : ""}, as Excel saved it${w ? ` in <span class="mono">${esc(w.low)}</span>${w.high !== w.low ? ` / <span class="mono">${esc(w.high)}</span>` : ""}` : ""}${w?.how ? `<br>${esc(w.how)}` : ""}</span></div>
+    <div class="tile"><b>${R?.tie ? `${vN(R.tie.low.saved)} – ${vN(R.tie.high.saved)}` : "–"}</b><span>the equity value, low – high${R?.tie ? ` (mid ${vN((R.tie.low.saved + R.tie.high.saved) / 2)})` : ""}${R?.head?.units ? `, ${esc(R.head.units)}` : ""}, as Excel saved it${w ? ` in <span class="mono">${esc(w.low)}</span>${w.high !== w.low ? ` / <span class="mono">${esc(w.high)}</span>` : ""}` : ""}</span></div>
     <div class="tile"><b>${R?.tie ? (R.tie.low.ok && R.tie.high.ok ? "Ties" : "Doesn't tie") : "–"}</b><span>to the report's figures, as Excel saved them</span></div>
     <div class="tile"><b>${esc(O.roll?.prior_valuation_date || "–")}</b><span>last year's valuation date</span></div>
   </div>
   ${R?.tie ? tieCard(R) : ""}
   ${R?.inputs ? inputsCard(R) : ""}
-  ${R?.reconcile ? reconcileCard(R) : ""}
-  ${R?.assumptions ? assumptionsCard(R) : ""}
+  ${R?.reconcile ? fold("reconcile", "Reconciled to the report", R.reconcile.error ? "couldn't split the value" : rec.length ? `${recOk} of ${rec.filter(r => r.ok != null).length} tie${recBad ? `, ${recBad} don't` : ""} · the terminal value, the present values, the franking credits` : "nothing disclosed to reconcile", reconcileCard(R), recBad > 0, "reconcileCard") : ""}
+  ${R?.assumptions ? fold("assumptions", "The model's assumptions", "each discounting under the low and the high, and what the report says beside them", assumptionsCard(R)) : ""}
   ${equityPickCard()}
-  ${off > 0 ? `<details class="card" data-k="mismatches"><summary style="font-size:14px">${off} cell(s) Python computes differently from Excel</summary><div class="scroll" style="margin-top:8px"><table><thead><tr><th>Cell</th><th>Line item</th><th class="num">Python</th><th class="num">Excel</th><th>Formula</th></tr></thead><tbody>
+  ${off > 0 ? `<details class="card fold" data-k="mismatches"><summary><span class="ft">${off} cell(s) Python computes differently from Excel</span></summary><div class="fold-body scroll"><table><thead><tr><th>Cell</th><th>Line item</th><th class="num">Python</th><th class="num">Excel</th><th>Formula</th></tr></thead><tbody>
     ${(val.mismatches || []).map(m => `<tr><td class="mono">${esc(m.cell)}</td><td>${esc(m.label)}</td><td class="num">${esc(fmt(m.python, 4))}</td><td class="num">${esc(fmt(m.workbook, 4))}</td><td class="mono small">${esc((m.formula || "").slice(0, 90))}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
-  <div class="card"><h2>The module</h2><p class="sub">${esc(O.files?.overlay || "")}, sheets ${esc((O.sheets || []).join(", "))}: each formula a Python function, Excel's formula beside it. Regenerated from the workbook, never edited.</p>
-    <a class="btn" href="/api/engagements/${E.id}/overlay/module.py" target="_blank" rel="noopener">Open overlay_e${E.id}.py</a></div>`;
+  ${fold("module", "The Python module", `overlay_e${E.id}.py`, `<p class="sub">${esc(O.files?.overlay || "")}, sheets ${esc((O.sheets || []).join(", "))}: each formula a Python function, Excel's formula beside it. Regenerated from the workbook, never edited.</p>
+    <a class="btn" href="/api/engagements/${E.id}/overlay/module.py" target="_blank" rel="noopener">Open overlay_e${E.id}.py</a>`)}`;
 }
 function tieCard(R) {
   const u = R.head?.units || "", row = (end, t) => `<tr><td><b>${end === "low" ? "Low" : "High"}</b> <span class="mono small muted">${esc(R.where[end])}</span></td><td class="num">${esc(t.report_text || vN(t.report))}</td>
     <td class="num">${vN(t.saved)} ${t.ok ? `<span class="pill ok">✓</span>` : `<span class="pill bad">✗</span>`}</td><td class="num">${vN(t.rebuilt)} ${t.rebuilt_ok ? `<span class="pill ok">✓</span>` : `<span class="pill warn">moves</span>`}</td></tr>`;
-  return `<div class="card"><h2>The tie to the report</h2><p class="sub">The report's equity value against the overlay's cells as Excel saved them, and rebuilt in Python on last year's client model. ${esc(u)}. Mid = the midpoint of the low and the high.</p>
+  return `<div class="card" id="tieCard"><h2>The tie to the report</h2><p class="sub">The report's equity value against the overlay's cells as Excel saved them, and rebuilt in Python on last year's client model. ${esc(u)}. Mid = the midpoint of the low and the high.</p>
     <div class="scroll"><table><thead><tr><th></th><th class="num">The report</th><th class="num">As Excel saved</th><th class="num">Rebuilt in Python</th></tr></thead><tbody>${row("low", R.tie.low)}${row("high", R.tie.high)}
     <tr class="tot"><td>Mid</td><td class="num">${vN(R.values.report.mid)}</td><td class="num">${vN((R.tie.low.saved + R.tie.high.saved) / 2)}</td><td class="num">${vN(R.values.rebuilt.mid)}</td></tr></tbody></table></div>
     ${(R.head?.why || []).length ? `<p class="small muted" style="margin:8px 0 0">${esc(R.head.why.join("; "))}.</p>` : ""}</div>`;
@@ -1069,12 +1332,12 @@ function inputsCard(R) {
       <div class="small" style="margin:4px 0">${brief}${X.report?.length ? ` <span class="muted">· the report: ${X.report.map(esc).join(" – ")}</span>` : ""}</div>
       ${X.error ? `<p class="small muted">${esc(X.error)}</p>` : `<details data-k="inputs-${key}" ${X.ok === true ? "" : "open"}><summary>The evidence</summary><div class="grid2" style="margin-top:8px">${block(key === "rate" ? "The low (at the higher rate)" : "The low", L)}${block(key === "rate" ? "The high (at the lower rate)" : "The high", H)}</div></details>`}</div>`;
   };
-  return `<div class="card" id="inputsCard"><h2>Model inputs: sourced and checked</h2><p class="sub">Each input is the cell the model's formulas read, found by following them, not by looking for the number; seen with its line item and column; recomputed from it; then checked against the report. One that isn't sourced to a cell, or doesn't check out, comes to you.</p>
+  return `<div class="card" id="inputsCard"><h2>Model inputs: sourced and checked</h2><p class="sub">Each input is the cell the model's formulas read, found by following them; recomputed from it; then checked against the report.</p>
     ${["rate", "growth", "franking"].map(section).join("")}</div>`;
 }
 function reconcileCard(R) {
   const C = R.reconcile, u = R.head?.units || "";
-  if (C.error) return `<div class="card" id="reconcileCard"><h2>Reconciled to the report</h2><p class="small muted">${esc(C.error)}</p></div>`;
+  if (C.error) return `<p class="small muted">${esc(C.error)}</p>`;
   const f = (x, pct) => x == null ? "–" : pct ? x.toFixed(1) + "%" : vN(x);
   const mark = ok => ok === true ? ` <span class="pill ok">✓</span>` : ok === false ? ` <span class="pill bad">✗</span>` : "";
   const rows = C.rows.map(r => { const pct = r.unit === "%", t = r.ties || {};
@@ -1083,9 +1346,9 @@ function reconcileCard(R) {
       <td class="num">${f(r.python.low, pct)}${mark(t.low)}</td><td class="num"><b>${f(r.python.mid, pct)}</b>${mark(t.mid)}</td><td class="num">${f(r.python.high, pct)}${mark(t.high)}</td>
       <td class="num">${r.this_year ? f(r.this_year.mid, pct) : "–"}</td></tr>`; }).join("");
   const L = C.last_year?.mid || {}, T = C.this_year?.mid;
-  return `<div class="card" id="reconcileCard"><h2>Reconciled to the report</h2><p class="sub">What the report discloses of the value, against the same split of the overlay's own discountings as Excel saved them: the largest (${esc(C.streams?.low?.main || "the cash flows")}) split into its terminal value and the discrete forecast; franking credits by their label. ${esc(u)}. The mid is the midpoint of the low and the high; a share at the mid is the mid's figure over the mid's total. Ties within half a unit of the report's last digit.</p>
+  return `<p class="sub">What the report discloses of the value, against the same split of the overlay's own discountings as Excel saved them: the largest (${esc(C.streams?.low?.main || "the cash flows")}) split into its terminal value and the discrete forecast; franking credits by their label. ${esc(u)}. The mid is the midpoint of the low and the high; a share at the mid is the mid's figure over the mid's total. Ties within half a unit of the report's last digit.</p>
     <div class="scroll"><table><thead><tr><th></th><th class="num">The report</th><th class="num">Python, low</th><th class="num">Mid</th><th class="num">High</th><th class="num">This year, mid</th></tr></thead><tbody>${rows}</tbody></table></div>
-    ${L.tv_share != null ? `<p class="small muted" style="margin:8px 0 0">The terminal value is ${L.tv_share.toFixed(1)}% of the discounted cash flows' value last year${T?.tv_share != null ? `, ${T.tv_share.toFixed(1)}% this year` : ""}.</p>` : ""}</div>`;
+    ${L.tv_share != null ? `<p class="small muted" style="margin:8px 0 0">The terminal value is ${L.tv_share.toFixed(1)}% of the discounted cash flows' value last year${T?.tv_share != null ? `, ${T.tv_share.toFixed(1)}% this year` : ""}.</p>` : ""}`;
 }
 function assumptionsCard(R) {
   const facts = key => E.facts.find(f => f.key === key && f.status !== "rejected");
@@ -1105,15 +1368,15 @@ function assumptionsCard(R) {
       <dt>Present value</dt><dd>${vN(A.pv)} <span class="mono small muted">${esc(A.cell)}</span>${A.label ? ` <span class="small muted">${esc(A.label)}</span>` : ""}</dd>
       ${others.map(o => `<dt>Also discounted</dt><dd>${esc(o.label || "")} ${vN(o.pv)} <span class="mono small muted">${esc(o.cell)}</span> at ${vPct(o.rate)}</dd>`).join("")}</dl></div>`;
   };
-  return `<div class="card"><h2>Model assumptions</h2><p class="sub">Read from the overlay's own discountings under the equity value (the rate and dates they read, the convention their factors show), recomputed from the values Excel saved; beside them, what the report says.</p>
+  return `<p class="sub">Read from the overlay's own discountings under the equity value (the rate and dates they read, the convention their factors show), recomputed from the values Excel saved; beside them, what the report says.</p>
     <div class="grid2">${one("low", R.assumptions.low || [])}${one("high", R.assumptions.high || [])}</div>
-    <dl class="kv" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--rule)">${f("discount_rate", "Discount rate")}${f("terminal_growth_rate", "Terminal growth rate")}${f("franking_utilisation", "Franking credit utilisation")}${f("terminal_value", "Terminal value")}${f("pv_forecast", "PV of the forecast")}${f("pv_terminal_value", "PV of the terminal value")}${f("franking_credits_value", "Value of franking credits")}${f("franking_credits_share", "Franking credits, share of value")}</dl></div>`;
+    <dl class="kv" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--rule)">${f("discount_rate", "Discount rate")}${f("terminal_growth_rate", "Terminal growth rate")}${f("franking_utilisation", "Franking credit utilisation")}${f("terminal_value", "Terminal value")}${f("pv_forecast", "PV of the forecast")}${f("pv_terminal_value", "PV of the terminal value")}${f("franking_credits_value", "Value of franking credits")}${f("franking_credits_share", "Franking credits, share of value")}</dl>`;
 }
 function equityPickCard() {
   const needs = (E.run?.needs || []).find(n => n.id === "equity" || n.id === "equity-rows");
   const w = E.result?.where, open = !!needs;
   const cands = needs?.candidates || EQ.cands;
-  return `<details class="card" id="equityPick" data-k="equitypick" ${open ? "open" : ""}><summary style="font-size:14px">${open ? "<b>Pick last year's equity value cells</b>" : "Pick other cells for last year's equity value"}</summary>
+  return `<details class="card fold" id="equityPick" data-k="equitypick" ${open ? "open" : ""}><summary><span class="ft">${open ? "Pick last year's equity value cells" : "Pick other cells for last year's equity value"}</span></summary>
     <p class="small muted">The low and the high of the report's equity value, as cells on the overlay's sheets (Sheet!A1). ${w ? `Now: ${esc(w.low)} / ${esc(w.high)} (${esc(w.how || "")}).` : ""} Cells holding the report's figures:</p>
     ${cands?.length ? `<div class="scroll"><table><thead><tr><th>Cell</th><th>Line item</th><th class="num">Value</th><th>The report's</th><th>Basis</th></tr></thead><tbody>${cands.map(c => `<tr><td class="mono">${esc(c.cell)}</td><td>${esc(c.label || "")}</td><td class="num">${esc(fmt(c.value, 1))}</td><td>${esc(c.part === "value" ? "mid / preferred" : c.part)}</td><td>${esc(c.basis)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="small"><button class="btn small" id="eqLoad" type="button">Find them</button></p>`}
     <form class="row" id="eqForm" style="margin-top:10px"><label class="small">Low<br><input type="text" name="low" value="${esc(w?.low || "")}" placeholder="Summary!C9"></label>
@@ -1131,10 +1394,12 @@ function bindRebuild() {
 
 // ---- the result: the bridge and the cash flows -------------------------------------------------------------------
 const STEP_SHORT = {report: "Report", rounding: "Rounding", prior_feed: "Client file", rebuilt: "Rebuilt", time: "Time value", cash: "Cash flows paid",
-  forecast: "New forecast", roll: "Roll-forward", rate: "Discount rate", this_year: "This year"};
-function bridgeSpec(steps, title, units) {
-  const keep = steps.filter(s => s.value != null && (s.total || Math.abs(s.value) >= 0.05 || ["time", "cash", "forecast", "roll"].includes(s.key)));
-  const labels = keep.map(x => STEP_SHORT[x.key] || x.label);
+  forecast: "New forecast", roll: "Roll-forward", rate: "Discount rate", this_year: "This year"};  // "Last year" when the rebuild ties
+function bridgeSpec(steps, title, units, tied) {
+  // where the rebuild ties to the report (low and high), one "last year" bar: two identical bars say nothing
+  const keep = steps.filter(s => s.value != null && (s.total || Math.abs(s.value) >= 0.05 || ["time", "cash", "forecast", "roll"].includes(s.key)))
+    .filter(s => !(tied && s.key === "rebuilt"));
+  const labels = keep.map(x => tied && x.key === "report" ? "Last year" : STEP_SHORT[x.key] || x.label);
   return {title, kind: "waterfall", units: units || "", labels, period_labels: labels, frequency: "irregular", sign: 1,
     series: [{name: title, range: "", data: keep.map(x => x.value)}], totals: keep.map((x, i) => x.total ? i : -1).filter(i => i >= 0)};
 }
@@ -1145,30 +1410,38 @@ function flowsSpec(ch, units) {
 }
 function viewResult() {
   const R = E.result, rs = stageOf("result");
-  const head = `<div class="lede"><div><h1><b>Last year to this year</b></h1><p>The report's equity value, confirmed in Python on last year's client model, then rolled forward onto this year's at last year's discount rate: a year of time value, last year's forecast cash flows up to the new valuation date dropping out, and this year's forecast in their place. Each step is recomputed, so they add up exactly; the mid is the average of the low's and the high's.</p></div></div>`;
-  if (!R?.bridges) return head + needsCard(["result"]) + `<div class="card empty">${busy(rs.status) ? `Working: ${esc(rs.note || "")}` : "Waiting for last year's rebuild."}</div>`;
+  if (!R?.bridges) return `<div class="card empty">${busy(rs.status) ? `Working out the bridge: ${esc(rs.note || "")}` : "The bridge appears once last year is rebuilt and rolled forward."}</div>${mapFold()}`;
   const B = R.bridges, end = state.bridgeEnd, steps = (B[end] || B.mid).steps, u = B.units || R.head?.units || "";
   let run = 0;
   const rows = steps.map(x => { if (x.value == null) return ""; run = x.total ? x.value : run + x.value;
-    return `<tr class="${x.total ? "tot" : ""}"><td class="${x.total ? "" : "step"}">${esc(x.label)}</td><td class="num">${x.total ? "" : (x.value >= 0.05 ? "+" : "") + vN(x.value)}</td><td class="num"><b>${vN(run)}</b></td></tr>`; }).join("");
-  const rev = stageOf("review"), rv = E.run?.stages && (E.run.log || []).find(h => h.stage === "review" && h.event === "decide");
-  return head + resultTeaser() + needsCard(["result"]) + `
-  <div class="card"><div class="row" style="justify-content:space-between"><div><h2>The value bridge</h2><p class="sub">${esc(u)} · equity value, ${R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution"}${B.valuation_date ? ` · this year's valuation date ${esc(B.valuation_date)}` : ""}</p></div>
-    <div class="seg" role="tablist" aria-label="Which end">${["low", "mid", "high"].map(k => `<button role="tab" data-end="${k}" class="${end === k ? "on" : ""}" aria-selected="${end === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div></div>
-    ${B.held ? `<div class="callout warn small" style="margin-bottom:10px">This year's value is held back until the rows below are found: the bridge stops at last year's rebuilt value.</div>` : ""}
-    <div class="grid2"><div id="brChart"></div><div class="scroll"><table class="bridge"><thead><tr><th>Step</th><th class="num">Change</th><th class="num">Value</th></tr></thead><tbody>${rows}</tbody></table>
+    return `<tr class="${x.total ? "tot" : ""}"><td class="${x.total ? "" : "step"}">${esc(x.label)}</td><td class="num">${x.total ? "" : signed(x.value)}</td><td class="num"><b>${vN(run)}</b></td></tr>`; }).join("");
+  const tots = steps.filter(x => x.total && x.value != null), from = tots[0]?.value, to = tots[tots.length - 1]?.value;
+  return `<div class="card" id="bridgeCard"><div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div><h2>Last year to this year</h2><p class="sub" style="margin:0">${esc(u)} · equity value, ${R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution"} · at last year's discount rate${B.valuation_date ? ` · to ${esc(B.valuation_date)}` : ""}</p></div>
+      <div class="seg" role="group" aria-label="Which end">${["low", "mid", "high"].map(k => `<button type="button" data-end="${k}" class="${end === k ? "on" : ""}" aria-pressed="${end === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div></div>
+    ${from != null && to != null && !B.held ? `<div class="move"><span class="from">${vN(from)}</span><span class="muted">→</span><span class="to">${vN(to)}</span><span class="${to - from >= 0 ? "okt" : "warnt"}">${signed(to - from)}</span><span class="small muted">the ${end}${end === "mid" ? ", the midpoint of the low and the high" : ""}</span></div>` : ""}
+    ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until the rows below are found: the bridge stops at last year's rebuilt value.</div>` : ""}
+    <div class="grid2" style="margin-top:10px"><div id="brChart"></div><div class="scroll"><table class="bridge"><thead><tr><th>Step</th><th class="num">Change</th><th class="num">Value</th></tr></thead><tbody>${rows}</tbody></table>
     ${(B.notes || []).length ? `<p class="small muted">${esc(B.notes.join("; "))}</p>` : ""}</div></div></div>
-  <div class="card"><h2>The forecast cash flows</h2><p class="sub">The undiscounted discrete forecast cash flows under the value (${esc(R.chart?.label || "the cash-flow row")}, the terminal value left out${R.chart?.left_out?.length ? `: ${esc(R.chart.left_out.join(", "))}` : ""}), totalled by financial year: last year's as the rebuild reads them from last year's client model, and this year's, rolled forward.</p>
-    ${R.chart?.years?.length ? `<div id="cfChart"></div>` : `<p class="muted small">${esc(R.chart?.why || "No cash flows found under the value.")}</p>`}</div>
   ${rowsCard(R)}
-  ${rev.status && rev.status !== "waiting" ? `<div class="card"><h2>gpt-sol's review of the run</h2><p class="sub">It read the facts, the tie, the bridge, the cash flows and the run log end to end.</p>
-    <p style="margin:0">${rv ? esc(rv.text) : esc(rev.note || "")}</p></div>` : ""}`;
+  <div class="card" id="cfCard"><h2>The forecast cash flows</h2><p class="sub">Undiscounted, by financial year, the terminal value left out${R.chart?.left_out?.length ? ` (${esc(R.chart.left_out.join(", "))})` : ""}: last year's model against this year's.</p>
+    ${R.chart?.years?.length ? `<div id="cfChart"></div>` : `<p class="muted small">${esc(R.chart?.why || "No cash flows found under the value.")}</p>`}</div>
+  ${reviewCard()}
+  ${mapFold()}`;
+}
+function reviewCard() {
+  const rev = stageOf("review"); if (!rev.status || rev.status === "waiting") return "";
+  const pts = (E.run?.needs || []).filter(n => n.stage === "review"), rv = (E.run?.log || []).find(h => h.stage === "review" && h.event === "decide");
+  const said = (rv?.text || "").replace(/^[\w.\-]+:\s*(ok|concerns)\s*[—–-]\s*/i, "");
+  return `<div class="card" id="reviewCard"><div class="row"><h2 style="margin:0">Review</h2>${busy(rev.status) ? `<span class="pill info">reading the run</span>` : pts.length ? `<span class="pill warn">${pts.length} point${pts.length > 1 ? "s" : ""} to check</span>` : `<span class="pill ok">no concerns</span>`}</div>
+    ${pts.map(p => `<p style="margin:10px 0 0"><b>${esc(p.title)}.</b> ${esc(p.detail || "")}</p>`).join("")}${!pts.length && said ? `<p style="margin:10px 0 0">${esc(said)}</p>` : ""}
+    <p class="small muted" style="margin:10px 0 0">By the reviewer (${esc(E.reviewer_model)}), reading the facts, the tie, the bridge, the cash flows and the run log end to end.</p></div>`;
 }
 function rowsCard(R) {
   const g = R.figures?.gaps; if (!g) return "";
   const rows = [...g.dcf_missing.map(x => ({...x, kind: "not found"})), ...g.blank_rows.map(x => ({...x, kind: "found but blank"})),
     ...g.weak_rows.map(x => ({...x, kind: "found, not sure"})), ...g.timing_open.map(x => ({...x, kind: "timing row"}))];
-  if (!rows.length) return `<div class="card" id="rowsCard"><h2>This year's rows</h2><p class="sub" style="margin:0">Every row the value's cash flows come from was found in this year's model (${nfmt(g.dcf_rows)} of them), and this year's model at last year's date gives about last year's value (the zero-roll check).</p></div>`;
+  if (!rows.length) return "";
   return `<div class="card" id="rowsCard"><h2>Rows to find in this year's model</h2><p class="sub">The value's cash flows come from these rows of last year's client model. The row agents couldn't settle them, so this year's value waits: pick this year's row, or keep last year's values for it on purpose. Last year's values are never used silently.</p>
     <div class="scroll"><table><thead><tr><th>Last year's row</th><th>Why</th><th>This year's</th><th></th></tr></thead><tbody>${rows.map(x => `<tr id="row-${esc(x.row).replace(/[^A-Za-z0-9]/g, "_")}"><td><span class="mono">${esc(x.row)}</span><div class="small">${esc(x.label || "")}</div></td>
       <td class="small">${esc(x.kind)}${x.why ? `: ${esc(x.why)}` : ""}${x.confidence != null ? ` (confidence ${esc(x.confidence)})` : ""}</td><td class="mono small">${esc(x.found || "–")}</td>
@@ -1193,25 +1466,28 @@ function bindResult() {
   document.querySelectorAll("[data-rowinfo]").forEach(b => b.onclick = () => rowPicker(b.dataset.rowinfo));
   const R = E.result; if (!R?.bridges) return;
   const B = R.bridges, u = B.units || R.head?.units || "", end = state.bridgeEnd;
-  $("#brChart")?.append(chartCard(bridgeSpec((B[end] || B.mid).steps, `The ${end}: last year to this year`, u)));
+  const tied = !!(R.tie?.low?.rebuilt_ok && R.tie?.high?.rebuilt_ok);
+  $("#brChart")?.append(chartCard(bridgeSpec((B[end] || B.mid).steps, `The ${end}: last year to this year`, u, tied)));
   if (R.chart?.years?.length) $("#cfChart")?.append(chartCard(flowsSpec(R.chart, u)));
   mountCharts($("#main"));
 }
 
 // ---- the map: insight cards, the detail on demand ------------------------------------------------------------------
-function viewMap() {
+function mapFold() {
   const m = E.map, ms = stageOf("map");
-  const head = `<div class="lede"><div><h1><b>The map</b></h1><p>How the four files link up: where the report's figures sit in the overlay, which client rows the overlay reads, those rows in this year's model, and what changed between last year's client model and this year's. The detail is a click away.</p></div></div>`;
-  if (!m) return head + `<div class="card empty">${busy(ms.status) ? `Building the map: ${esc(ms.note || "")}` : "The map is built after last year's rebuild."}</div>`;
+  const meta = m ? esc(ms.note || "") : busy(ms.status) ? `being built: ${esc(ms.note || "")}` : "built after last year's rebuild";
+  return fold("map", "How the files link up", meta, m ? mapBody(m) : `<p class="muted small" style="margin:0">${busy(ms.status) ? "Building the map…" : "The map is built after last year's rebuild."}</p>`, false, "mapFold");
+}
+function mapBody(m) {
   const located = b => !!b && (b.located ?? (b.label_match || b.anchor));
   const found = m.report_overlay.filter(x => located(x.matches[0])), chain = m.chain || [], now = chain.filter(c => c.current);
   const books = m.overlay_client.books || [], ch = m.changes || {}, c = ch.counts || {};
   const tile = (b, s) => `<div class="tile"><b>${b}</b><span>${s}</span></div>`;
-  return head + `
-  <div class="grid3">
+  const shown = x => x.value_text || [x.low_text, x.high_text].filter(Boolean).join(" – ");
+  return `<div class="grid3">
     <div class="card"><h2>The report in the overlay</h2><p class="sub">Where the report's figures sit: a cell labelled like the figure, or a DCF.</p>
       <div class="tiles">${tile(`${found.length} / ${m.report_overlay.length}`, "report figures located")}${tile(m.python.filter(p => p.reproduced).length, "DCFs recomputed in Python")}</div>
-      <ul class="why" style="color:var(--ink)">${found.slice(0, 6).map(x => `<li><b>${esc(x.label || x.key)}</b> ${esc(x.value_text || "")} → <span class="mono">${esc(x.matches[0].sheet)}!${esc(x.matches[0].addr)}</span></li>`).join("")}</ul>
+      <ul class="why" style="color:var(--ink)">${found.slice(0, 6).map(x => `<li><b>${esc(x.label || x.key)}</b> ${esc(shown(x))} <span class="muted">in</span> <span class="mono">${esc(x.matches[0].sheet)}!${esc(x.matches[0].addr)}</span></li>`).join("")}</ul>
       <details data-k="map-report"><summary>Every figure, and the DCFs</summary>${reportTable(m, located)}</details></div>
     <div class="card"><h2>The overlay reads the client model</h2><p class="sub">${esc(m.overlay_client.mode || "")}. Each overlay row that reads a client row, and that row in this year's model.</p>
       <div class="tiles">${tile(chain.length, "overlay rows read the client model")}${tile(`${now.length} / ${chain.length}`, "found in this year's model")}</div>
@@ -1222,7 +1498,7 @@ function viewMap() {
         ${(ch.key_outputs || []).length ? `<ul class="why" style="color:var(--ink)">${ch.key_outputs.slice(0, 5).map(r => `<li>${esc(r.label)} <span class="mono small">${esc(r.ref)}</span>${r.pct != null ? ` ${r.pct > 0 ? "+" : ""}${r.pct}%` : ""}</li>`).join("")}</ul>` : ""}
         <details data-k="map-changes"><summary>The detail</summary>${changesTable(ch)}</details>` : `<p class="small muted">Needs last year's and this year's client models as separate files.</p>`}</div>
   </div>
-  <details class="card" data-k="map-models"><summary style="font-size:14px">Inside each model: sheets, links and line items</summary>${modelsCard()}</details>`;
+  <details class="card fold" data-k="map-models" id="mapModels" style="margin-top:14px"><summary><span class="ft">Inside each model</span> <span class="fm">sheets, links and line items</span></summary><div class="fold-body">${modelsCard()}</div></details>`;
 }
 function reportTable(m, located) {
   return `<div class="scroll" style="margin-top:6px"><table><thead><tr><th>Report figure</th><th>Overlay cell</th><th>Line item there</th><th class="num">Value</th></tr></thead><tbody>
@@ -1259,7 +1535,7 @@ function modelsCard() {
   if (!ch.length) return "";
   if (MD.eid !== E.id) Object.assign(MD, {eid: E.id, fid: null, data: {}, rows: null, rowsKey: null, q: "", sheet: "", mapped: false});
   if (!ch.some(c => c.fid === MD.fid)) MD.fid = (ch.find(c => c.ready) || ch[0]).fid;
-  return `<div id="modelsCard" style="margin-top:10px"><div class="seg" role="tablist" aria-label="Model">${ch.map(c => `<button role="tab" data-md="${c.fid}" class="${c.fid === MD.fid ? "on" : ""}" aria-selected="${c.fid === MD.fid}" ${c.ready ? "" : "disabled"} title="${esc(c.filename)}">${esc(c.roles.map(r => ROLE_NAME[r]).join(" + "))}</button>`).join("")}</div>
+  return `<div id="modelsCard"><div class="seg" role="group" aria-label="Model">${ch.map(c => `<button type="button" data-md="${c.fid}" class="${c.fid === MD.fid ? "on" : ""}" aria-pressed="${c.fid === MD.fid}" ${c.ready ? "" : "disabled"} title="${esc(c.filename)}">${esc(c.roles.map(r => ROLE_NAME[r]).join(" + "))}</button>`).join("")}</div>
     <div id="mdBody" style="margin-top:10px">${MD.data[mdKey()] ? modelBody(MD.data[mdKey()]) : `<p class="muted small">Loading…</p>`}</div></div>`;
 }
 function modelBody(d) {
@@ -1277,7 +1553,7 @@ function modelBody(d) {
     <div><h3 style="font-size:14px;margin:0 0 8px">Which sheets feed which</h3><div class="scroll" id="mdHeat"></div></div></div>
   <h3 style="font-size:14px;margin:16px 0 6px">Sheets</h3>
   <div class="scroll"><table><thead><tr><th class="num">#</th><th>Sheet</th><th>Timeline</th><th class="num">Line items</th><th class="num">Formulas</th><th class="num">Inputs</th><th class="num">In the map</th></tr></thead><tbody>
-  ${d.sheets.map(s => `<tr class="click" data-mdsheet="${esc(s.sheet)}"><td class="num">${s.pos}</td><td>${esc(s.sheet)}${ov.has(s.sheet) ? ` <span class="pill warn">overlay</span>` : ""}</td><td class="small">${tl(s)}</td><td class="num">${nfmt(s.rows)}</td><td class="num">${nfmt(s.formulas)}</td><td class="num">${nfmt(s.consts)}</td><td class="num">${d.marked.by_sheet[s.sheet] ? nfmt(d.marked.by_sheet[s.sheet]) : ""}</td></tr>`).join("")}</tbody></table></div>
+  ${d.sheets.map(s => `<tr class="click" tabindex="0" data-mdsheet="${esc(s.sheet)}"><td class="num">${s.pos}</td><td>${esc(s.sheet)}${ov.has(s.sheet) ? ` <span class="pill warn">overlay</span>` : ""}</td><td class="small">${tl(s)}</td><td class="num">${nfmt(s.rows)}</td><td class="num">${nfmt(s.formulas)}</td><td class="num">${nfmt(s.consts)}</td><td class="num">${d.marked.by_sheet[s.sheet] ? nfmt(d.marked.by_sheet[s.sheet]) : ""}</td></tr>`).join("")}</tbody></table></div>
   <h3 style="font-size:14px;margin:16px 0 6px">Line items</h3>
   <div class="row small" style="margin-bottom:8px"><input type="text" id="mdQ" placeholder="Search labels and sections" value="${esc(MD.q)}" style="flex:1;min-width:200px" aria-label="Search line items">
     <select class="in" id="mdSheet" aria-label="Sheet"><option value="">All sheets</option>${d.sheets.filter(s => s.rows).map(s => `<option ${s.sheet === MD.sheet ? "selected" : ""}>${esc(s.sheet)}</option>`).join("")}</select>
@@ -1363,7 +1639,7 @@ function mountCharts(root) {
     const spec = JSON.parse(card.querySelector('script[type="application/json"]').textContent);
     const draw = kind => {
       card._chart?.destroy();
-      const d = shownData(spec), f = v => v == null ? "–" : Number(v).toLocaleString(undefined, {maximumFractionDigits: 1});
+      const d = shownData(spec), f = v => v == null ? "–" : Number(v).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1});
       card._chart = new Chart(card.querySelector("canvas"), chartConfig(spec, d, kind, {
         color: i => tok(`--c${(i % 6) + 1}`), ink: tok("--ink"), muted: tok("--muted"), rule: tok("--rule"), shade: tok("--code-bg"), up: tok("--c5"), down: tok("--c6"), total: tok("--c1"),
         font: {family: tok("--sans")}, fmt: f, unit: spec.units ? " " + spec.units : "", plugins: []}));
@@ -1380,11 +1656,14 @@ function mountCharts(root) {
 
 // ---- what each page binds after it's drawn ---------------------------------------------------------------------
 const bind = {
-  workbench() { bindNeeds(); bindFiles(); bindRoles(); document.querySelector("[data-go-result]")?.addEventListener("click", e => { e.preventDefault(); go("result"); }); },
-  report() { bindNeeds(); bindReport(); },
+  workbench() { bindNeeds(); bindFiles(); bindRoles(); },
+  report() { bindNeeds(); bindReport(); document.querySelectorAll("main [data-upload]").forEach(b => b.onclick = () => openUpload()); },
   rebuild() { bindNeeds(); bindRebuild(); },
-  result() { bindNeeds(); bindResult(); document.querySelector("[data-go-result]")?.addEventListener("click", e => { e.preventDefault(); $("#brChart")?.scrollIntoView({behavior: "smooth"}); }); },
-  map() { bindModels(); },
+  result() {
+    bindNeeds(); bindResult();
+    const mm = $("#mapModels");
+    if (mm) { mm.addEventListener("toggle", () => { if (mm.open) bindModels(); }); if (mm.open) bindModels(); }
+  },
 };
 
 // ---- the logo: your firm's (brand/ on this machine), else the mascot --------------------------------------------
@@ -1423,9 +1702,9 @@ $("#themeBtn").onclick = () => {
 };
 systemDark.addEventListener("change", () => { if (!document.documentElement.dataset.theme) { themeButton(); if (E) render(); } });
 themeButton();
-$("#modelsBtn").onclick = e => { const pop = $("#modelCtl"); pop.hidden = !pop.hidden; e.currentTarget.setAttribute("aria-expanded", String(!pop.hidden)); };
+$("#modelsBtn").onclick = e => { e.stopPropagation(); menu(false); const pop = $("#modelCtl"); pop.hidden = !pop.hidden; e.currentTarget.setAttribute("aria-expanded", String(!pop.hidden)); };
 document.addEventListener("click", e => { const pop = $("#modelCtl"); if (!pop.hidden && !pop.contains(e.target) && e.target.id !== "modelsBtn") { pop.hidden = true; $("#modelsBtn").setAttribute("aria-expanded", "false"); } });
-document.addEventListener("keydown", e => { if (e.key === "Escape") { $("#modelCtl").hidden = true; $("#modelsBtn").setAttribute("aria-expanded", "false"); } });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { $("#modelCtl").hidden = true; $("#modelsBtn").setAttribute("aria-expanded", "false"); menu(false); } });
 
 // ---- tokens, time and the call log (from the spend chip) ---------------------------------------------------------
 let CALLS = null;
@@ -1444,7 +1723,7 @@ async function openCalls() {
   const c = CALLS.calls, t = c.total || {};
   const sumCols = [["Calls", r => nfmt(r.calls), 1], ["Input tokens", r => tokfmt(r.input_tokens), 1], ["Output tokens", r => tokfmt(r.output_tokens), 1], ["Cost", r => usdf(r.cost_usd), 1], ["Model time", r => dur(r.model_secs), 1]];
   const table = (rows, cols) => rows.length ? `<div class="scroll"><table><thead><tr>${cols.map(x => `<th${x[2] ? ' class="num"' : ""}>${x[0]}</th>`).join("")}</tr></thead><tbody>
-    ${rows.map(r => `<tr${r.id ? ` class="click" data-call="${r.id}"` : ""}>${cols.map(x => `<td${x[2] ? ' class="num"' : ""}>${x[1](r)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<p class="small muted" style="margin:0">Nothing yet.</p>`;
+    ${rows.map(r => `<tr${r.id ? ` class="click" tabindex="0" data-call="${r.id}"` : ""}>${cols.map(x => `<td${x[2] ? ' class="num"' : ""}>${x[1](r)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<p class="small muted" style="margin:0">Nothing yet.</p>`;
   $("#callsBody").innerHTML = `
     <div class="tiles"><div class="tile"><b>${nfmt(t.calls)}</b><span>model calls${t.failed ? ` (${t.failed} failed)` : ""}</span></div>
       <div class="tile"><b>${tokfmt((t.input_tokens || 0) + (t.output_tokens || 0))}</b><span>tokens</span></div>
@@ -1478,7 +1757,10 @@ async function showCall(id) {
     <div class="small muted" style="margin-top:8px">Sent</div><pre>${esc(msgText(q.input))}</pre><div class="small muted">Came back</div><pre>${esc(c.response || "(nothing)")}</pre></div>`;
 }
 $("#spend").onclick = openCalls;
+// a clickable row answers the keyboard too
+document.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("tr.click")) { e.preventDefault(); e.target.click(); } });
 $("#callsClose").onclick = () => $("#callsDlg").close();
+$("#upClose").onclick = () => $("#uploadDlg").close();
 
 boot().catch(e => { $("#main").innerHTML = `<div class="callout bad">Couldn't start: ${esc(e.message)}</div>`; });
 </script>

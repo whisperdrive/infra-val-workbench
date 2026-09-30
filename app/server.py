@@ -53,14 +53,23 @@ def _run(fn, *args, **kw):
     return go()
 
 
+FRESH = {"Cache-Control": "no-cache"}  # the page and its scripts: the browser checks for a newer copy (after a git pull)
+
+
 @app.get("/")
 def index():
-    return FileResponse(Path(__file__).parent / "index.html")
+    return FileResponse(Path(__file__).parent / "index.html", headers=FRESH)
 
 
 @app.get("/charts.js")
 def charts_js():  # the chart drawing (web/charts.js)
-    return FileResponse(ROOT / "web" / "charts.js", media_type="text/javascript")
+    return FileResponse(ROOT / "web" / "charts.js", media_type="text/javascript", headers=FRESH)
+
+
+@app.get("/mascot.svg")
+def mascot():  # the mascot on the stages' track, whatever logo the header shows
+    return FileResponse(Path(__file__).parent / "mascot.svg", media_type="image/svg+xml",
+                        headers={"Content-Security-Policy": "script-src 'none'"})
 
 
 # ---- the logo in the header's top-left corner: your firm's, from the git-ignored brand/ folder, else the mascot ----
