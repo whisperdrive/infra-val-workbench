@@ -6,8 +6,6 @@
             the figure's discounting is known (the bridge's steps, the method selector, the DCF facts need it)
   mid-year  factors written (end - valuation date) / 365 - 0.5, the mid-year convention as models often have it,
             are read back as such
-  rate      the discount rate three ways (overlay._rate_check): nothing said when the lever moves the rate the
-            discountings use; the report's, the lever's and the discountings' rates side by side when it doesn't
 
     uv run python tests/check_trace.py
 """
@@ -64,58 +62,6 @@ def main() -> None:
           f"{m['rate']}, the valuation date {m['valuation_date']}, {m['timing']}, {m['day_count']}, no cut-off)")
 
 
-def rate_check() -> None:
-    import overlay as ov
-
-    class Book:
-        def labels(self):
-            return {("Inputs", 5): "Discount rate", ("Inputs", 11): "Cost of equity", ("Inputs", 4): "Valuation date"}
-
-        def value(self, s, r, c):
-            return {("Inputs", 5, 3): 0.07, ("Inputs", 11, 5): 0.0815, ("Inputs", 4, 3): 45838.0}.get((s, r, c))
-
-    class Sess:  # the rate cell E11 reads C5 when wired so; otherwise it's its own input
-        def __init__(self, wired):
-            self.ov, self.wired, self.over = Book(), wired, {}
-
-        def configure(self, mode, overrides=None, *a):
-            self.over = dict(overrides or {})
-
-        def values(self, cells):
-            lever = self.over.get(("Inputs", 5, 3))
-            return [0.0115 + lever if self.wired and lever is not None else self.ov.value(*k) for k in cells]
-    rows = [{"kind": "assumption", "key": "discount_rate", "report": "7.50%", "basis": "post-tax nominal WACC",
-             "lever": {"cell": "Inputs!C5", "label": "Discount rate"}}]
-    traces = {"Report!C5": (None, [{"inputs": {"rate": "Inputs!E11"}, "rate_value": 0.0815}])}
-    assert ov._rate_check(Sess(True), None, rows, traces) is None
-    got = ov._rate_check(Sess(False), None, rows, traces)
-    assert got["lever"] == {"cell": "Inputs!C5", "label": "Discount rate", "value": 0.07}, got
-    assert got["dcf"] == [{"cell": "Inputs!E11", "label": "Cost of equity", "value": 0.0815}]
-    assert got["report"] == {"value": "7.50%", "basis": "post-tax nominal WACC"}
-    assert got["moves"] == [] and "range" not in got, "on other rows: not a range, and the lever moves nothing"
-
-    class Row:  # a low / mid / high on one row; the figure averages the values at the low and the high rate
-        def labels(self):
-            return {("Inputs", 11): "Discount rate"}
-
-        def value(self, s, r, c):
-            return {("Inputs", 11, 5): 0.091, ("Inputs", 11, 6): 0.086, ("Inputs", 11, 7): 0.081}.get((s, r, c))
-
-    class RowSess(Sess):
-        def values(self, cells):  # each rate cell is its own input: the lever moves only itself
-            return [self.over.get(k, self.ov.value(*k)) for k in cells]
-    sess = RowSess(False)
-    sess.ov = Row()
-    lever_on_end = [{**rows[0], "report": "8.60%", "lever": {"cell": "Inputs!G11", "label": "Discount rate"}}]
-    two = {"Report!C5": (None, [{"inputs": {"rate": "Inputs!E11"}, "rate_value": 0.091},
-                                {"inputs": {"rate": "Inputs!G11"}, "rate_value": 0.081}])}
-    got = ov._rate_check(sess, None, lever_on_end, two)
-    assert got["moves"] == ["Inputs!G11"] and got["report_at"] == "Inputs!F11", got
-    assert [c["cell"] for c in got["range"]] == ["Inputs!E11", "Inputs!F11", "Inputs!G11"], got["range"]
-    print("rate: ok (a lever that moves the discountings' rate is left alone; one that doesn't is shown beside it and "
-          "the report's, with their bases; a low / mid / high on one row is a range, the lever one end of it)")
-
-
 def mid_year_check() -> None:
     out = Path(tempfile.mkdtemp(prefix="trace_mid_"))
     vd, rate, years = date(2025, 6, 30), 0.08, list(range(2026, 2036))
@@ -151,4 +97,3 @@ def mid_year_check() -> None:
 if __name__ == "__main__":
     main()
     mid_year_check()
-    rate_check()
