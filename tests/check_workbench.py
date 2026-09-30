@@ -408,6 +408,44 @@ def dates_check() -> None:
     print("dates: ok (a date on its image is compared whole, day, month and year; a correction carries its YYYYMMDD)")
 
 
+def delete_check(first: int) -> None:
+    """Deleting an engagement takes everything worked out for it: its reports, rows, overlay folder and call log;
+    a model another engagement uses stays until the last of them goes. Then the same files, uploaded again, run from
+    the start (every file read afresh) to the same value."""
+    import calllog
+    want = wb.get(first)["result"]["values"]["this_year"]["mid"]
+    eids = [e["id"] for e in wb.all_engagements()]
+    files = [library.get(f, full=True) for f in {r["file_id"] for r in wb._q("SELECT file_id FROM eng_files")}]
+    docs = [d for e in eids for d in wb._q("SELECT out_dir, source_path FROM documents WHERE engagement_id=?", e)]
+    kept_once = False
+    for eid in eids:
+        t0 = time.time()
+        while True:  # the checks before may have left an engagement still running: deleting waits for it
+            try:
+                r = wb.delete(eid)
+                break
+            except ValueError as e:
+                assert "wait for" in str(e) and time.time() - t0 < 300, e
+                time.sleep(0.5)
+        kept_once |= bool(r["kept"])
+        # every table but stages, which the orchestrator's loop may be writing for it that very moment (an id a
+        # new engagement then doesn't take)
+        assert wb.get(eid) is None and not (wb.OUT / "overlays" / f"e{eid}").exists() and not any(
+            wb._q(f"SELECT 1 FROM {t} WHERE engagement_id=?", eid) for t in ("runlog", "facts", "roles", "eng_files", "documents"))
+        with calllog._conn() as db:
+            assert not db.execute("SELECT 1 FROM calls WHERE engagement=?", (eid,)).fetchone(), eid
+    assert kept_once, "a model several engagements use was deleted with the first of them"
+    assert not any(library.get(f["id"]) for f in files) and not any(Path(f["out_dir"]).exists() or
+                                                                    Path(f["source_path"]).exists() for f in files)
+    assert not any(Path(d["out_dir"]).exists() or Path(d["source_path"]).exists() for d in docs)
+    t_gone = time.time()
+    again = run_check(PACK_A, "Asset A, FY26 (again, from the start)")
+    got = wb.get(again)["result"]["values"]["this_year"]["mid"]
+    assert abs(got - want) < 1e-6 and all(w["processed_at"] > t_gone for w in wb.workbooks(again)), (got, want)
+    print(f"delete: ok ({len(eids)} engagements deleted with what was worked out for them, a shared model kept until "
+          f"the last; the same files run again from the start to {got:,.1f})")
+
+
 def ranges_check() -> None:
     import keyfacts
     import context
@@ -476,6 +514,7 @@ def main() -> None:
     assert abs(a - b) < 1e-6, f"the same files give different values in the two layouts: {a} vs {b}"
     print("layouts: ok (the overlay standalone and inside the client model give the same value this year: the roll "
           "moves the valuation date the discountings read)")
+    delete_check(eid)
 
 
 if __name__ == "__main__":

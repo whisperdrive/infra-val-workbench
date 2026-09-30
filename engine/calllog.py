@@ -120,6 +120,13 @@ _SUMS = ("COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, SUM(cached_token
          "SUM(1 - ok) AS failed")
 
 
+def forget(engagement: int, workbooks: list[int]) -> int:
+    """Delete an engagement's calls, and those made processing workbooks deleted with it. -> how many."""
+    wb = ",".join(str(int(w)) for w in workbooks) or "NULL"
+    with _LOCK, _conn() as db:
+        return db.execute(f"DELETE FROM calls WHERE engagement=? OR workbook IN ({wb})", (engagement,)).rowcount
+
+
 def breakdown(engagement: int, workbooks: list[int]) -> dict:
     """An engagement's calls (its own, and those made processing its workbooks): totals, by file, by step."""
     wb = ",".join(str(int(w)) for w in workbooks) or "NULL"

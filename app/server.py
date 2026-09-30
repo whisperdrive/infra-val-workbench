@@ -164,8 +164,7 @@ async def patch_engagement(eid: int, body: EngagementPatch):
 
 @app.delete("/api/engagements/{eid}")
 async def delete_engagement(eid: int):
-    await _run(lambda: workbench.delete(eid) or True)
-    return {"ok": True}
+    return {"ok": True, **await _run(workbench.delete, eid)}
 
 
 @app.post("/api/engagements/{eid}/files")

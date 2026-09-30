@@ -298,6 +298,7 @@ dialog#callsDlg::backdrop { background: rgb(0 0 0 / .4); }
     <div class="hctl">
       <label for="engSel">Engagement</label><select id="engSel"></select>
       <button class="btn small" id="newEng" style="background:#2e2e38;color:#fff;border-color:#4a4a57">New</button>
+      <button class="btn small" id="delEng" type="button" hidden title="Delete this engagement and everything worked out for it, to run the same files again from the start" style="background:transparent;color:#ffb4b4;border-color:#6a3a3a">Delete</button>
     </div>
     <div class="hctl" id="hdrCtl" hidden>
       <button class="chip" id="spend" type="button" title="Tokens, time and the log of every model call">$0.00</button>
@@ -411,9 +412,10 @@ async function boot() {
   state.step = NAV.some(n => n.id === h.get("s")) ? h.get("s") : "workbench";
   await loadList(+h.get("e") || null);
 }
-async function loadList(select) {
+async function loadList(select, openOne = true) {
   const list = await api("/api/engagements");
   $("#engSel").innerHTML = list.length ? list.map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join("") : `<option value="">No engagements yet</option>`;
+  if (!openOne) { if (list.length) { $("#engSel").insertAdjacentHTML("afterbegin", `<option value="">Choose one…</option>`); $("#engSel").value = ""; } return; }
   const id = select && list.some(e => e.id === select) ? select : list[0]?.id;
   if (id) { $("#engSel").value = id; await open(id); } else { E = null; render(); }
 }
@@ -446,6 +448,20 @@ async function spend() {
 }
 $("#engSel").onchange = e => { if (e.target.value) { go(state.step, +e.target.value); open(+e.target.value); } };
 $("#newEng").onclick = () => { E = null; state.step = "workbench"; render(true); };
+$("#delEng").onclick = async () => {
+  if (!E) return;
+  if (!confirm(`Delete "${E.name}" and everything worked out for it?\n\nIts reports and key facts, the models only it uses (their row maps and identity), the Python overlay and what you picked on it, the run log and the model-call log. The report-reading rules learned so far stay.\n\nTo run it again from the start, upload the same files to a new engagement. This can't be undone.`)) return;
+  try {
+    const r = await api(`/api/engagements/${E.id}`, {method: "DELETE"});
+    clearTimeout(pollTimer);
+    E = null; state.step = "workbench"; history.replaceState(null, "", "#s=workbench");
+    await loadList(null, false);
+    render(true);
+    $("#newName").value = r.name;  // ready to start it again
+    toast(`Deleted ${r.name}: ${r.reports} report(s) and ${r.models} model(s), with everything worked out for them` +
+          (r.kept?.length ? `. Kept ${r.kept.join(", ")}: another engagement uses it` : ""), 8000);
+  } catch (err) { toast(err.message, 8000); }
+};
 for (const [id, key, what] of [["mSel", "model", "Extraction model"], ["rSel", "reviewer_model", "Reviewer and orchestrator"], ["aSel", "arbiter_model", "Arbiter"]])
   $("#" + id).onchange = async e => { E = {...E, ...await api(`/api/engagements/${E.id}`, {method: "PATCH", body: {[key]: e.target.value}})}; toast(`${what}: ${e.target.value}`); };
 function go(step, eid = E?.id) { state.step = step; history.replaceState(null, "", `#e=${eid || ""}&s=${step}`); render(); window.scrollTo({top: 0}); }
@@ -487,6 +503,7 @@ function renderSteps() {
 }
 function render(creating = false) {
   $("#hdrCtl").hidden = !E;
+  $("#delEng").hidden = !E || creating;
   if (!E) $("#modelCtl").hidden = true;
   if (E) { $("#mSel").value = E.model || CFG.default_model; $("#rSel").value = E.reviewer_model || CFG.default_reviewer;
     $("#aSel").value = E.arbiter_model || CFG.default_arbiter; }

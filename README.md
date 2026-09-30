@@ -99,7 +99,10 @@ uv run python engine/llm.py     # sign in once (device code)
 uv run uvicorn app.server:app --port 8003
 ```
 
-Then open http://localhost:8003. Files stay on this machine, in `uploads/` and `out/`, both git-ignored. Model calls go
+Then open http://localhost:8003. **Delete**, beside New in the header, removes an engagement and everything worked
+out for it (its reports and key facts, the models only it uses, the Python overlay and your picks on it, the run
+log and call log), so the same files can be uploaded and run again from the start; a model another engagement also
+uses stays, and the report-reading rules learned so far stay. It waits until nothing of the engagement is running. Files stay on this machine, in `uploads/` and `out/`, both git-ignored. Model calls go
 to your organisation's Azure AI Foundry and are logged per engagement; the spend chip in the header opens the log.
 Your firm's logo goes in the git-ignored `brand/` folder, and the mascot shows without one.
 

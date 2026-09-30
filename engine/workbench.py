@@ -153,9 +153,20 @@ def friendly(e: Exception) -> str:
 
 def create(name: str) -> dict:
     now = time.time()
-    eid = _exec("INSERT INTO engagements(name, created_at, updated_at, model, reviewer_model) VALUES (?,?,?,?,?)",
-                name.strip() or "Untitled engagement", now, now, DEFAULT_MODEL, DEFAULT_REVIEWER)
+    eid = _exec("INSERT INTO engagements(id, name, created_at, updated_at, model, reviewer_model) VALUES (?,?,?,?,?,?)",
+                _new_id(), name.strip() or "Untitled engagement", now, now, DEFAULT_MODEL, DEFAULT_REVIEWER)
     return get(eid)
+
+
+def _new_id() -> int:
+    """An engagement id nothing is left under: past every engagement, any row left under an id (a stage the
+    orchestrator wrote as one was deleted) and every overlay folder, so a new engagement can't inherit a deleted
+    one's leftovers. An id a delete cleared completely can be used again: nothing of it remains."""
+    used = [r["n"] or 0 for r in _q("SELECT MAX(id) AS n FROM engagements")]
+    used += [r["n"] or 0 for t in ("stages", "runlog", "facts", "roles", "eng_files", "documents")
+             for r in _q(f"SELECT MAX(engagement_id) AS n FROM {t}")]
+    used += [int(p.name[1:]) for p in (OUT / "overlays").glob("e*") if p.name[1:].isdigit()]
+    return max(used, default=0) + 1
 
 
 def all_engagements() -> list[dict]:
@@ -332,13 +343,41 @@ def dates(eid: int, res: dict | None, wbs: list[dict], rl: dict) -> list[dict]:
     return out
 
 
-def delete(eid: int) -> None:
-    for d in documents(eid):
+def delete(eid: int) -> dict | None:
+    """Delete an engagement and everything worked out for it, so the same files can be uploaded and run again from
+    the start: its reports (their pages, table images and key facts), the models only it uses (their row maps,
+    links, identity and the dates confirmed on them; a model another engagement also uses stays), the overlay's
+    module and what was picked or held on it (out/overlays/e<eid>), its stages, run log and model-call log. The
+    rules learned from reports stay: they're the app's, not the engagement's. Refused while anything of it is queued
+    or running. -> {"name", "reports", "models", "kept": [models another engagement uses]}, None if there's none."""
+    import orchestrator
+    rows = _q("SELECT name FROM engagements WHERE id=?", eid)
+    if not rows:
+        return None
+    docs = documents(eid)
+    wbs = [w for w in (library.get(r["file_id"]) for r in _q("SELECT file_id FROM eng_files WHERE engagement_id=?", eid)) if w]
+    busy = orchestrator.busy_with(eid) + \
+        [d["filename"] for d in docs if d["status"] in ("queued", "processing") or d["facts_status"] in ("queued", "running")] + \
+        [w["filename"] for w in wbs if w["status"] in ("queued", "processing")]
+    if busy:
+        raise ValueError(f"wait for what's running to finish before deleting it ({', '.join(busy[:4])})")
+    kept = [w for w in wbs if _q("SELECT 1 FROM eng_files WHERE file_id=? AND engagement_id<>?", w["id"], eid)]
+    gone = [w for w in wbs if w not in kept]
+    _exec("DELETE FROM engagements WHERE id=?", eid)  # first: the orchestrator stops looking at it
+    for d in docs:
         remove_document(d["id"])
+    for w in gone:
+        library.remove(w["id"])
+        _DATE_CHECKED.difference_update({k for k in _DATE_CHECKED if k[0] == w["id"]})
     with _lock, _conn() as db:
         for t, col in (("facts", "engagement_id"), ("roles", "engagement_id"), ("eng_files", "engagement_id"),
                        ("stages", "engagement_id"), ("runlog", "engagement_id"), ("engagements", "id")):
             db.execute(f"DELETE FROM {t} WHERE {col}=?", (eid,))
+    shutil.rmtree(OUT / "overlays" / f"e{eid}", ignore_errors=True)
+    _SESSIONS.pop(eid, None)
+    calllog.forget(eid, [w["id"] for w in gone])
+    usage.forget(_session(eid), [w["id"] for w in gone])
+    return {"name": rows[0]["name"], "reports": len(docs), "models": len(gone), "kept": [w["filename"] for w in kept]}
 
 
 # ---- uploads ------------------------------------------------------------------------------------------------

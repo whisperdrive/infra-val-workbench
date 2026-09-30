@@ -43,6 +43,13 @@ _SUMS = ("COUNT(*) AS calls, COALESCE(SUM(input_tokens),0) AS input_tokens, "
          "COALESCE(SUM(cost_usd),0) AS cost_usd, SUM(cost_usd IS NULL) AS unpriced_calls")
 
 
+def forget(session: str, file_ids: list[int]) -> None:
+    """Delete the usage logged for a session, and for files deleted with it."""
+    ids = ",".join(str(int(f)) for f in file_ids) or "NULL"
+    with _lock, _conn() as db:
+        db.execute(f"DELETE FROM usage WHERE session=? OR file_id IN ({ids})", (session,))
+
+
 def summary(session: str | None = None) -> dict:
     with _conn() as db:
         db.row_factory = sqlite3.Row

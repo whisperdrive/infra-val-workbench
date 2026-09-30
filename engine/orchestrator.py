@@ -214,6 +214,13 @@ def _facts_state(snap: dict) -> tuple[str, str, list[dict]]:
 
 # ---- the loop ----------------------------------------------------------------------------------------------------
 
+def busy_with(eid: int) -> list[str]:
+    """What of an engagement is queued or running now (its stages, its reports being read)."""
+    with _lock:
+        jobs = [job for (e, job), _ in _active.items() if e == eid]
+    return [LABEL.get(j, j) if isinstance(j, str) else f"report {j[1]}" for j in jobs]
+
+
 def poke() -> None:
     _wake.set()
 
@@ -232,6 +239,8 @@ def _submit(eid: int, job, key: str | None = None) -> None:
 def tick(eid: int) -> None:
     """Look at one engagement and start whatever is ready. Starts nothing that's already moving, and nothing whose
     inputs are the same as when it last finished (or failed)."""
+    if not wb._q("SELECT 1 FROM engagements WHERE id=?", eid):  # deleted since the loop listed it
+        return
     snap = _snapshot(eid)
     for d in snap["documents"]:  # reports waiting to be read
         if d["status"] == "queued":
