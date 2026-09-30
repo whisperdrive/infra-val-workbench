@@ -133,8 +133,13 @@ def _figures(x: dict, keys=("value_text", "low_text", "high_text")) -> dict:
     return {k.removesuffix("_text"): (_nums(x.get(k)) or [None])[0] for k in keys}
 
 
-def _same(fact: dict, read: dict) -> bool:
-    """The image reading gives the fact's figures in the fact's places (a low read as a high is a difference)."""
+def _same(fact: dict, read: dict, dated: bool | None = None) -> bool:
+    """The image reading gives the fact's figures in the fact's places (a low read as a high is a difference). A date
+    is compared whole, day, month and year: its first number is only the day."""
+    if keyfacts.is_date(fact) if dated is None else dated:
+        mine = keyfacts.date_of(fact.get("value_text"))
+        if mine:
+            return keyfacts.date_of(read.get("value")) == mine
     f, r = _figures(fact), _figures(read, ("value", "low", "high"))
     have = {k: v for k, v in f.items() if v is not None}
     if not have:
@@ -246,7 +251,7 @@ def confirm(doc: dict, facts: list[dict], reader, out_dir: str | Path, source_pa
             said = {x: v.get(x) or None for x in ("value", "low", "high")}
             was = {x: f.get(f"{x}_text") for x in ("value", "low", "high")}
             agree_read = vis["found"] and (v["choice"] == "image" or (v["choice"] == "neither" and _same(
-                {f"{x}_text": said[x] for x in said}, read)))
+                {f"{x}_text": said[x] for x in said}, read, keyfacts.is_date(f))))
             if v["choice"] == "extracted" or (v["choice"] == "neither" and _same(f, {x: said[x] for x in said})):
                 vis["status"] = "confirmed by the reviewer"
                 n["confirmed"] += 1

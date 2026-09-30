@@ -23,7 +23,8 @@ takes it from there:
 
    One model extracts, code checks each fact against its page, a second model reviews, and they loop on what's open.
    Then each fact with a figure is looked up, blind, on the image of where it sits (its table's, else its page's); where
-   the image reading differs, the reviewer looks at the image with both. A correction stands when two reads of the
+   the image reading differs, the reviewer looks at the image with both. A date is compared whole (day, month and
+   year), not by its numbers. A correction stands when two reads of the
    image agree; what doesn't settle goes to a person, with the image. Slides' own text and tables are exact, so they
    aren't looked at again.
 
@@ -48,7 +49,7 @@ takes it from there:
 - The conclusion is the **equity value**, low / mid / high, where the mid is the midpoint of the low and the high.
 - **Ex-distribution** by default, unless the report is overwhelmingly cum-distribution or only the cum-distribution
   figure is in the model.
-- This year's discount rate is **last year's** unless a person sets another.
+- This year's discount rate is **last year's** (there's no control yet to set another).
 
 ## The orchestrator
 

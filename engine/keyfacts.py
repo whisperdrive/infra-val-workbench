@@ -28,8 +28,9 @@ from docingest import numbers
 
 MAX_CHARS = 150_000  # longer reports: send the pages most likely to hold conclusions and assumptions
 MAX_ROUNDS = 3       # review and remediation rounds before a fact goes to a person
-CHECK_VERSION = 3    # bump when check() changes: existing facts are checked again once (2: spacing-tolerant, waivers;
-                     # 3: numbers worked out by code, none for identity text or a range without a preferred point)
+CHECK_VERSION = 4    # bump when check() changes: existing facts are checked again once (2: spacing-tolerant, waivers;
+                     # 3: numbers worked out by code, none for identity text or a range without a preferred point;
+                     # 4: a date checked whole, its month included)
 LOOP_CHARS = 60_000  # the loop sends only the pages the open facts cite, and their neighbours
 KEYWORDS = re.compile(r"valuation|discount|wacc|terminal|growth|multiple|rab|conclu|range|preferred|assumption|"
                       r"enterprise value|equity value|methodolog|approach|summary|cost of capital|cpi|inflation", re.I)
@@ -236,12 +237,58 @@ def _in_squashed(num: str, text: str) -> bool:
     return False
 
 
+MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+_MON = r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+_DATES = ((re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?[\s-]+(?:of\s+)?{_MON}[,\s-]+(\d{{4}}|\d{{2}})\b", re.I), "dmy"),
+          (re.compile(rf"\b{_MON}\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s+(\d{{4}})\b", re.I), "mdy"),
+          (re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b"), "iso"),
+          (re.compile(r"\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})\b"), "num"))
+
+
+def is_date(f: dict) -> bool:
+    return f.get("unit") == "date" or f.get("key") == "valuation_date"
+
+
+def dates_in(text: str | None) -> list:
+    """The dates in a text, in order, as a report prints them: "30 June 2025", "30-Jun-25", "June 30, 2025",
+    "30/06/2025" (day first, as Australian reports write it), "2025-06-30". A date's numbers alone (30 and 2025)
+    don't make one: its month is a word, and a check on the numbers passes "30 September 2025" for "30 June 2025"."""
+    from datetime import date
+    hits = []
+    for rx, kind in _DATES:
+        for m in rx.finditer(text or ""):
+            g = m.groups()
+            if kind == "dmy":
+                d, mo, y = int(g[0]), MONTHS[g[1].lower()[:3]], int(g[2])
+            elif kind == "mdy":
+                d, mo, y = int(g[1]), MONTHS[g[0].lower()[:3]], int(g[2])
+            elif kind == "iso":
+                y, mo, d = map(int, g)
+            else:
+                d, mo, y = map(int, g)
+            try:
+                hits.append((m.start(), date(y + (2000 if y < 100 else 0), mo, d)))
+            except ValueError:
+                continue
+    return [d for _, d in sorted(set(hits))]
+
+
+def date_of(text: str | None):
+    """The first date in a text, or None."""
+    found = dates_in(text)
+    return found[0] if found else None
+
+
 def settle_value(f: dict) -> dict:
     """f with its number worked out from its text, in place: the first number in value_text. None for identity
     text (a name holding digits is still a name), text, or a range the report gives without a preferred point
-    (value_text empty, or the range itself); a date keeps its YYYYMMDD. Code sets it, so a model's number can't
-    contradict the text, and a model's null isn't overwritten."""
-    if f.get("unit") == "date":
+    (value_text empty, or the range itself); a date is its YYYYMMDD, from the date in the text (the model's where the
+    text holds no whole date). Code sets it, so a model's number can't contradict the text, and a model's null isn't
+    overwritten."""
+    if is_date(f):
+        d = date_of(f.get("value_text"))
+        if d:
+            f["value"] = d.year * 10000 + d.month * 100 + d.day
         return f
     nums, lo, hi = (numbers(f.get(k) or "") for k in ("value_text", "low_text", "high_text"))
     bare = {x.lstrip("-") for x in nums}  # "1.25%–1.75%" reads as 1.25% and -1.75%: the dash isn't a sign
@@ -275,7 +322,7 @@ def check(f: dict, pg: dict[int, str]) -> dict:
         items.append((False, "quote not found in the document"))
     for k in ("value_text", "low_text", "high_text"):
         v = (f.get(k) or "").strip()
-        if not v:
+        if not v or (k == "value_text" and is_date(f) and date_of(v)):  # a date: checked whole, below
             continue
         nums = numbers(_unrange(v))
         if nums:
@@ -293,7 +340,19 @@ def check(f: dict, pg: dict[int, str]) -> dict:
         else:
             items.append((False, f"'{v}' is not in the quote"))
     nums = numbers(f.get("value_text") or "")
-    if f.get("value") is not None and nums and f.get("unit") != "date":
+    said = date_of(f.get("value_text")) if is_date(f) else None
+    if said:  # a date is checked whole, month included: its numbers alone pass a different month
+        ymd = said.year * 10000 + said.month * 100 + said.day
+        if said in dates_in(f.get("quote")):
+            items.append((True, f"{said:%d %B %Y} is a date in the quote"))
+        elif said in dates_in(re.sub(r"(?<=[A-Za-z])\s+(?=[a-z])", "", f.get("quote") or "")):
+            items.append((True, f"{said:%d %B %Y} is a date in the quote (spacing ignored)"))
+        else:
+            items.append((False, f"{said:%d %B %Y} is not a date in the quote"))
+        if f.get("value") is not None:
+            items.append((int(f["value"]) == ymd, "date matches the text" if int(f["value"]) == ymd
+                          else f"date {f['value']} doesn't match {f['value_text']}"))
+    elif f.get("value") is not None and nums and not is_date(f):
         want = float(nums[0].rstrip("%"))
         items.append((abs(want - float(f["value"])) < 1e-9 * max(1, abs(want)),
                       "number matches the text" if abs(want - float(f["value"])) < 1e-9 * max(1, abs(want))

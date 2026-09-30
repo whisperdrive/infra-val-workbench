@@ -367,6 +367,25 @@ def escalate_check() -> None:
     print("escalate: ok (where the reads of the image agree with nothing, the fact goes to a person, with the image)")
 
 
+def dates_check() -> None:
+    """The image shows a different year from the text layer's valuation date, with the same day: the date is compared
+    whole, so it's a difference (its first number, the day, alone would confirm it), and two agreeing reads of the
+    image correct it, its YYYYMMDD with it."""
+    TRUTH["valuation_date"]["value"] = "30 June 2024"
+    try:
+        e = wb.create("Asset A, FY26 (the image dates it a year earlier)")
+        eid = e["id"]
+        for f in PACK_A:
+            upload(eid, f)
+        wait(eid, lambda v: status(v)["facts"] in (*orc.SETTLED, "failed"), "the facts")
+        vd = next(f for f in wb.facts(eid) if f["key"] == "valuation_date")
+        assert vd["visual"]["status"] == "corrected" and vd["value_text"] == "30 June 2024" and \
+            int(vd["value"]) == 20240630, vd
+    finally:
+        TRUTH["valuation_date"]["value"] = "30 June 2025"
+    print("dates: ok (a date on its image is compared whole, day, month and year; a correction carries its YYYYMMDD)")
+
+
 def ranges_check() -> None:
     import keyfacts
     import context
@@ -382,8 +401,22 @@ def ranges_check() -> None:
     assert n("Net debt at valuation - 850.0") == ["-850.0"], n("Net debt at valuation - 850.0")
     got = n("FY25 - 30.0")
     assert got == ["25", "30.0"], got  # a year then a figure reads as a range: the check only looks for the fact's own numbers
+    import visual
+    from datetime import date
+    for t in ("as at 30 June 2025 (the", "30 Jun 25", "30-Jun-25", "June 30, 2025", "30/06/2025", "2025-06-30",
+              "30th of June 2025"):
+        assert keyfacts.date_of(t) == date(2025, 6, 30), t
+    assert keyfacts.date_of("30 and 2025") is None and keyfacts.date_of("FY25 7.25%") is None
+    vd = {"key": "valuation_date", "unit": "date", "value_text": "30 June 2025"}
+    assert visual._same(vd, {"value": "30/06/2025"}) and not visual._same(vd, {"value": "30 September 2025"}) and \
+        not visual._same(vd, {"value": "30 June 2024"}) and not visual._same(vd, {"value": ""})
+    got = keyfacts.settle_value({**vd, "value": 20240630})["value"]
+    assert got == 20250630, got  # the model's YYYYMMDD gives way to the date in the text
+    chk = keyfacts.check({**vd, "value_text": "30 July 2025", "value": 20250730, "page": 2,
+                          "quote": "as at 30 June 2025 (the"}, {2: "as at 30 June 2025 (the"})
+    assert not chk["ok"] and "30 July 2025 is not a date in the quote" in [i["text"] for i in chk["items"]], chk
     print("ranges: ok (a dash between figures is a range; a bracket, or a dash after a word, is a minus; the letter and "
-          "the scope are found)")
+          "the scope are found; a date is read and checked whole)")
 
 
 def upgrade_check() -> None:
@@ -415,6 +448,7 @@ def main() -> None:
     gating_check(eid)
     roles_check()
     escalate_check()
+    dates_check()
     other = run_check(PACK_B, "Asset A, FY26 (overlay inside)")
     a, b = (wb.get(x)["result"]["values"]["this_year"]["mid"] for x in (eid, other))
     assert abs(a - b) < 1e-6, f"the same files give different values in the two layouts: {a} vs {b}"
