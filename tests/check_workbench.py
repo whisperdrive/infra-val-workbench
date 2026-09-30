@@ -161,8 +161,10 @@ def fake_create(client, model, input, text=None, max_output_tokens=None, purpose
     if name == "roles_decision":
         return Reply({"choice": BEHAVIOUR["roles_decision"], "reason": "the dates and links support it",
                       "question": "Which file is this year's client model?"})
-    if name == "run_review":
-        return Reply({"choice": "ok", "reason": "the bridge steps are in proportion", "question": "", "concerns": []})
+    if name == "run_review":  # one point, about two years the chart has and one it doesn't, and a bridge step
+        return Reply({"choice": "concerns", "reason": "one note", "question": "", "concerns": [
+            {"title": "Terminal-year cash flow", "detail": "the new final year's cash flow jumps", "severity": "info",
+             "years": ["FY45", "FY46", "FY99"], "step": "forecast"}]})
     if name == "test_decision":
         return Reply({"choice": "pick", "reason": "test", "question": ""})
     raise AssertionError(f"unexpected model call {name}")
@@ -286,7 +288,16 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
             dl["Last year's overlay"]["ok"], dl["Last year's client model"]["ok"], dl["This year's client model"]["date"],
             dl["This year's client model"]["ok"], dl["The roll-forward runs to"]["date"]) == \
         ("2025-06-30", "2025-06-30", "Val_Inputs!C4", True, True, "2026-06-30", True, "2026-06-30"), dl
-    assert not [n for n in orc.view(eid)["needs"] if n["severity"] == "block"]
+    view = orc.view(eid)
+    assert not [n for n in view["needs"] if n["severity"] == "block"]
+    # every need says what it asks of a person and lands on a card; a review point names its years and step, checked
+    # against the run (a year the chart doesn't have is dropped)
+    assert all(n.get("kind") and (n["kind"] == "retry" or n["go"].get("anchor")) for n in view["needs"]), view["needs"]
+    rp = next(n for n in view["needs"] if n["id"] == "review-0")
+    assert (rp["kind"], rp["years"], rp["step"], rp["go"]["anchor"]) == ("review-point", ["FY45", "FY46"], "forecast", "review-0"), rp
+    # how long each stage took, so the page can say how long is left
+    took = {x["stage"]: x["typical_secs"] for x in view["stages"]}
+    assert all(took[k] is not None for k in ("facts", "roles", "rebuild", "rows", "result", "review")), took
     log = orc.history(eid, limit=200)
     assert any(h["stage"] == "roles" and h["event"] == "done" for h in log) and \
         any(h["stage"] == "review" and h["event"] == "decide" for h in log)

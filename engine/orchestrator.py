@@ -623,7 +623,7 @@ def _rebuild_job(eid: int, key: str):
         needs.append({"id": "validation", "stage": "rebuild", "severity": "info",
                       "title": f"{off} of {val['cells']:,} overlay cells differ from Excel in Python",
                       "detail": "shown on Rebuild; they matter only if they're under the equity value",
-                      "go": {"step": "rebuild"}})
+                      "go": {"step": "rebuild", "anchor": "mismatches"}})
     if wb._agents_check_dates(eid, wb.workbooks(eid)):
         log(eid, "rebuild", "note", "this year's valuation date confirmed on the files' evidence", issue="date", inputs=key)
     cur = wb._role_wb(eid, "current_model")
@@ -713,7 +713,7 @@ def _result_job(eid: int, key: str):
         res = result.compute(sess, summary, wb.reference(eid), _report_md(eid), fy, equity_pick(eid))
     if res.get("stop"):
         return "blocked", res["why"], {"needs": [{"id": "equity", "stage": "result", "severity": "block",
-                                                  "title": res["why"], "go": {"step": "rebuild"}}]}
+                                                  "title": res["why"], "go": {"step": "rebuild", "anchor": "equityPick"}}]}
     wb._set("engagements", eid, result_json=json.dumps(res, default=str), updated_at=time.time())
     needs = []
     g = res["figures"].get("gaps")
@@ -779,7 +779,9 @@ anything looks wrong or implausible: a bridge step out of proportion (the time v
 times the discount rate over the years between the dates; the cash flows paid about last year's first year's cash
 flow), a figure that doesn't tie, a key fact that doesn't fit the model, a date that doesn't follow, a cash flow profile
 that jumps. Be specific and brief. choice: "ok" if nothing needs a person, else "concerns", with each concern in
-concerns (title, detail, severity: "check" for something a person should look at, "info" for a note).
+concerns (title, detail, severity: "check" for something a person should look at, "info" for a note; years: the
+financial years it's about, as cash_flows_by_year labels them (FY45), else empty; step: the bridge step it's about,
+one of {steps}, else "").
 
 How the bridge is built, so you don't flag what follows from it: every discounting under the equity value moves (the
 unlevered free cash flows with the terminal value, and any other stream the overlay discounts, such as franking
@@ -814,17 +816,24 @@ def _review_job(eid: int, key: str):
            "run_log": [f"{h['stage']}: {h['event']}: {h['text']}" for h in history(eid, limit=40)][::-1]}
     import llm
     model = e.get("reviewer_model") or wb.DEFAULT_REVIEWER
+    steps = [s["key"] for s in (res.get("bridges") or {}).get("mid", {}).get("steps", [])]
     schema = _schema("run_review", ["ok", "concerns"], {"concerns": {"type": "array", "items": {
-        "type": "object", "additionalProperties": False, "required": ["title", "detail", "severity"],
-        "properties": {"title": _S, "detail": _S, "severity": {"type": "string", "enum": ["check", "info"]}}}}})
-    r = llm.create(llm.client(interactive=False), model, input=REVIEW_PROMPT.format(run=json.dumps(run, indent=1, default=str)[:60000]),
-                   text={"format": schema}, max_output_tokens=3000, purpose="orchestrator-review")
+        "type": "object", "additionalProperties": False, "required": ["title", "detail", "severity", "years", "step"],
+        "properties": {"title": _S, "detail": _S, "severity": {"type": "string", "enum": ["check", "info"]},
+                       "years": {"type": "array", "items": _S}, "step": _S}}}})
+    r = llm.create(llm.client(interactive=False), model, input=REVIEW_PROMPT.format(
+        steps=", ".join(steps) or "(none)", run=json.dumps(run, indent=1, default=str)[:60000]),
+        text={"format": schema}, max_output_tokens=3000, purpose="orchestrator-review")
     if r.usage:
         wb._logger(eid)(model, r.usage, "orchestrator-review")
     out = json.loads(r.output_text)
     log(eid, "review", "decide", f"{model}: {out['choice']} — {out['reason']}", issue="review", inputs=key, data=out)
+    # a point's years and step are checked against the run: only years the chart has, only a step the bridge has
+    years = set(ch.get("years") or [])
     needs = [{"id": f"review-{i}", "stage": "review", "severity": c["severity"], "title": c["title"], "detail": c["detail"],
-              "go": {"step": "result"}} for i, c in enumerate(out.get("concerns") or [])]
+              "years": [y for y in dict.fromkeys(c.get("years") or []) if y in years],
+              "step": c.get("step") if c.get("step") in steps else None,
+              "go": {"step": "result", "anchor": f"review-{i}"}} for i, c in enumerate(out.get("concerns") or [])]
     return ("attention" if any(n["severity"] == "check" for n in needs) else "done"), \
         out["reason"] if out["choice"] == "ok" else f"{len(needs)} point(s) to look at", {"needs": needs, "review": out}
 
@@ -843,6 +852,57 @@ STAGE_JOBS = {"roles": _roles_job, "rebuild": _rebuild_job, "rows": _rows_job, "
 # ---- what the page shows, and a person's actions ----------------------------------------------------------------
 
 _STEP_COLS = {"rebuild": "overlay", "rows": "rows", "map": "map"}
+PAGE = {"files": "workbench", "facts": "report", "roles": "workbench", "rebuild": "rebuild", "rows": "result",
+        "result": "result", "review": "result", "map": "result"}
+PAGE_ANCHOR = {"workbench": "filesCard", "report": "reportCard", "rebuild": "tieCard", "result": "bridgeCard"}
+# What a need asks of a person, by its id (the first that fits): its kind, and how the page names it
+KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact", "A fact to add"),
+         ("roles", "confirm-roles", "The roles to confirm"), ("date-overlay", "check-date", "A date to check"),
+         ("date", "confirm-date", "A date to confirm"), ("equity", "pick-cells", "Cells to pick"),
+         ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),
+         ("rate-", "check-input", "A model input to check"), ("growth-", "check-input", "A model input to check"),
+         ("franking-", "check-input", "A model input to check"), ("tie-", "check-tie", "A tie to check"),
+         ("review-", "review-point", "A review point"), ("failed-", "retry", "A step that failed"))
+
+
+def dress(n: dict) -> dict:
+    """A need with its kind (what a person is asked to do) and where it lands: its page and the card on it."""
+    i = n["id"]
+    kind, what = next(((k, w) for p, k, w in KINDS if i == p.rstrip("-") or i.startswith(p if p.endswith("-") else p + "-")),
+                      ("note", "A note"))
+    go = dict(n.get("go") or {})
+    if kind != "retry":
+        go.setdefault("step", PAGE.get(n["stage"], "workbench"))
+        go.setdefault("anchor", PAGE_ANCHOR.get(go["step"]))
+    return {**n, "kind": kind, "kind_label": what, "go": go}
+
+
+_TYPICAL: dict = {}
+
+
+def typical(eid: int) -> dict:
+    """How long each stage takes: its last run on this engagement, else the median of its last ten anywhere (from the
+    run log's starts and ends), so the page can say how long is left. {stage: seconds or None}"""
+    mx = (wb._q("SELECT MAX(id) AS m FROM runlog") or [{}])[0].get("m")
+    if eid in _TYPICAL and _TYPICAL[eid][0] == mx:  # nothing logged since: as worked out last time
+        return _TYPICAL[eid][1]
+    rows = wb._q("SELECT engagement_id AS e, stage, event, at FROM runlog WHERE event IN "
+                 "('start', 'done', 'attention', 'blocked', 'failed') ORDER BY id DESC LIMIT 4000")
+    began, mine, anywhere = {}, {}, {}
+    for r in reversed(rows):
+        k = (r["e"], r["stage"])
+        if r["event"] == "start":
+            began[k] = r["at"]
+        elif k in began:
+            secs = r["at"] - began.pop(k)
+            if r["event"] != "failed" and secs >= 0:
+                anywhere.setdefault(r["stage"], []).append(secs)
+                if r["e"] == eid:
+                    mine[r["stage"]] = secs
+    mid = lambda xs: sorted(xs[-10:])[len(xs[-10:]) // 2]
+    out = {s: mine.get(s) or (mid(anywhere[s]) if anywhere.get(s) else None) for s in STAGES}
+    _TYPICAL[eid] = (mx, out)
+    return out
 
 
 def view(eid: int) -> dict:
@@ -850,7 +910,7 @@ def view(eid: int) -> dict:
     starts nothing."""
     e = wb._q("SELECT * FROM engagements WHERE id=?", eid)
     e = e[0] if e else {}
-    stages, needs = [], []
+    stages, needs, took = [], [], typical(eid)
     for name in STAGES:
         rec = stage(eid, name)
         live = rec["note"]
@@ -859,9 +919,9 @@ def view(eid: int) -> dict:
         if rec["status"] == "running" and name == "rebuild" and e.get("doctor_status") == "running":
             live = "the doctor: " + (e.get("doctor_step") or "")
         stages.append({"stage": name, "label": LABEL[name], "status": rec["status"] or "waiting", "note": live,
-                       "started_at": rec["started_at"], "finished_at": rec["finished_at"]})
+                       "started_at": rec["started_at"], "finished_at": rec["finished_at"], "typical_secs": took.get(name)})
         if rec["status"] != "waiting":  # a stage waiting on the one before: its needs may no longer stand
-            needs += rec["data"].get("needs") or []
+            needs += [dress(n) for n in rec["data"].get("needs") or []]
     sev = {"block": 0, "check": 1, "info": 2}
     needs.sort(key=lambda n: sev.get(n["severity"], 3))
     running = [{"job": j if isinstance(j, str) else j[0], "state": st} for (x, j), st in list(_active.items()) if x == eid]

@@ -504,6 +504,7 @@ async function loadList(select, openOne = true) {
   if (id) { $("#engSel").value = id; await open(id); } else { E = null; render(); }
 }
 async function open(id) {
+  if (E?.id !== id) state.hl = null;
   E = await api(`/api/engagements/${id}`); E._fetched = Date.now();
   if (!state.step) { state.step = landing(); history.replaceState(null, "", `#e=${id}&s=${state.step}`); }
   render(); schedule(); spend();
@@ -523,10 +524,14 @@ async function refresh(force = false) {
   schedule();
 }
 const filesMoving = () => E.documents.some(d => busy(d.status) || busy(d.facts_status)) || E.workbooks.some(w => busy(w.status)) || uploads.some(u => !u.done);
+let offline = false;
 function schedule() {
   clearTimeout(pollTimer);
   if (!E) return;
-  pollTimer = setTimeout(async () => { await refresh(); spend(); }, E.run?.busy || filesMoving() ? 1500 : 6000);
+  pollTimer = setTimeout(async () => {
+    try { await refresh(); spend(); if (offline) { offline = false; toast("Back in touch with the server"); } }
+    catch { if (!offline) { offline = true; toast("Can't reach the server (restarting?): trying again", 6000); } schedule(); }  // a restart doesn't stop the page
+  }, offline ? 5000 : E.run?.busy || filesMoving() ? 1500 : 6000);
 }
 async function spend() {
   if (!E) return;
@@ -635,9 +640,18 @@ function stagePct(s) {  // how far a running stage is, where it's known (the fil
   const items = [...E.documents, ...E.workbooks].filter(x => busy(x.status));
   return items.length ? items.reduce((a, x) => a + (x.pct || 0), 0) / items.length : null;
 }
-function stageLast(s) {  // how long it took last time, where that's kept
+function stageLast(s) {  // how long it usually takes: its last run here, else the median of its last runs anywhere
+  if (s.typical_secs) return s.typical_secs;
   if (s.stage === "facts") return E.documents.find(d => d.id === E.roles.prior_report?.id)?.facts_secs || E.documents[0]?.facts_secs || null;
   return null;
+}
+function toAnswer(st, running) {  // seconds to the answer (the bridge): what's left of this stage and the ones after it
+  const i = st.indexOf(running), end = RAIL.indexOf("result");
+  if (i < 0 || i > end) return null;
+  const now = running.status === "running" && running.started_at ? clock() - running.started_at : 0;
+  const rest = st.slice(i + 1, end + 1).map(stageLast), own = stageLast(running);
+  if (own == null || rest.some(x => x == null)) return null;
+  return Math.max(0, own - now) + rest.reduce((a, x) => a + x, 0);
 }
 function nodeNote(s) {  // what a stage found, in a few words (the whole note is its tooltip)
   const n = s.note || "", look = LOOK[s.status];
@@ -645,14 +659,15 @@ function nodeNote(s) {  // what a stage found, in a few words (the whole note is
   if (look === "error") return "failed";
   if (s.status === "queued") return "in line";
   if (look === "running") return n ? cut(n) : "working…";
-  if (!look) return "";
+  if (!look) return s._ahead && stageLast(s) ? `about ${dur(stageLast(s))}` : "";
   if (s.stage === "files") return `${E.documents.length + E.workbooks.length} files read`;
   if (s.stage === "facts") { const m = n.match(/(\d+) of (\d+)/); return m ? `${m[1]} of ${m[2]} approved` : cut(n); }
   if (s.stage === "roles") return Object.values(E.roles).some(r => r.by === "you") ? "confirmed by you" : "confirmed";
   if (s.stage === "rebuild") { const m = n.match(/([\d,]+) of ([\d,]+) cells/); return m ? `${m[1]} / ${m[2]} cells` : cut(n); }
   if (s.stage === "rows") return /found/.test(n) ? "rows found" : cut(n);
   if (s.stage === "result") { const v = E.result?.values; return v?.this_year?.mid != null ? `${signed(v.this_year.mid - v.report.mid)}` : cut(n); }
-  if (s.stage === "review") { const k = (E.run?.needs || []).filter(x => x.stage === "review").length; return k ? `${k} to check` : "no concerns"; }
+  if (s.stage === "review") { const r = (E.run?.needs || []).filter(x => x.stage === "review"), k = r.filter(x => x.severity !== "info").length;
+    return k ? `${k} to check` : r.length ? `${r.length} note${r.length > 1 ? "s" : ""}` : "no concerns"; }
   return cut(n);
 }
 function heroNeeds() {
@@ -666,12 +681,14 @@ function heroSide(st, needs) {
   const upload = primary => `<div><button class="btn ${primary ? "primary" : ""}" type="button" data-upload>Upload files</button></div>`;
   const forYou = needs.length ? `<div class="row small"><button class="linkbtn" type="button" data-needs-pop aria-expanded="${state.needsOpen}">${needs.length} for you</button></div>` : "";
   if (!files) return `<div class="t">Drop the four files to start</div><div class="small muted">Last year's report, overlay and client model, and this year's client model.</div>${upload(true)}`;
-  if (blocks.length) return `<div class="t">Waiting for you</div><div><button class="btn warn" type="button" data-need="${esc(blocks[0].id)}">${esc(blocks[0].title)}</button></div>${forYou}`;
+  if (blocks.length) return `<div class="small muted">Waiting for you · ${esc(blocks[0].kind_label || "a decision")}</div><div><button class="btn warn" type="button" data-need="${esc(blocks[0].id)}">${esc(blocks[0].title)}</button></div>
+    ${blocks[0].detail ? `<div class="small muted">${esc(cut(blocks[0].detail, 110))}</div>` : ""}${forYou}`;
   if (running) {
-    const pct = stagePct(running), last = stageLast(running);
+    const pct = stagePct(running), last = stageLast(running), left = toAnswer(st, running);
     return `<div class="t">${esc(RAIL_NAME[running.stage] || running.label)}${running.status === "queued" ? " · in line" : ""}</div>
       ${running.note ? `<div class="small muted">${esc(cut(running.note, 90))}</div>` : ""}
-      ${running.status === "running" && running.started_at ? `<div>${runTimer(running.started_at, pct, last)}</div>` : ""}${forYou}`;
+      ${running.status === "running" && running.started_at ? `<div>${runTimer(running.started_at, pct, last)}</div>` : ""}
+      ${left != null ? `<div class="small" data-answer="${Math.round(clock() + left)}">${answerIn(left)}</div>` : ""}${forYou}`;
   }
   const v = E.result?.values;
   if (v?.this_year?.mid != null && ["done", "attention"].includes(stageOf("result").status)) {
@@ -686,18 +703,21 @@ function heroSide(st, needs) {
   const waiting = st.find(s => !LOOK[s.status]);
   return `<div class="t">Nothing running</div><div class="small muted">${waiting ? `${esc(RAIL_NAME[waiting.stage])}: ${esc(waiting.note || "waiting for the step before it")}` : "Up to date with the files."}</div>${forYou}`;
 }
+const answerIn = secs => secs < 45 ? "The answer in under a minute" : `The answer in about ${secs < 90 ? "a minute" : `${Math.round(secs / 60)} min`}`;
 function needsList(needs) {
   const pill = s => s === "block" ? `<span class="pill bad">Blocking</span>` : s === "check" ? `<span class="pill warn">Check</span>` : `<span class="pill">Note</span>`;
-  return `<ul class="needs">${needs.map(x => `<li>${pill(x.severity)}<span class="t">${esc(x.title)}</span>${x.retry ? `<button class="btn small" type="button" data-retry-stage="${esc(x.retry)}">Try again</button>` : `<button class="btn small" type="button" data-need="${esc(x.id)}">Go</button>`}${x.detail ? `<span class="d">${esc(x.detail)}</span>` : ""}</li>`).join("")}</ul>`;
+  return `<ul class="needs">${needs.map(x => `<li>${pill(x.severity)}<span class="t">${esc(x.title)}${x.kind_label ? `<span class="small muted" style="font-weight:400"> · ${esc(x.kind_label.toLowerCase())}</span>` : ""}</span>${x.retry ? `<button class="btn small" type="button" data-retry-stage="${esc(x.retry)}">Try again</button>` : `<button class="btn small" type="button" data-need="${esc(x.id)}">Go</button>`}${x.detail ? `<span class="d">${esc(x.detail)}</span>` : ""}</li>`).join("")}</ul>`;
 }
 let nowHtml = "", said = "";
 function renderNow() {
   const box = $("#now");
   if (!E) { box.hidden = true; nowHtml = ""; return; }
   box.hidden = false;
-  const st = RAIL.map(stageOf), needs = heroNeeds();
+  const st = RAIL.map(s => ({...stageOf(s)})), needs = heroNeeds();
   const files = E.documents.length + E.workbooks.length;
   const firstBlocked = st.findIndex(s => s.status === "blocked" || s.status === "failed");
+  const firstBusy = st.findIndex(s => busy(s.status));
+  if (firstBusy >= 0 && firstBlocked < 0) st.forEach((s, i) => { s._ahead = i > firstBusy; });
   const nodes = st.map((s, i) => {
     const look = LOOK[s.status] || "idle", pct = look === "running" ? stagePct(s) : null;
     const prev = st[i - 1], reached = prev && ["done", "attention"].includes(prev.status);
@@ -804,6 +824,7 @@ function tickTimers(root = document) {
   root.querySelectorAll("[data-timer]").forEach(el => {
     const [st, pc, la] = el.dataset.timer.split("|"); el.textContent = timing(+st, pc === "" ? null : +pc, la === "" ? null : +la);
   });
+  root.querySelectorAll("[data-answer]").forEach(el => { el.textContent = answerIn(Math.max(0, +el.dataset.answer - clock())); });
 }
 setInterval(() => tickTimers(), 1000);
 const runTimer = (started, pct, last) => started ? `<span class="small muted nowrap" data-timer="${started}|${pct ?? ""}|${last ?? ""}">${timing(started, pct, last)}</span>` : "";
@@ -1395,18 +1416,20 @@ function bindRebuild() {
 // ---- the result: the bridge and the cash flows -------------------------------------------------------------------
 const STEP_SHORT = {report: "Report", rounding: "Rounding", prior_feed: "Client file", rebuilt: "Rebuilt", time: "Time value", cash: "Cash flows paid",
   forecast: "New forecast", roll: "Roll-forward", rate: "Discount rate", this_year: "This year"};  // "Last year" when the rebuild ties
-function bridgeSpec(steps, title, units, tied) {
+function bridgeSpec(steps, title, units, tied, step) {
   // where the rebuild ties to the report (low and high), one "last year" bar: two identical bars say nothing
   const keep = steps.filter(s => s.value != null && (s.total || Math.abs(s.value) >= 0.05 || ["time", "cash", "forecast", "roll"].includes(s.key)))
     .filter(s => !(tied && s.key === "rebuilt"));
   const labels = keep.map(x => tied && x.key === "report" ? "Last year" : STEP_SHORT[x.key] || x.label);
   return {title, kind: "waterfall", units: units || "", labels, period_labels: labels, frequency: "irregular", sign: 1,
-    series: [{name: title, range: "", data: keep.map(x => x.value)}], totals: keep.map((x, i) => x.total ? i : -1).filter(i => i >= 0)};
+    series: [{name: title, range: "", data: keep.map(x => x.value)}], totals: keep.map((x, i) => x.total ? i : -1).filter(i => i >= 0),
+    highlight: step ? keep.map((x, i) => x.key === step ? i : -1).filter(i => i >= 0) : []};
 }
-function flowsSpec(ch, units) {
+function flowsSpec(ch, units, years) {
   const ys = ch.years || [], s = ch.series || {};
   const series = [["last_year", "Last year's forecast"], ["this_year", "This year's forecast"]].filter(([k]) => s[k]).map(([k, name]) => ({name, range: (ch.rows || []).join(", "), data: ys.map(y => s[k][y] ?? null)}));
-  return {title: "Undiscounted forecast cash flows by financial year", kind: "bar", units: units || "", labels: ys, period_labels: ys, frequency: "annual", sign: 1, series};
+  return {title: "Undiscounted forecast cash flows by financial year", kind: "bar", units: units || "", labels: ys, period_labels: ys, frequency: "annual", sign: 1, series,
+    highlight: (years || []).map(y => ys.indexOf(y)).filter(i => i >= 0)};
 }
 function viewResult() {
   const R = E.result, rs = stageOf("result");
@@ -1418,23 +1441,28 @@ function viewResult() {
   const tots = steps.filter(x => x.total && x.value != null), from = tots[0]?.value, to = tots[tots.length - 1]?.value;
   return `<div class="card" id="bridgeCard"><div class="row" style="justify-content:space-between;align-items:flex-start">
       <div><h2>Last year to this year</h2><p class="sub" style="margin:0">${esc(u)} · equity value, ${R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution"} · at last year's discount rate${B.valuation_date ? ` · to ${esc(B.valuation_date)}` : ""}</p></div>
-      <div class="seg" role="group" aria-label="Which end">${["low", "mid", "high"].map(k => `<button type="button" data-end="${k}" class="${end === k ? "on" : ""}" aria-pressed="${end === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div></div>
+      <div class="row">${state.hl?.step ? hlNote(STEP_SHORT[state.hl.step] || state.hl.step) : ""}<div class="seg" role="group" aria-label="Which end">${["low", "mid", "high"].map(k => `<button type="button" data-end="${k}" class="${end === k ? "on" : ""}" aria-pressed="${end === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div></div></div>
     ${from != null && to != null && !B.held ? `<div class="move"><span class="from">${vN(from)}</span><span class="muted">→</span><span class="to">${vN(to)}</span><span class="${to - from >= 0 ? "okt" : "warnt"}">${signed(to - from)}</span><span class="small muted">the ${end}${end === "mid" ? ", the midpoint of the low and the high" : ""}</span></div>` : ""}
     ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until the rows below are found: the bridge stops at last year's rebuilt value.</div>` : ""}
     <div class="grid2" style="margin-top:10px"><div id="brChart"></div><div class="scroll"><table class="bridge"><thead><tr><th>Step</th><th class="num">Change</th><th class="num">Value</th></tr></thead><tbody>${rows}</tbody></table>
     ${(B.notes || []).length ? `<p class="small muted">${esc(B.notes.join("; "))}</p>` : ""}</div></div></div>
   ${rowsCard(R)}
-  <div class="card" id="cfCard"><h2>The forecast cash flows</h2><p class="sub">Undiscounted, by financial year, the terminal value left out${R.chart?.left_out?.length ? ` (${esc(R.chart.left_out.join(", "))})` : ""}: last year's model against this year's.</p>
+  <div class="card" id="cfCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">The forecast cash flows</h2>${state.hl?.years?.length ? hlNote(yearsText(state.hl.years)) : ""}</div><p class="sub">Undiscounted, by financial year, the terminal value left out${R.chart?.left_out?.length ? ` (${esc(R.chart.left_out.join(", "))})` : ""}: last year's model against this year's.</p>
     ${R.chart?.years?.length ? `<div id="cfChart"></div>` : `<p class="muted small">${esc(R.chart?.why || "No cash flows found under the value.")}</p>`}</div>
   ${reviewCard()}
   ${mapFold()}`;
 }
+const yearsText = ys => ys.length === 1 ? ys[0] : `${ys.slice(0, -1).join(", ")} and ${ys[ys.length - 1]}`;
+const hlNote = what => `<span class="row small" style="gap:6px"><span class="pill warn">${esc(what)}: a review point</span><button class="linkbtn" type="button" data-hl-clear>Clear</button></span>`;
 function reviewCard() {
   const rev = stageOf("review"); if (!rev.status || rev.status === "waiting") return "";
   const pts = (E.run?.needs || []).filter(n => n.stage === "review"), rv = (E.run?.log || []).find(h => h.stage === "review" && h.event === "decide");
   const said = (rv?.text || "").replace(/^[\w.\-]+:\s*(ok|concerns)\s*[—–-]\s*/i, "");
-  return `<div class="card" id="reviewCard"><div class="row"><h2 style="margin:0">Review</h2>${busy(rev.status) ? `<span class="pill info">reading the run</span>` : pts.length ? `<span class="pill warn">${pts.length} point${pts.length > 1 ? "s" : ""} to check</span>` : `<span class="pill ok">no concerns</span>`}</div>
-    ${pts.map(p => `<p style="margin:10px 0 0"><b>${esc(p.title)}.</b> ${esc(p.detail || "")}</p>`).join("")}${!pts.length && said ? `<p style="margin:10px 0 0">${esc(said)}</p>` : ""}
+  const checks = pts.filter(p => p.severity !== "info").length;
+  return `<div class="card" id="reviewCard"><div class="row"><h2 style="margin:0">Review</h2>${busy(rev.status) ? `<span class="pill info">reading the run</span>` : checks ? `<span class="pill warn">${checks} point${checks > 1 ? "s" : ""} to check</span>` : pts.length ? `<span class="pill">${pts.length} note${pts.length > 1 ? "s" : ""}</span>` : `<span class="pill ok">no concerns</span>`}</div>
+    ${pts.map((p, i) => `<div class="rpoint" id="${esc(p.go?.anchor || `review-${i}`)}"><p style="margin:10px 0 4px"><b>${esc(p.title)}.</b> ${esc(p.detail || "")}</p>
+      ${p.years?.length || p.step ? `<div class="row small">${p.years?.length ? `<button class="btn small" type="button" data-hl-years="${esc(p.years.join(","))}">Show ${esc(yearsText(p.years))} on the chart</button>` : ""}${p.step ? `<button class="btn small" type="button" data-hl-step="${esc(p.step)}">Show it on the bridge</button>` : ""}</div>` : ""}</div>`).join("")}
+    ${!pts.length && said ? `<p style="margin:10px 0 0">${esc(said)}</p>` : ""}
     <p class="small muted" style="margin:10px 0 0">By the reviewer (${esc(E.reviewer_model)}), reading the facts, the tie, the bridge, the cash flows and the run log end to end.</p></div>`;
 }
 function rowsCard(R) {
@@ -1466,9 +1494,13 @@ function bindResult() {
   document.querySelectorAll("[data-rowinfo]").forEach(b => b.onclick = () => rowPicker(b.dataset.rowinfo));
   const R = E.result; if (!R?.bridges) return;
   const B = R.bridges, u = B.units || R.head?.units || "", end = state.bridgeEnd;
-  const tied = !!(R.tie?.low?.rebuilt_ok && R.tie?.high?.rebuilt_ok);
-  $("#brChart")?.append(chartCard(bridgeSpec((B[end] || B.mid).steps, `The ${end}: last year to this year`, u, tied)));
-  if (R.chart?.years?.length) $("#cfChart")?.append(chartCard(flowsSpec(R.chart, u)));
+  const tied = !!(R.tie?.low?.rebuilt_ok && R.tie?.high?.rebuilt_ok), hl = state.hl || {};
+  $("#brChart")?.append(chartCard(bridgeSpec((B[end] || B.mid).steps, `The ${end}: last year to this year`, u, tied, hl.step)));
+  if (R.chart?.years?.length) $("#cfChart")?.append(chartCard(flowsSpec(R.chart, u, hl.years)));
+  // a review point shown on its chart: the years, or the bridge step, it's about
+  document.querySelectorAll("[data-hl-years]").forEach(b => b.onclick = () => { state.hl = {years: b.dataset.hlYears.split(",")}; render(); jumpTo("result", "cfCard"); });
+  document.querySelectorAll("[data-hl-step]").forEach(b => b.onclick = () => { state.hl = {step: b.dataset.hlStep}; render(); jumpTo("result", "bridgeCard"); });
+  document.querySelectorAll("[data-hl-clear]").forEach(b => b.onclick = () => { state.hl = null; render(); });
   mountCharts($("#main"));
 }
 
@@ -1641,7 +1673,7 @@ function mountCharts(root) {
       card._chart?.destroy();
       const d = shownData(spec), f = v => v == null ? "–" : Number(v).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1});
       card._chart = new Chart(card.querySelector("canvas"), chartConfig(spec, d, kind, {
-        color: i => tok(`--c${(i % 6) + 1}`), ink: tok("--ink"), muted: tok("--muted"), rule: tok("--rule"), shade: tok("--code-bg"), up: tok("--c5"), down: tok("--c6"), total: tok("--c1"),
+        color: i => tok(`--c${(i % 6) + 1}`), ink: tok("--ink"), muted: tok("--muted"), rule: tok("--rule"), shade: tok("--code-bg"), up: tok("--c5"), down: tok("--c6"), total: tok("--c1"), band: tok("--warn-bg"),
         font: {family: tok("--sans")}, fmt: f, unit: spec.units ? " " + spec.units : "", plugins: []}));
       card.querySelectorAll("[data-kind]").forEach(b => b.classList.toggle("on", b.dataset.kind === kind));
     };

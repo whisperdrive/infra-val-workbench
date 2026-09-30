@@ -81,9 +81,11 @@ on. Code, not the prompt, keeps it from going round in circles:
 ## The page
 
 A strip at the top of every page shows the seven stages on a track, each with what it found, and the mascot at the
-one that matters. Beside it is the one thing that matters now: the files to upload, what needs you, how long is left,
-or the answer (last year's equity value to this year's, with this year's low to high). A stage is a link to its card.
-Once a run is finished the app opens on the Result.
+one that matters. Beside it is the one thing that matters now: the files to upload, the decision that needs you (what
+kind: a date to confirm, cells to pick, rows to find), how long is left and when the answer is due (from how long each
+stage took last time, here or on other engagements), or the answer (last year's equity value to this year's, with
+this year's low to high). A stage is a link to its card, and each thing that needs you lands on the card where it's
+decided. Once a run is finished the app opens on the Result.
 
 - **Run**: the four files as four slots (each file, how it was read, its role and who confirmed it, its valuation
   date where the roll-forward reads it), the valuation dates across the files, and, folded, changing the roles, the
@@ -95,7 +97,8 @@ Once a run is finished the app opens on the Result.
 - **Rebuild**: the tie to the report and the model inputs sourced and checked; the reconciliation, the assumptions
   and the Python module folded, each with its result on the fold.
 - **Result**: the value bridge (low, mid, high) and the cash-flow chart, the review, and how the files link up (the
-  map) folded.
+  map) folded. A review point names the years and the bridge step it's about (checked against the run), and a click
+  marks them on the chart and the bridge.
 
 Evidence is folded away, never removed. New engagement, Models, the call log and Delete are in the ⋯ menu; Delete asks
 for the engagement's name.

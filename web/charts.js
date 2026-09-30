@@ -19,8 +19,20 @@ function chartKinds(spec) {
   return k;
 }
 
-// o: {color(i), ink, muted, rule, shade, up, down, total, font, fmt(v), unit, plugins, onClick}
+// o: {color(i), ink, muted, rule, shade, up, down, total, band, font, fmt(v), unit, plugins, onClick}
+// spec.highlight: the categories to mark (their indices), a band behind each: what a review point is about
 function chartConfig(spec, d, kind, o) {
+  const marks = (spec.highlight || []).filter(i => i >= 0 && i < d.labels.length);
+  if (marks.length) o = {...o, plugins: [...(o.plugins || []), {id: "reviewBand", beforeDatasetsDraw(chart) {
+    const x = chart.scales.x, a = chart.chartArea, ctx = chart.ctx, n = chart.data.labels.length;
+    const w = n > 1 ? Math.abs(x.getPixelForValue(1) - x.getPixelForValue(0)) : a.right - a.left;
+    ctx.save(); ctx.fillStyle = o.band || "rgba(224, 180, 0, .2)";
+    marks.forEach(i => { const c = x.getPixelForValue(i); ctx.fillRect(c - w / 2, a.top, w, a.bottom - a.top); });
+    // the marked categories named at the top of the band (an axis may skip their own labels)
+    const name = i => [].concat(chart.data.labels[i]).join(" "), first = Math.min(...marks), last = Math.max(...marks);
+    ctx.fillStyle = o.ink; ctx.font = `600 11px ${o.font?.family || "sans-serif"}`; ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ctx.fillText(first === last ? name(first) : `${name(first)}–${name(last)}`, (x.getPixelForValue(first) + x.getPixelForValue(last)) / 2, a.top + 2);
+    ctx.restore(); }}]};
   const n = d.labels.length, num = v => Number(v).toLocaleString();
   const axis = (extra = {}) => ({ticks: {color: o.muted, callback: num}, grid: {color: o.rule}, border: {display: false}, ...extra});
   const x = {ticks: {color: o.muted, maxRotation: 0, autoSkip: true, maxTicksLimit: 10}, grid: {display: false}, border: {color: o.rule}};
