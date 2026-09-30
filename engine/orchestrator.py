@@ -515,8 +515,8 @@ def verify_roles(eid: int, a: dict) -> list[str]:
                        "last year's client model's")
     if a["prior_overlay"]["id"] == a["prior_model"]["id"] and not a["prior_overlay"].get("sheets"):
         bad.append("the overlay is inside the client model but its sheets aren't named")
-    elif a["prior_overlay"]["id"] == a["prior_model"]["id"] and ovw and \
-            set(ovw.get("sheet_names") or []) <= set(a["prior_overlay"]["sheets"]):
+    elif a["prior_overlay"]["id"] == a["prior_model"]["id"] and ovw and ovw.get("sheet_names") and \
+            set(ovw["sheet_names"]) <= set(a["prior_overlay"]["sheets"]):
         bad.append("the overlay is inside the client model but takes every sheet: none is left as the client's")
     return bad
 
@@ -759,6 +759,12 @@ def _result_job(eid: int, key: str):
                                     (f"; the zero-roll check fails on {', '.join(zero)}" if zero else "") +
                                     ("; this year's valuation date isn't known" if g.get("date_check") else ""),
                           "go": {"step": "result", "anchor": "rowsCard"}, "rows": rows})
+    if g and not dc.get("moved"):
+        needs.append({"id": "dates-none", "stage": "result", "severity": "check",
+                      "title": "No valuation date cell was found to move",
+                      "detail": "the discountings under the value couldn't be traced and no cell is labelled as the valuation "
+                                "date, so this year's value may still be discounted to last year's",
+                      "go": {"step": "workbench", "anchor": "datesCard"}})
     if g and dc.get("by_label"):
         needs.append({"id": "dates-label", "stage": "result", "severity": "check",
                       "title": f"The valuation date moved is the one labelled so ({dc['moved'][0]})",

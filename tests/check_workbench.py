@@ -480,6 +480,7 @@ def gate_check() -> None:
         st, _, data = orc._result_job(eid, "gate")
         need = next(n for n in data["needs"] if n["id"] == "dates-roll")
         assert st == "blocked" and need["severity"] == "block" and "2025-06-30" in need["detail"], data["needs"]
+        assert any(n["id"] == "dates-none" and n["severity"] == "check" for n in data["needs"]), data["needs"]
     finally:
         roll.update(kept)
     # a big move at last year's date: a point to check, the value runs

@@ -28,7 +28,7 @@ from docingest import numbers
 
 MAX_CHARS = 150_000  # longer reports: send the pages most likely to hold conclusions and assumptions
 MAX_ROUNDS = 3       # review and remediation rounds before a fact goes to a person
-CHECK_VERSION = 5    # bump when check() changes: existing facts are checked again once (2: spacing-tolerant, waivers;
+CHECK_VERSION = 5    # check()'s version (nothing here re-checks saved facts by it yet: a new run checks afresh) (2: spacing-tolerant, waivers;
                      # 3: numbers worked out by code, none for identity text or a range without a preferred point;
                      # 4: a date checked whole, its month included; 5: a figure's scale and currency, the label it
                      # sits under, a quote on word and number boundaries, identity checked as text, a range's ends,
