@@ -487,7 +487,11 @@ async function boot() {
   CFG = await api("/api/config");
   for (const id of ["mSel", "rSel", "aSel"]) $("#" + id).innerHTML = CFG.models.map(m => `<option>${esc(m)}</option>`).join("");
   const h = new URLSearchParams(location.hash.slice(1)), g = globalOf(h);
-  if (g) { state.global = g; await loadList(null, false); $("#engSel").value = "all"; render(); return; }
+  if (g) {
+    state.global = g;
+    if (g.view === "all" && !h.has("all")) history.replaceState(null, "", "#all");
+    await loadList(null, false); $("#engSel").value = "all"; render(); return;
+  }
   state.step = pageOf(h.get("s"));  // none given: where the engagement is decides (landing)
   await loadList(+h.get("e") || null);
 }
@@ -1769,7 +1773,8 @@ function mountCharts(root) {
 // equity values, inputs and dates, bridges (the mid, step by step) and this year's cash flows side by side.
 let OV = null, ovAt = 0, ovBusy = false, ovTimer = null, ovFail = 0, CMP = null, cmpBusy = false;
 const STEP_ORDER = ["report", "rounding", "prior_feed", "rebuilt", "roll", "time", "cash", "forecast", "held", "rate", "this_year"];
-const globalOf = h => h.has("all") ? {view: "all"} : h.get("compare") ? {view: "compare", ids: h.get("compare").split(",").map(Number).filter(Boolean).slice(0, 2)} : null;
+const globalOf = h => h.has("all") ? {view: "all"} : h.get("compare") ? {view: "compare", ids: h.get("compare").split(",").map(Number).filter(Boolean).slice(0, 2)}
+  : !h.get("e") && !h.get("s") ? {view: "all"} : null;  // no engagement or page asked for: the app opens on every engagement
 function leave() { E = null; clearTimeout(pollTimer); }  // off an engagement: nothing of it polled
 function goGlobal(g) {
   leave(); state.global = g;

@@ -116,7 +116,8 @@ one that matters. Beside it is the one thing that matters now: the files to uplo
 kind: a date to confirm, cells to pick, rows to find), how long is left and when the answer is due (from how long each
 stage took last time, here or on other engagements), or the answer (last year's equity value to this year's, with
 this year's low to high). A stage is a link to its card, and each thing that needs you lands on the card where it's
-decided. Once a run is finished the app opens on the Result.
+decided. An engagement opens where it matters: the decision that blocks it, else the Result once there is one, else
+the Run page.
 
 - **Run**: the four files as four slots (each file, how it was read, its role and who confirmed it, its valuation
   date where the roll-forward reads it), the valuation dates across the files, and, folded, changing the roles, the
@@ -135,7 +136,8 @@ decided. Once a run is finished the app opens on the Result.
   from and every check on it, the reconciliation, the key facts, the files and their roles, the review and the run
   log. Figures are values, not links back to the files; it carries a disclaimer that it's for the team to check.
 
-**All engagements** (the logo, the top of the engagement list, or the ⋯ menu) lists every engagement: where it is
+**All engagements** is where the app opens (and the logo, the top of the engagement list, or the ⋯ menu come back to
+it). It lists every engagement: where it is
 (finished, needs you, running, waiting, no files yet), what's for you, and its equity value, last year per the report
 to this year, the mid. A click opens one; tick two to compare them side by side: the equity value, the inputs and the
 dates, the bridges step by step (the mid, the same steps matched; a dash where one hasn't a step) and this year's cash
