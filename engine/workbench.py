@@ -388,8 +388,29 @@ def _model(eid: int) -> str:
     return (rows[0]["model"] if rows else None) or DEFAULT_MODEL
 
 
-def add_upload(eid: int, tmp: Path, filename: str, sha: str) -> dict:
-    """Workbooks -> the shared library (deduplicated across the app); reports -> this engagement's documents."""
+def role_fits(role: str, filename: str) -> None:
+    """A file placed in a role by hand must be the kind that role takes: last year's report a PDF or PPTX, the others
+    a workbook. Raises ValueError, before anything is stored."""
+    if role not in rolesmod.ROLES:
+        raise ValueError(f"unknown role {role}")
+    want = REPORT_TYPES if role == "prior_report" else library.SUPPORTED
+    if Path(filename).suffix.lower() not in want:
+        what = "last year's report" if role == "prior_report" else "a model"
+        raise ValueError(f"{filename}: {what} goes in as {' or '.join(x.lstrip('.').upper() for x in want)}")
+
+
+def add_upload(eid: int, tmp: Path, filename: str, sha: str, role: str | None = None) -> dict:
+    """Workbooks -> the shared library (deduplicated across the app); reports -> this engagement's documents. With a
+    role, the file is placed in it by you (a re-upload of the same file too): the orchestrator fills in the others."""
+    if role:
+        try:
+            role_fits(role, filename)
+        except ValueError:
+            tmp.unlink(missing_ok=True)
+            raise
+        got = add_upload(eid, tmp, filename, sha)
+        confirm_roles(eid, {role: {"kind": got["kind"], "id": got["id"], "sheets": None}}, "you")
+        return {**got, "role": role}
     ext = Path(filename).suffix.lower()
     if ext in library.SUPPORTED:  # identified and summarised with the engagement's model (the Models selector)
         status, rec = library.add_upload(tmp, filename, sha, _model(eid))

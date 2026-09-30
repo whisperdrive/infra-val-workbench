@@ -165,6 +165,7 @@ tr.flash > td { background: var(--info-bg); transition: background .4s; }
 .slot .role { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
 .slot .fn { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
 .slot.vacant { border-style: dashed; background: transparent; color: var(--muted); }
+.slot.over { border-color: var(--accent); border-style: solid; background: var(--info-bg); }
 .slot-top { justify-content: space-between; flex-wrap: nowrap; }
 .slot details > summary { font-size: 12.5px; }
 .loose { margin-top: 10px; display: grid; gap: 6px; }
@@ -413,6 +414,7 @@ dialog#uploadDlg { border: 1px solid var(--rule-strong); border-radius: 10px; ba
 </footer>
 <div id="tip"></div>
 <input type="file" id="picker" multiple accept=".pdf,.pptx,.xlsx,.xlsm" hidden>
+<input type="file" id="slotPicker" accept=".pdf,.pptx,.xlsx,.xlsm" hidden>
 
 <script>
 const $ = (s, el = document) => el.querySelector(s);
@@ -905,10 +907,12 @@ function uploadBody() {
   const loose = looseFiles();
   return `<div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose files to upload"><b>Drop the files here</b> or click to browse<div class="muted small">Reports as PDF or PPTX, models as XLSX or XLSM</div></div>
     ${uploads.length ? `<div class="stack" style="gap:6px">${uploads.map(u => `<div class="small">${u.error ? `<span class="pill bad">Failed</span> ${esc(u.name)}: ${esc(u.error)}` : `<span class="pill info">Uploading</span> ${esc(u.name)}`}</div>`).join("")}</div>` : ""}
+    <p class="small muted" style="margin:0">Or drop a file on its slot to place it yourself: the orchestrator fills in the rest.</p>
     <div class="slotrow">${SLOTS.map(role => { const x = slotFile(role);
-      if (!x) return `<div class="slot vacant"><span class="role">${SLOT_NAME[role]}</span><span class="small">${esc(ROLE_HELP[role])}</span></div>`;
-      return `<div class="slot"><span class="role">${SLOT_NAME[role]}</span><span class="fn">${esc(x.f.filename)}</span>${fileState(x.f, x.doc) || `<span class="small muted">${fileMeta(x.f, x.doc)}</span>`}
-        ${x.f.status === "done" ? `<div class="row">${x.saved?.confirmed ? `<span class="pill ok">✓ in place</span>` : `<span class="pill info">suggested</span>`}</div>` : ""}${firstWhy(x.r) ? `<span class="small">${esc(firstWhy(x.r))}</span>` : ""}</div>`; }).join("")}</div>
+      const browse = `<button class="linkbtn" type="button" data-slot-browse="${role}">${x ? "Replace" : "Browse"}</button>`;
+      if (!x) return `<div class="slot vacant" data-slot="${role}"><span class="role">${SLOT_NAME[role]}</span><span class="small">${esc(ROLE_HELP[role])}</span><span class="small">Drop it here, or ${browse}</span></div>`;
+      return `<div class="slot" data-slot="${role}"><span class="role">${SLOT_NAME[role]}</span><span class="fn">${esc(x.f.filename)}</span>${fileState(x.f, x.doc) || `<span class="small muted">${fileMeta(x.f, x.doc)}</span>`}
+        ${x.f.status === "done" ? `<div class="row">${x.saved?.confirmed ? `<span class="pill ok">✓ ${x.saved.by === "you" ? "placed by you" : "in place"}</span>` : `<span class="pill info">suggested</span>`}</div>` : ""}${firstWhy(x.r) ? `<span class="small">${esc(firstWhy(x.r))}</span>` : ""}<span class="small">${browse}</span></div>`; }).join("")}</div>
     ${loose.length ? `<div class="stack" style="gap:6px">${loose.map(({f, doc}) => `<div class="small"><b style="font-weight:600">${esc(f.filename)}</b> <span class="muted">${busy(f.status) ? "being read, then placed" : "not placed yet"}</span>${fileState(f, doc)}</div>`).join("")}</div>` : ""}
     <p class="small muted" style="margin:0">Close this window at any time: the orchestrator carries on, and the strip at the top shows where it is.</p>`;
 }
@@ -924,6 +928,17 @@ function bindUpload() {
   drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
   drop.ondragleave = () => drop.classList.remove("over");
   drop.ondrop = e => { e.preventDefault(); e.stopPropagation(); drop.classList.remove("over"); send([...e.dataTransfer.files]); };
+  // a slot takes one file, placed in its role by you
+  document.querySelectorAll("#upBody [data-slot]").forEach(el => {
+    el.ondragover = e => { e.preventDefault(); e.stopPropagation(); el.classList.add("over"); };
+    el.ondragleave = () => el.classList.remove("over");
+    el.ondrop = e => { e.preventDefault(); e.stopPropagation(); el.classList.remove("over");
+      const fs = [...e.dataTransfer.files]; if (!fs.length) return;
+      if (fs.length > 1) toast(`Only ${fs[0].name} goes in this slot; drop the others on the area above`, 6000);
+      send([fs[0]], el.dataset.slot); };
+  });
+  document.querySelectorAll("#upBody [data-slot-browse]").forEach(b => b.onclick = () => { slotRole = b.dataset.slotBrowse;
+    $("#slotPicker").accept = slotRole === "prior_report" ? ".pdf,.pptx" : ".xlsx,.xlsm"; $("#slotPicker").click(); });
   document.querySelectorAll("#upBody [data-retry]").forEach(b => b.onclick = () => act(() => api(`/api/documents/${b.dataset.retry}/retry`, {method: "POST"})));
   document.querySelectorAll("#upBody [data-retrywb]").forEach(b => b.onclick = () => act(() => api(`/api/engagements/${E.id}/workbooks/${b.dataset.retrywb}/retry`, {method: "POST"})));
   tickTimers($("#upBody"));
@@ -947,13 +962,16 @@ function dateCheck(w) {
   return `<button class="pill warn" data-vdok="${w.id}" title="Read from the file: the roll-forward uses it. Confirm it as it stands, or change it.${esc(why)}" ${w.valuation_date ? "" : "disabled"}>check · confirm</button>`;
 }
 $("#picker").onchange = e => { send([...e.target.files]); e.target.value = ""; };
+let slotRole = null;  // the slot a browse was for
+$("#slotPicker").onchange = e => { const f = e.target.files[0], role = slotRole; slotRole = null; e.target.value = ""; if (f && role) send([f], role); };
 async function act(fn) { try { await fn(); } catch (err) { toast(err.message, 6000); } await refresh(true); }
-async function send(files) {
+async function send(files, role = null) {
   for (const f of files) {
     const u = {name: f.name, done: false}; uploads.push(u); render(); refreshUpload();
-    const fd = new FormData(); fd.append("file", f);
+    const fd = new FormData(); fd.append("file", f); if (role) fd.append("role", role);
     try { const r = await api(`/api/engagements/${E.id}/files`, {method: "POST", body: fd}); u.done = true;
-      if (r.status === "duplicate") toast(`${f.name} was already uploaded; using the existing copy.`); }
+      if (role) toast(`${f.name}: placed as ${SLOT_NAME[role].toLowerCase()}`);
+      else if (r.status === "duplicate") toast(`${f.name} was already uploaded; using the existing copy.`); }
     catch (err) { u.done = true; u.error = err.message; }
     await refresh(true);
   }

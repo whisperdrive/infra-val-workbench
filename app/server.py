@@ -12,7 +12,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
@@ -177,9 +177,15 @@ async def delete_engagement(eid: int):
 
 
 @app.post("/api/engagements/{eid}/files")
-async def upload(eid: int, file: UploadFile = File(...)):
+async def upload(eid: int, file: UploadFile = File(...), role: str | None = Form(None)):
+    """A file for the engagement; with role, placed in that role by you (the orchestrator fills in the others)."""
     if not workbench._q("SELECT 1 FROM engagements WHERE id=?", eid):
         raise HTTPException(404, "no such engagement")
+    if role:
+        try:
+            workbench.role_fits(role, file.filename or "")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
     library.UPLOADS.mkdir(exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=library.UPLOADS, suffix=".part")
     os.close(fd)
@@ -189,8 +195,10 @@ async def upload(eid: int, file: UploadFile = File(...)):
         while chunk := await file.read(1 << 20):
             h.update(chunk)
             out.write(chunk)
-    got = await _run(workbench.add_upload, eid, tmp, file.filename, h.hexdigest())
+    got = await _run(workbench.add_upload, eid, tmp, file.filename, h.hexdigest(), role)
     orchestrator.person(eid, "files", f"uploaded {file.filename}")
+    if role:
+        orchestrator.person(eid, "roles", f"placed {file.filename} as {role.replace('_', ' ')}")
     return got
 
 

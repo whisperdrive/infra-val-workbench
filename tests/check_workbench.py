@@ -180,11 +180,11 @@ def stub_models() -> None:
 
 # ---- helpers -------------------------------------------------------------------------------------------------------
 
-def upload(eid: int, name: str) -> dict:
+def upload(eid: int, name: str, role: str | None = None) -> dict:
     src = PACK / name
     tmp = Path(tempfile.mkdtemp()) / name
     shutil.copy(src, tmp)
-    return wb.add_upload(eid, tmp, name, library.sha256_file(tmp))
+    return wb.add_upload(eid, tmp, name, library.sha256_file(tmp), role)
 
 
 def wait(eid: int, done, what: str, timeout: float = 300) -> dict:
@@ -400,6 +400,30 @@ def escalate_check() -> None:
     print("escalate: ok (where the reads of the image agree with nothing, the fact goes to a person, with the image)")
 
 
+def place_check() -> None:
+    """Files placed in their roles by hand while uploading stay the person's; the orchestrator places the rest (last
+    year's client model here) and confirms it on the evidence. A file of the wrong kind for its role is refused before
+    anything is stored."""
+    e = wb.create("Asset A, FY26 (placed by hand)")
+    eid = e["id"]
+    bad = Path(tempfile.mkdtemp()) / PACK_A[0]
+    shutil.copy(PACK / PACK_A[0], bad)
+    try:
+        wb.add_upload(eid, bad, PACK_A[0], library.sha256_file(bad), "current_model")
+        raise AssertionError("a report was taken as this year's client model")
+    except ValueError as ex:
+        assert "a model goes in as XLSX or XLSM" in str(ex) and not bad.exists() and not wb.documents(eid), ex
+    for name, role in zip(PACK_A, ("prior_report", None, "prior_overlay", "current_model")):
+        upload(eid, name, role)
+    wait(eid, lambda v: status(v)["roles"] in (*orc.SETTLED, "blocked", "failed"), "the roles")
+    rl = wb.roles(eid)
+    assert {k: (r["confirmed"], r["by"]) for k, r in rl.items()} == {
+        "prior_report": (True, "you"), "prior_overlay": (True, "you"), "current_model": (True, "you"),
+        "prior_model": (True, "orchestrator")}, rl
+    print("place: ok (files placed by hand while uploading stay yours; the orchestrator places the rest; a file of the "
+          "wrong kind for its role is refused before it's stored)")
+
+
 def dates_check() -> None:
     """The image shows a different year from the text layer's valuation date, with the same day: the date is compared
     whole, so it's a difference (its first number, the day, alone would confirm it), and two agreeing reads of the
@@ -520,6 +544,7 @@ def main() -> None:
     roles_check()
     escalate_check()
     dates_check()
+    place_check()
     other = run_check(PACK_B, "Asset A, FY26 (overlay inside)")
     a, b = (wb.get(x)["result"]["values"]["this_year"]["mid"] for x in (eid, other))
     assert abs(a - b) < 1e-6, f"the same files give different values in the two layouts: {a} vs {b}"

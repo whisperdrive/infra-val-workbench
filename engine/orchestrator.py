@@ -526,7 +526,18 @@ def _roles_job(eid: int, key: str):
     a = _assignment(res)
     mine = {k: {"kind": r["kind"], "id": r["id"], "sheets": r["sheets"]} for k, r in rl.items()
             if r["confirmed"] and r.get("by") == "you"}
+    filled = {}
+    for k, m in mine.items():  # a file placed by hand, with no sheets named: the suggestion's, where it picked the same file
+        if m["sheets"] is None and (a.get(k) or {}).get("id") == m["id"] and a[k]["sheets"]:
+            m["sheets"] = a[k]["sheets"]
+            filled[k] = m
     a.update(mine)  # a person's choices stand; the rest is the suggestion
+
+    def settle(pick: dict, ev: dict) -> None:
+        """The orchestrator confirms the roles a person didn't place; a person's stay theirs (with the sheets filled in)."""
+        if filled:
+            wb.confirm_roles(eid, filled, by="you")
+        wb.confirm_roles(eid, {k: v for k, v in pick.items() if k not in mine}, by="orchestrator", evidence=ev)
     checks = res.get("checks") or []
     so = res.get("second_opinion") or {}
     yes, no = [c["text"] for c in checks if c["ok"] is True], [c["text"] for c in checks if c["ok"] is False]
@@ -534,8 +545,7 @@ def _roles_job(eid: int, key: str):
     evidence = lambda extra: {role: {"why": (res["roles"].get(role) or {}).get("why") or [], "checks": yes, **extra}
                               for role in a}
     if len(a) == 4 and not no and len(yes) >= 2 and agree and not verify_roles(eid, a):
-        wb.confirm_roles(eid, a, by="orchestrator",
-                         evidence=evidence({"second_opinion": f"{so.get('model')} agrees ({so.get('confidence')} confidence)"}))
+        settle(a, evidence({"second_opinion": f"{so.get('model')} agrees ({so.get('confidence')} confidence)"}))
         return "done", f"confirmed on {len(yes)} checks and a second opinion that agrees", {"evidence": yes}
     why = ([f"{len(no)} check(s) against: {'; '.join(no)}"] if no else []) + \
         ([f"only {len(yes)} check(s) for"] if len(yes) < 2 else []) + \
@@ -557,10 +567,12 @@ def _roles_job(eid: int, key: str):
             evidence=json.dumps(ev, indent=1, default=str)[:40000]), _schema("roles_decision", ["rules", "second_opinion", "escalate"]))
     if out and out["choice"] in ("rules", "second_opinion"):
         pick = a if out["choice"] == "rules" else _from_second(eid, so, res)
+        if pick is not None:
+            pick = {**pick, **mine}  # the second opinion doesn't overrule a person either
         bad = verify_roles(eid, pick) if pick else ["the second opinion names files that aren't here"]
         if not bad:
             log(eid, "roles", "verify", "the checks in code pass on the chosen assignment", issue="roles", inputs=key)
-            wb.confirm_roles(eid, pick, by="orchestrator", evidence=evidence({"decided_by": f"{out.get('reason')}"}))
+            settle(pick, evidence({"decided_by": f"{out.get('reason')}"}))
             return "done", f"confirmed: gpt-sol chose the {'rules' if out['choice'] == 'rules' else 'second opinion'}'s " \
                            f"assignment ({out['reason']})", {"decision": out}
         log(eid, "roles", "verify", "the chosen assignment fails the checks in code: " + "; ".join(bad), issue="roles", inputs=key)
