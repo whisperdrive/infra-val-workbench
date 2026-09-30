@@ -16,6 +16,7 @@
   inside    the same run with the overlay inside a copy of the client model and the report as slides
   workpaper the Excel workpaper built from the run, in memory: its sheets, the bridge's mid ends at this year's value,
             a row for every financial year of the cash flows, the disclaimer on its summary; none before the bridge
+  review    the review is a decision like the others: once per result, a try again doesn't buy another
   gate      this year's value held, with the reason, where it can't be trusted: a discounting left on last year's
             date, nothing of this year's model read; a big move at last year's date is a point to check
   overview  every engagement at a glance: where it is (a finished one, an empty one), its values
@@ -452,6 +453,37 @@ def overview_check(eid: int) -> None:
     print("overview: ok (a finished engagement with its values and what's for a person; an empty one as empty)")
 
 
+def review_check(eid: int) -> None:
+    """The review is a decision like the others: once per result. A "try again" on the result that works out the same
+    result, or on the review itself, doesn't buy another review (the same points stand); a result that changes is
+    reviewed again, with the points from before in view."""
+    n = lambda: CALLS.count("run_review")
+    finished = lambda name: orc.stage(eid, name).get("finished_at")
+    before, needs = n(), [x["title"] for x in orc.view(eid)["needs"] if x["stage"] == "review"]
+    for name in ("result", "review"):
+        t0 = finished(name)
+        orc.retry(eid, name)
+        wait(eid, lambda v: finished(name) != t0 and not v["busy"] and status(v)["review"] in orc.SETTLED,
+             f"the review after trying the {name} again")
+        assert n() == before, (name, CALLS[-5:])
+        assert [x["title"] for x in orc.view(eid)["needs"] if x["stage"] == "review"] == needs
+    t0 = finished("review")
+    wb.set_this_year_date(eid, "2026-12-31")  # a different result: reviewed again, its earlier points in view
+    orc.poke()
+    try:
+        wait(eid, lambda v: finished("review") != t0 and status(v)["review"] in orc.SETTLED, "the review of a new result")
+        assert n() == before + 1 and "Your points on the run before this one" in PROMPTS["run_review"] and \
+            "Terminal-year cash flow" in PROMPTS["run_review"].split("Your points on the run before this one")[1]
+    finally:
+        t0 = finished("review")
+        wb.set_this_year_date(eid, None)
+        orc.poke()
+        wait(eid, lambda v: finished("review") != t0 and status(v)["review"] in orc.SETTLED, "the review, back again")
+    assert n() == before + 1, CALLS[-5:]  # back to the first result: its review stands
+    print("review: ok (once per result: a try again on the same result, or on the review, doesn't buy another; a new "
+          "result is reviewed again with the earlier points in view)")
+
+
 def gate_check() -> None:
     """This year's value is held, with a need that says why, where it can't be trusted:
     - a discounting left on last year's valuation date (its date cell not among those the roll moves);
@@ -774,6 +806,7 @@ def main() -> None:
     workpaper_check(eid)
     overview_check(eid)
     gate_check()
+    review_check(eid)
     gating_check(eid)
     roles_check()
     escalate_check()

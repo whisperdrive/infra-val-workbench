@@ -536,7 +536,8 @@ async function refresh(force = false) {
   else { renderNow(); tickTimers(); }
   schedule();
 }
-const filesMoving = () => E.documents.some(d => busy(d.status) || busy(d.facts_status)) || E.workbooks.some(w => busy(w.status)) || uploads.some(u => !u.done);
+const uploadsHere = () => uploads.filter(u => u.eid === E?.id);  // this engagement's uploads: another's aren't shown here
+const filesMoving = () => E.documents.some(d => busy(d.status) || busy(d.facts_status)) || E.workbooks.some(w => busy(w.status)) || uploadsHere().some(u => !u.done);
 let offline = false;
 function schedule() {
   clearTimeout(pollTimer);
@@ -927,7 +928,7 @@ function viewWorkbench() {
 function uploadBody() {
   const loose = looseFiles();
   return `<div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose files to upload"><b>Drop the files here</b> or click to browse<div class="muted small">Reports as PDF or PPTX, models as XLSX or XLSM</div></div>
-    ${uploads.length ? `<div class="stack" style="gap:6px">${uploads.map(u => `<div class="small">${u.error ? `<span class="pill bad">Failed</span> ${esc(u.name)}: ${esc(u.error)}` : `<span class="pill info">Uploading</span> ${esc(u.name)}`}</div>`).join("")}</div>` : ""}
+    ${uploadsHere().length ? `<div class="stack" style="gap:6px">${uploadsHere().map(u => `<div class="small">${u.error ? `<span class="pill bad">Failed</span> ${esc(u.name)}: ${esc(u.error)}` : `<span class="pill info">Uploading</span> ${esc(u.name)}`}</div>`).join("")}</div>` : ""}
     <p class="small muted" style="margin:0">Or drop a file on its slot to place it yourself: the orchestrator fills in the rest.</p>
     <div class="slotrow">${SLOTS.map(role => { const x = slotFile(role);
       const browse = `<button class="linkbtn" type="button" data-slot-browse="${role}">${x ? "Replace" : "Browse"}</button>`;
@@ -987,16 +988,20 @@ let slotRole = null;  // the slot a browse was for
 $("#slotPicker").onchange = e => { const f = e.target.files[0], role = slotRole; slotRole = null; e.target.value = ""; if (f && role) send([f], role); };
 async function act(fn) { try { await fn(); } catch (err) { toast(err.message, 6000); } await refresh(true); }
 async function send(files, role = null) {
+  const eid = E?.id, name = E?.name;  // the engagement the files were dropped on: they all go there
+  if (!eid) return;
   for (const f of files) {
-    const u = {name: f.name, done: false}; uploads.push(u); render(); refreshUpload();
+    const u = {name: f.name, done: false, eid}; uploads.push(u); render(); refreshUpload();
     const fd = new FormData(); fd.append("file", f); if (role) fd.append("role", role);
-    try { const r = await api(`/api/engagements/${E.id}/files`, {method: "POST", body: fd}); u.done = true;
-      if (role) toast(`${f.name}: placed as ${SLOT_NAME[role].toLowerCase()}`);
-      else if (r.status === "duplicate") toast(`${f.name} was already uploaded; using the existing copy.`); }
-    catch (err) { u.done = true; u.error = err.message; }
-    await refresh(true);
+    const away = () => E?.id === eid ? "" : ` (to ${name})`;
+    try { const r = await api(`/api/engagements/${eid}/files`, {method: "POST", body: fd}); u.done = true;
+      if (role) toast(`${f.name}: placed as ${SLOT_NAME[role].toLowerCase()}${away()}`);
+      else if (r.status === "duplicate") toast(`${f.name} was already uploaded${away()}; using the existing copy.`); }
+    catch (err) { u.done = true; u.error = err.message; if (away()) toast(`${f.name} didn't upload${away()}: ${err.message}`, 8000); }
+    if (E?.id === eid) await refresh(true);
   }
-  uploads = uploads.filter(u => u.error);
+  uploads = uploads.filter(u => u.error && u.eid === E?.id);  // a failure shows in its own engagement's window only
+  if (E?.id !== eid) toast(`${files.length} file(s) sent to ${name}`);
 }
 function bindFiles() {
   document.querySelectorAll("[data-vdok]").forEach(b => b.onclick = () => act(async () => {
@@ -1728,7 +1733,7 @@ function mountCharts(root) {
 // ---- every engagement, and two side by side ------------------------------------------------------------------
 // #all: where each engagement is and its value, a click to open it, two ticked to compare; #compare=A,B: their
 // equity values, inputs and dates, bridges (the mid, step by step) and this year's cash flows side by side.
-let OV = null, ovAt = 0, ovBusy = false, ovTimer = null, CMP = null, cmpBusy = false;
+let OV = null, ovAt = 0, ovBusy = false, ovTimer = null, ovFail = 0, CMP = null, cmpBusy = false;
 const STEP_ORDER = ["report", "rounding", "prior_feed", "rebuilt", "roll", "time", "cash", "forecast", "rate", "this_year"];
 const globalOf = h => h.has("all") ? {view: "all"} : h.get("compare") ? {view: "compare", ids: h.get("compare").split(",").map(Number).filter(Boolean).slice(0, 2)} : null;
 function leave() { E = null; clearTimeout(pollTimer); }  // off an engagement: nothing of it polled
@@ -1746,17 +1751,21 @@ function openFromList(id) {  // Back comes to where it was opened from
 const OV_stale = () => { ovAt = 0; };
 async function loadOverview() {
   clearTimeout(ovTimer); ovBusy = true;
-  try { OV = await api("/api/overview"); ovAt = Date.now(); } catch (e) { toast(e.message); }
-  ovBusy = false;
+  const before = JSON.stringify(OV), failing = ovFail;
+  try { OV = await api("/api/overview"); ovFail = 0; }
+  catch (e) { if (!ovFail) toast(`Can't load the engagements (${e.message}): trying again`, 6000); ovFail++; }
+  ovAt = Date.now(); ovBusy = false;  // a failed load waits like a good one: never asked again at once
   if (state.global?.view !== "all") return;
-  render();
-  ovTimer = setTimeout(() => state.global?.view === "all" && loadOverview(), OV?.some(x => ["running"].includes(x.state)) ? 2000 : 10000);
+  if (JSON.stringify(OV) !== before || failing !== ovFail) render();  // unchanged: no redraw, so focus stays put
+  if (failing && !ovFail) toast("The engagements are back");
+  const wait = ovFail ? Math.min(30000, 2500 * 2 ** ovFail) : OV?.some(x => x.state === "running") ? 2000 : 10000;
+  ovTimer = setTimeout(() => state.global?.view === "all" && loadOverview(), wait);
 }
 const STATE_PILL = {finished: "ok", "needs you": "bad", running: "info", waiting: "", empty: ""};
 const dayOf = t => t ? new Date(t * 1000).toISOString().slice(0, 10) : "";
 function viewAll() {
   if (!ovBusy && Date.now() - ovAt > 4000) loadOverview();
-  if (!OV) return `<div class="card"><p class="muted" style="margin:0">Loading the engagements…</p></div>`;
+  if (!OV) return `<div class="card"><p class="muted" style="margin:0">${ovFail ? "Can't load the engagements: trying again…" : "Loading the engagements…"}</p></div>`;
   state.pick = (state.pick || []).filter(id => OV.some(x => x.id === id && x.values?.this_year));
   const pick = state.pick, can = x => !!x.values?.this_year;
   const row = x => { const v = x.values, t = v?.this_year, r = v?.report, on = pick.includes(x.id);

@@ -75,7 +75,9 @@ takes it from there:
    → this year's forecast → discount rate → this year, for the low and the high; the mid is their average. Where a
    discounting under the value can't be read here, the roll-forward is one step, not its unwind landed in the new
    forecast. A chart compares the undiscounted forecast cash flows, last year's and this year's.
-8. **Has gpt-sol review the run end to end** and says what looks implausible.
+8. **Has gpt-sol review the run end to end** and says what looks implausible: once per result, like any other
+   decision (a try again, or a rerun that works out the same result, keeps the points; a changed result is reviewed
+   again, with the earlier points in view so the ones that still stand keep their titles).
 
 **The conventions:**
 - The conclusion is the **equity value**, low / mid / high, where the mid is the midpoint of the low and the high.

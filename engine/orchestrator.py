@@ -148,7 +148,18 @@ def inputs(eid: int, name: str, snap: dict, holds: bool = True) -> str:
         return _h(rows)
     res = [rows, equity_pick(eid), (snap.get("profile") or {}).get("fy_end_month"),
            sorted([f["key"], f.get("value_text"), f.get("status")] for f in snap["facts"])]
-    return _h(res if name == "result" else [res, stage(eid, "result").get("finished_at")])
+    return _h(res) if name == "result" else _h(["review", result_digest(eid)])
+
+
+REVIEWED = ("head", "where", "tie", "values", "bridges", "chart", "reconcile", "inputs", "assumptions")
+
+
+def result_digest(eid: int) -> str | None:
+    """What the saved result says (the parts the review reads), as a fingerprint: a rerun that works out the same
+    result doesn't need reviewing again."""
+    rows = wb._q("SELECT result_json FROM engagements WHERE id=?", eid)
+    res = json.loads((rows[0]["result_json"] if rows else None) or "null")
+    return _h({k: res.get(k) for k in REVIEWED}) if res else None
 
 
 # ---- the engagement as it stands ---------------------------------------------------------------------------------
@@ -869,17 +880,29 @@ def _review_job(eid: int, key: str):
     import llm
     model = e.get("reviewer_model") or wb.DEFAULT_REVIEWER
     steps = [s["key"] for s in (res.get("bridges") or {}).get("mid", {}).get("steps", [])]
-    schema = _schema("run_review", ["ok", "concerns"], {"concerns": {"type": "array", "items": {
-        "type": "object", "additionalProperties": False, "required": ["title", "detail", "severity", "years", "step"],
-        "properties": {"title": _S, "detail": _S, "severity": {"type": "string", "enum": ["check", "info"]},
-                       "years": {"type": "array", "items": _S}, "step": _S}}}})
-    r = llm.create(llm.client(interactive=False), model, input=REVIEW_PROMPT.format(
-        steps=", ".join(steps) or "(none)", run=json.dumps(run, indent=1, default=str)[:60000]),
-        text={"format": schema}, max_output_tokens=3000, purpose="orchestrator-review")
-    if r.usage:
-        wb._logger(eid)(model, r.usage, "orchestrator-review")
-    out = json.loads(r.output_text)
-    log(eid, "review", "decide", f"{model}: {out['choice']} — {out['reason']}", issue="review", inputs=key, data=out)
+    done = [h for h in history(eid, "review", "review", 20) if h["event"] == "decide" and h.get("data")]
+    same = next((h for h in done if h["inputs"] == key), None)
+    if same and _decisions(eid, "review", "review", key) >= BUDGET:
+        # reviewed once already on what the result says now: the same points stand (a "try again", or a rerun that
+        # worked out the same result, doesn't buy another review, as it doesn't buy another decision)
+        out = same["data"]
+        log(eid, "review", "note", "reviewed once already on this result: the same points stand", issue="review", inputs=key)
+    else:
+        schema = _schema("run_review", ["ok", "concerns"], {"concerns": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False, "required": ["title", "detail", "severity", "years", "step"],
+            "properties": {"title": _S, "detail": _S, "severity": {"type": "string", "enum": ["check", "info"]},
+                           "years": {"type": "array", "items": _S}, "step": _S}}}})
+        before = [{"title": c["title"], "detail": c["detail"], "severity": c["severity"]}
+                  for c in (done[0]["data"].get("concerns") or [])] if done else []
+        r = llm.create(llm.client(interactive=False), model, input=REVIEW_PROMPT.format(
+            steps=", ".join(steps) or "(none)", run=json.dumps(run, indent=1, default=str)[:60000]) + (
+            "\n\nYour points on the run before this one (its result has changed since): keep a point's title where it "
+            "still stands, so a person can follow it, and drop what the new result settles:\n" + json.dumps(before, indent=1)
+            if before else ""), text={"format": schema}, max_output_tokens=3000, purpose="orchestrator-review")
+        if r.usage:
+            wb._logger(eid)(model, r.usage, "orchestrator-review")
+        out = json.loads(r.output_text)
+        log(eid, "review", "decide", f"{model}: {out['choice']} — {out['reason']}", issue="review", inputs=key, data=out)
     # a point's years and step are checked against the run: only years the chart has, only a step the bridge has
     years = set(ch.get("years") or [])
     needs = [{"id": f"review-{i}", "stage": "review", "severity": c["severity"], "title": c["title"], "detail": c["detail"],
