@@ -37,7 +37,8 @@ STEP_SHORT = {"report": "Report", "rounding": "Rounding", "prior_feed": "Client 
               "held": "Held inputs", "rate": "Discount rate", "this_year": "This year"}
 ROLES = {"prior_report": "Last year's report", "prior_overlay": "Last year's overlay",
          "prior_model": "Last year's client model", "current_model": "This year's client model"}
-INPUTS = {"rate": "Discount rate", "growth": "Terminal growth rate", "franking": "Franking credit utilisation"}
+INPUTS = {"rate": "Discount rate", "growth": "Terminal growth rate", "multiple": "Exit multiple",
+          "franking": "Franking credit utilisation"}
 SPLIT = (("pv", "Value of the discounted cash flows"), ("pv_forecast", "PV of the discrete forecast"),
          ("pv_tv", "PV of the terminal value"), ("tv", "Terminal value"), ("franking", "Value of franking credits"),
          ("franking_share", "Franking credits, % of the equity value"),
@@ -132,7 +133,7 @@ def _formats(book) -> dict:
             "muted": F(font_color="#666666", text_wrap=True), "mono": F(font_name="Consolas", font_color="#444444"),
             "num": F(num_format=num), "numb": F(num_format=num, bold=True), "chg": F(num_format=chg),
             "tot": F(num_format=num, bold=True, top=1), "totl": F(bold=True, top=1, text_wrap=True),
-            "pct": F(num_format=pct), "pct1": F(num_format="0.0%"), "ok": F(font_color="#1e7b3c", bold=True, align="center"),
+            "pct": F(num_format=pct), "pct1": F(num_format="0.0%"), "mult": F(num_format='0.00"x"'), "ok": F(font_color="#1e7b3c", bold=True, align="center"),
             "bad": F(font_color="#b3261e", bold=True, align="center"), "unk": F(font_color="#888888", align="center"),
             "disc": F(italic=True, text_wrap=True, border=1, border_color="#bbbbbb", bg_color="#f4f8fc"),
             "warn": F(text_wrap=True, bold=True, font_color="#8a5a00", bg_color="#fff4d6")}
@@ -194,11 +195,14 @@ def _summary(S: _Sheet, g: dict, res: dict, review: dict):
         S.header("", "Low", "", "High", "Checked")
         for key, name in INPUTS.items():
             X = I.get(key) or {}
+            if not X:
+                continue
             ends = X.get("ends") or {}
             S.line(name, (ends.get("low") or {}).get("value"), "", (ends.get("high") or {}).get("value"),
                    "not applicable" if X.get("na") else "couldn't check" if X.get("error") else "✓ checked"
                    if X.get("ok") is True else "to look at",
-                   fs=[f["wrap"], f["pct"], None, f["pct"], _okf(f, None if X.get("error") else X.get("ok") is True or False)])
+                   fs=[f["wrap"], f["mult" if key == "multiple" else "pct"], None, f["mult" if key == "multiple" else "pct"],
+                       _okf(f, None if X.get("error") or X.get("na") else X.get("ok") is True or False)])
         S.text("The low is at the higher discount rate. Each input's cell and every check on it: the Inputs sheet.", f["muted"], 5)
         S.gap()
     T = res.get("terminal") or {}
@@ -352,7 +356,8 @@ def _inputs(S: _Sheet, res: dict):
             S.line(end, r.get("value"), mark(r.get("ties")), r.get("cell") or "not sourced", s.get("label") or r.get("note") or "",
                    s.get("heading") or "", ("an input, typed in" if s.get("input") else f"a formula: {s.get('formula') or ''}") if s else "",
                    " → ".join(s.get("chain") or []), checks,
-                   fs=[f["b"], f["pct"], _okf(f, r.get("ties")), f["mono"], f["wrap"], f["wrap"], f["wrap"], f["mono"], f["wrap"]],
+                   fs=[f["b"], f["mult" if key == "multiple" else "pct"], _okf(f, r.get("ties")), f["mono"], f["wrap"],
+                       f["wrap"], f["wrap"], f["mono"], f["wrap"]],
                    height=max(15, 13 * (len(r["checks"]) + checks.count("\n") // 3 + 1)))
         S.gap()
 

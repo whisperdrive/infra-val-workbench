@@ -250,9 +250,67 @@ def roll_dates_check() -> None:
           f"discountings at {new:%d %B %Y}, {want:,.1f} each)")
 
 
+def multiple_check() -> None:
+    """Where the report's terminal value is an exit multiple: the multiple is the cell the terminal value's formula
+    reads in M x X, the terminal value recomputed from it, the metric X what the report says it's a multiple of, the
+    report's multiple tied; typed into the formula, it isn't sourced; a metric that isn't the report's is flagged."""
+    import sourced
+    vd, rate, mult, years = date(2025, 6, 30), 0.08, 12.0, list(range(2026, 2031))
+    got = {}
+    for how in ("cell", "typed"):
+        out = Path(tempfile.mkdtemp(prefix=f"trace_mult_{how}_"))
+        wb = xlsxwriter.Workbook(out / f"{how}.xlsx")
+        dt = wb.add_format({"num_format": "dd-mmm-yy"})
+        inp = wb.add_worksheet("Inputs")
+        inp.write(3, 0, "Valuation date")
+        inp.write_datetime(3, 2, vd, dt)
+        inp.write(4, 0, "Discount rate")
+        inp.write_number(4, 2, rate)
+        inp.write(6, 0, "Exit multiple (EV/EBITDA)")
+        inp.write_number(6, 2, mult)
+        fl = wb.add_worksheet("Flows")
+        for r, label in ((2, "Period ending"), (6, "EBITDA"), (7, "Free cash flow"), (8, "Terminal value"),
+                         (9, "Valuation cash flow"), (12, "Discount factor"), (13, "Present value"), (15, "Equity value")):
+            fl.write(r, 1, label)
+        total, last = 0.0, COL(3 + len(years) - 1)
+        for k, y in enumerate(years):
+            c, end = COL(3 + k), date(y, 6, 30)
+            f, ebitda, cf = 1 / (1 + rate) ** ((end - vd).days / 365), 150.0 + 6 * k, 100.0 + 5 * k
+            tv = mult * ebitda if k == len(years) - 1 else 0.0
+            fl.write_datetime(2, 3 + k, end, dt)
+            fl.write_number(6, 3 + k, ebitda)
+            fl.write_number(7, 3 + k, cf)
+            if tv:
+                fl.write_formula(f"{c}9", f"=Inputs!$C$7*{c}7" if how == "cell" else f"={c}7*12", None, tv)
+            else:
+                fl.write_number(8, 3 + k, 0.0)
+            fl.write_formula(f"{c}10", f"={c}8+{c}9", None, cf + tv)
+            fl.write_formula(f"{c}13", f"=1/(1+Inputs!$C$5)^(({c}3-Inputs!$C$4)/365)", None, f)
+            fl.write_formula(f"{c}14", f"={c}10*{c}13", None, (cf + tv) * f)
+            total += (cf + tv) * f
+        fl.write_formula("C16", f"=SUM(D14:{last}14)", None, total)
+        wb.close()
+        db = sqlite3.connect(build_map.main(str(out / f"{how}.xlsx"), str(out / "db"))["db"])
+        cs = [c for c in dcftrace.cores(dcftrace.trace(db, "Flows!C16")) if c.get("inputs")]
+        facts = [{"key": "terminal_multiple", "value_text": "12.0x", "basis": "EV/EBITDA", "status": "approved"}]
+        traced = {"low": cs, "high": cs}
+        got[how] = sourced.multiple(db, traced, facts, {"kind": "exit_ebitda", "label": "An exit multiple of EBITDA"})["ends"]["low"]
+        if how == "cell":  # the report says EV/RAB, the model multiplies EBITDA
+            got["rab"] = sourced.multiple(db, traced, facts, {"kind": "exit_rab", "label": "An exit multiple of the RAB"})["ends"]["low"]
+    cell, typed, rab = got["cell"], got["typed"], got["rab"]
+    assert cell["sourced"] and cell["cell"] == "Inputs!C7" and cell["value"] == mult and cell["ok"] and cell["ties"], cell
+    assert cell["metric"]["label"] == "EBITDA" and [c["ok"] for c in cell["checks"]] == [True, True, True, True], cell
+    assert not typed["sourced"] and typed["cell"] is None and typed["value"] == mult and not typed["ok"], typed
+    assert not rab["ok"] and "The report says a multiple of the RAB; the metric here is EBITDA" in \
+        [c["text"] for c in rab["checks"]], rab
+    print("multiple: ok (the exit multiple is the cell the terminal value's formula reads in M × X, recomputed; the "
+          "metric is what the report says; typed into the formula, it isn't sourced)")
+
+
 if __name__ == "__main__":
     main()
     mid_year_check()
     sourcing_check()
     growth_check()
     roll_dates_check()
+    multiple_check()

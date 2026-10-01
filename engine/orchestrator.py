@@ -806,12 +806,14 @@ def _result_job(eid: int, key: str):
                           f"; {sg['value']:,.1f} in this year's model" + (", checked" if sg["status"] == "checked" else "")
                           if sg.get("value") is not None else ""),
                       "detail": sg.get("text") or "", "go": {"step": "result", "anchor": "heldCard"}})
-    names = {"rate": "discount rate", "growth": "terminal growth rate", "franking": "franking credit utilisation"}
+    names = {"rate": "discount rate", "growth": "terminal growth rate", "multiple": "exit multiple",
+             "franking": "franking credit utilisation"}
     for key, what in names.items():
         for end, r in (((res.get("inputs") or {}).get(key) or {}).get("ends") or {}).items():
             if r.get("ok") is not False:
                 continue
-            at = (f"{100 * r['value']:.2f}%" if r.get("value") is not None else "") + (f" in {r['cell']}" if r.get("cell") else "")
+            at = ((f"{r['value']:.2f}x" if key == "multiple" else f"{100 * r['value']:.2f}%") if r.get("value") is not None
+                  else "") + (f" in {r['cell']}" if r.get("cell") else "")
             bad = [c["text"] for c in r.get("checks") or [] if c["ok"] is False]
             needs.append({"id": f"{key}-{end}", "stage": "result", "severity": "check",
                           "title": f"The {end} end's {what} ({at.strip()}) " + (

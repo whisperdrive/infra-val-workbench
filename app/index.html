@@ -1415,14 +1415,14 @@ function tieCard(R) {
     ${(R.head?.why || []).length ? `<p class="small muted" style="margin:8px 0 0">${esc(R.head.why.join("; "))}.</p>` : ""}</div>`;
 }
 function inputsCard(R) {
-  const I = R.inputs, NAMES = {rate: "Discount rate", growth: "Terminal growth rate", franking: "Franking credit utilisation"};
+  const I = R.inputs, NAMES = {rate: "Discount rate", growth: "Terminal growth rate", multiple: "Exit multiple", franking: "Franking credit utilisation"};
   const li = c => `<li class="${c.ok === true ? "" : c.ok === false ? "no" : "unk"}">${esc(c.text)}</li>`;
-  const pct = v => v == null ? "–" : `${(100 * v).toFixed(2)}%`;
-  const block = (title, r) => {
+  const val = (v, key) => v == null ? "–" : key === "multiple" ? `${v.toFixed(2)}x` : `${(100 * v).toFixed(2)}%`;  // a multiple is as printed
+  const block = (title, r, key) => {
     const h = `<h4 style="font-size:13px;margin:0 0 4px">${title}</h4>`;
     if (!r || !r.checks) return `<div>${h}<p class="small muted">${esc(r?.why || "Not found.")}</p></div>`;
     const s = r.sighted;
-    return `<div>${h}<div style="font-size:18px;font-weight:600">${pct(r.value)} ${s ? `<span class="mono small muted">${esc(s.cell)}</span>` : `<span class="pill warn">not sourced</span>`}</div>
+    return `<div>${h}<div style="font-size:18px;font-weight:600">${val(r.value, key)} ${s ? `<span class="mono small muted">${esc(s.cell)}</span>` : `<span class="pill warn">not sourced</span>`}</div>
       ${s ? `<p class="small" style="margin:4px 0 8px">${esc(s.label || "")}${s.heading ? `, under <b>${esc(s.heading)}</b>` : ""}: ${s.input ? "an input, typed in" : `a formula, <span class="mono">${esc(s.formula || "")}</span>`}${s.chain?.length > 1 ? `<br><span class="muted">Read as ${s.chain.map(c => `<span class="mono">${esc(c)}</span>`).join(" → ")}</span>` : ""}</p>` : r.note ? `<p class="small muted" style="margin:4px 0 8px">${esc(r.note)}</p>` : ""}
       <ul class="checks">${r.checks.map(li).join("")}</ul></div>`;
   };
@@ -1430,16 +1430,16 @@ function inputsCard(R) {
     const X = I[key];
     if (!X) return "";
     const L = X.ends?.low, H = X.ends?.high, bad = [L, H].filter(r => r?.ok === false).length;
-    const brief = [["Low", L], ["High", H]].map(([n, r]) => r?.checks ? `${n} ${pct(r.value)} <span class="mono small muted">${esc(r.cell || "not sourced")}</span>` : `${n} <span class="muted">${esc(r?.why || "–")}</span>`).join(" · ");
+    const brief = [["Low", L], ["High", H]].map(([n, r]) => r?.checks ? `${n} ${val(r.value, key)} <span class="mono small muted">${esc(r.cell || "not sourced")}</span>` : `${n} <span class="muted">${esc(r?.why || "–")}</span>`).join(" · ");
     if (X.na) return `<div style="padding:10px 0;border-top:1px solid var(--rule)"><div class="row" style="justify-content:space-between;gap:8px"><b>${NAMES[key]}</b><span class="pill">not applicable</span></div>
       <p class="small muted" style="margin:4px 0 0">${esc(X.na[0].toUpperCase() + X.na.slice(1))}.</p></div>`;
     const mark = X.error ? `<span class="pill warn">couldn't check</span>` : X.ok === true ? `<span class="pill ok">✓ checked</span>` : bad ? `<span class="pill bad">${bad === 2 ? "both ends" : "one end"} to look at</span>` : `<span class="pill warn">not found</span>`;
     return `<div style="padding:10px 0;border-top:1px solid var(--rule)"><div class="row" style="justify-content:space-between;gap:8px"><b>${NAMES[key]}</b>${mark}</div>
       <div class="small" style="margin:4px 0">${brief}${X.report?.length ? ` <span class="muted">· the report: ${X.report.map(esc).join(" – ")}</span>` : ""}</div>
-      ${X.error ? `<p class="small muted">${esc(X.error)}</p>` : `<details data-k="inputs-${key}" ${X.ok === true ? "" : "open"}><summary>The evidence</summary><div class="grid2" style="margin-top:8px">${block(key === "rate" ? "The low (at the higher rate)" : "The low", L)}${block(key === "rate" ? "The high (at the lower rate)" : "The high", H)}</div></details>`}</div>`;
+      ${X.error ? `<p class="small muted">${esc(X.error)}</p>` : `<details data-k="inputs-${key}" ${X.ok === true ? "" : "open"}><summary>The evidence</summary><div class="grid2" style="margin-top:8px">${block(key === "rate" ? "The low (at the higher rate)" : "The low", L, key)}${block(key === "rate" ? "The high (at the lower rate)" : "The high", H, key)}</div></details>`}</div>`;
   };
   return `<div class="card" id="inputsCard"><h2>Model inputs: sourced and checked</h2><p class="sub">Each input is the cell the model's formulas read, found by following them; recomputed from it; then checked against the report.</p>
-    ${["rate", "growth", "franking"].map(section).join("")}</div>`;
+    ${["rate", "growth", "multiple", "franking"].map(section).join("")}</div>`;
 }
 function reconcileCard(R) {
   const C = R.reconcile, u = R.head?.units || "";

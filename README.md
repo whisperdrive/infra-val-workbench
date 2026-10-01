@@ -61,7 +61,11 @@ takes it from there:
    - the terminal growth rate: the cell the terminal value's formula reads as g, the terminal value recomputed as
      X × (1 + g) / (r − g) at that end's own discount rate;
    - franking credit utilisation: the fraction every period's franking credits read; rerun at nil in Python, the
-     equity value must fall by exactly the value of franking credits.
+     equity value must fall by exactly the value of franking credits;
+   - an exit multiple, where the report's terminal value is one: the cell the terminal value's formula reads as the
+     multiple in multiple × metric, the terminal value recomputed from it, the metric what the report says it's a
+     multiple of (EBITDA, the RAB), and the report's multiple for that end (the low value at the lower multiple). There's
+     then no growth rate to source, and the card says so.
 
    One that isn't sourced to a cell (typed into a formula, say), or doesn't check out, comes to you. What the
    report discloses of the value (the terminal value, the PV of the forecast and of the terminal value,

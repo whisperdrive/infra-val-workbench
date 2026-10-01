@@ -166,8 +166,9 @@ def _fit(db, ref: str, tv: float) -> dict | None:
     return None
 
 
-def _gordon(db, core: dict) -> dict | None:
-    """The terminal value in a discounting's cash flows (its part labelled or built like one), fitted."""
+def _terminal(db, core: dict, fit) -> dict | None:
+    """The terminal value in a discounting's cash flows (its part labelled or built like one), fitted by fit(db, ref,
+    tv): the cell itself, else a cell it reads holding the same value (a terminal value worked out elsewhere)."""
     import result
     try:
         sh, _, cols = dcf._row_range(db, core["inputs"]["cashflow"][0])
@@ -184,14 +185,18 @@ def _gordon(db, core: dict) -> dict | None:
             if not tv or not got[0]:
                 continue
             ref = f"{m[1]}!{dcf._addr(c, int(m[2]))}"
-            # the cell itself, else a cell it reads holding the same value (a terminal value worked out elsewhere)
             for k in [ref] + [k for k, n in valuation.reads(db, cells=[(m[1], int(m[2]), c)], depth=3).items()
                               if n["formula"] and dcf._num(n["value"]) is not None and abs(dcf._num(n["value"]) - tv) < 1e-9]:
-                fit = _fit(db, k, tv)
-                if fit:
-                    return fit
+                got_fit = fit(db, k, tv)
+                if got_fit:
+                    return got_fit
             break  # the last non-zero terminal value cell is the one
     return None
+
+
+def _gordon(db, core: dict) -> dict | None:
+    """The terminal value in a discounting's cash flows, fitted as X x (1 + g) / (r - g)."""
+    return _terminal(db, core, _fit)
 
 
 def growth(db, traced: dict, rates: dict, facts: list[dict]) -> dict:
@@ -231,6 +236,90 @@ def growth(db, traced: dict, rates: dict, facts: list[dict]) -> dict:
              f"({own.get('cell') or '?'}, {_pct(own['value']) if own.get('value') is not None else '?'})"),
             _vs_report(stated, rep, ties, "terminal growth rate")], rep[1] if rep else None, ties,
             terminal_value=fit["tv_cell"])
+    return _wrap(ends, stated)
+
+
+# ---- the exit multiple ---------------------------------------------------------------------------------------------
+
+MULTIPLE_WORDS = re.compile(r"multiple|exit|ev\s*/|\bx\b|times", re.I)
+METRIC = {"exit_ebitda": ("EBITDA", re.compile(r"ebitda", re.I)),
+          "exit_rab": ("the RAB", re.compile(r"\brab\b|regulat\w* asset|asset base", re.I))}
+
+
+def _fit_multiple(db, ref: str, tv: float) -> dict | None:
+    """A terminal value's formula as M x X: the multiple M among the cells it reads (or typed into it: then not
+    sourced) and the metric X (a cell), M the one labelled like a multiple, else the smaller."""
+    f = re.sub(r'"[^"]*"', "", _formula(db, ref) or "")
+    w = valuation.reads(db, cells=[_key(ref)], depth=1)
+    cells = [(k, dcf._num(n["value"])) for k, n in w.items() if dcf._num(n["value"])]
+    typed = [(None, float(m[1])) for m in _LIT.finditer(dcf._FREF.sub(" ", f)) if not m[2] and float(m[1])]
+    label = lambda k: dcf._row_label(db, *_key(k)[:2]) if k else ""
+    fits = []
+    for mk, m in cells + typed:
+        for xk, x in cells:
+            if xk == mk or not 0 < m < 100 or abs(m * x - tv) > 1e-6 * max(1.0, abs(tv)):
+                continue
+            fits.append((not MULTIPLE_WORDS.search(label(mk) or ""), m, mk, xk, x))
+    if not fits:
+        return None
+    _, m, mk, xk, x = min(fits)
+    return {"tv_cell": ref, "tv": tv, "m": (mk, m), "x": (xk, x, label(xk))}
+
+
+def _stated_x(facts: list[dict]) -> list[tuple[float, str]]:
+    """The report's exit multiple, lowest first: [(number, its text)] (a multiple is as printed, 12.0x is 12.0)."""
+    f = next((x for x in facts if x.get("key") == "terminal_multiple" and x.get("status") != "rejected"), None)
+    v = {**(f or {}), **((f or {}).get("final") or {})}
+    said = [(float(n), t) for t in (v.get("low_text"), v.get("high_text")) if t
+            for n in keyfacts.numbers(keyfacts._unrange(t))[:1]]
+    if not said and v.get("value_text"):
+        said = [(float(n), n) for n in keyfacts.numbers(keyfacts._unrange(v["value_text"]))]
+    return sorted(set(said))
+
+
+def _tie_x(m: float | None, rep) -> bool | None:
+    if m is None or not rep:
+        return None
+    n = (keyfacts.numbers(keyfacts._unrange(rep[1])) or [""])[0]
+    d = len(n.split(".")[1]) if "." in n else 0
+    return abs(m - rep[0]) <= 0.5 * 10 ** -d + 1e-9
+
+
+def multiple(db, traced: dict, facts: list[dict], terminal: dict) -> dict:
+    """Each end's exit multiple, where the report's terminal value is one: the cell the terminal value's formula
+    reads as the multiple in M x X, the terminal value recomputed from it, the metric X what the report says it's a
+    multiple of (EBITDA, the RAB), and the report's multiple for that end (the low value at the lower multiple)."""
+    import result
+    stated = _stated_x(facts)
+    want = {"low": stated[0] if stated else None, "high": stated[-1] if stated else None}
+    of, like = METRIC.get(terminal.get("kind"), (None, None))
+    ends = {}
+    for end in ("low", "high"):
+        rep = want[end]
+        main, _, _ = result._streams(traced.get(end) or [])
+        fit = _terminal(db, main, _fit_multiple) if main else None
+        if not fit:
+            ends[end] = {"ok": None, "why": f"no terminal value built as a multiple × a metric found in its cash flows; the "
+                                           f"report's is {terminal['label'][0].lower() + terminal['label'][1:]}"}
+            continue
+        (mk, m), (xk, x, xl) = fit["m"], fit["x"]
+        s = follow(db, mk, m) if mk else None
+        ties = _tie_x(m, rep) if rep else None
+        checks = [(bool(mk), f"Sourced: the terminal value's formula ({fit['tv_cell']}) reads this cell as the multiple"
+                   if mk else f"Not sourced: the multiple is typed into the terminal value's formula ({fit['tv_cell']})"),
+                  (True, f"The terminal value recomputed as {m:,.2f}x × {x:,.1f} ({xl or xk}) = {fit['tv']:,.1f} matches "
+                         f"the model's")]
+        if like is not None:
+            checks.append((bool(like.search(xl or "")), f"A multiple of {of}, as the report says: the metric is {xl or xk}"
+                           if like.search(xl or "") else f"The report says a multiple of {of}; the metric here is "
+                                                         f"{xl or xk}"))
+        checks.append((ties, f"The report's {rep[1]}" + (f" (the {'lower' if end == 'low' else 'higher'} of "
+                                                         f"{' and '.join(t for _, t in stated)})" if len(stated) > 1 else "")
+                       + (": doesn't match" if ties is False else "")) if rep else
+                      (None, "The report's exit multiple: not among the key facts"))
+        ends[end] = _end(m, s, bool(mk), None if mk else f"typed into the terminal value's formula ({fit['tv_cell']})",
+                         checks, rep[1] if rep else None, ties, terminal_value=fit["tv_cell"],
+                         metric={"cell": xk, "label": xl, "value": x})
     return _wrap(ends, stated)
 
 
@@ -309,7 +398,8 @@ def franking(sess, summary: dict, db, traced: dict, where: dict, facts: list[dic
     return _wrap(ends, stated)
 
 
-NO_GROWTH = {"none", "exit_ebitda", "exit_rab", "exit_other"}  # terminal values with no growth rate to source
+EXITS = {"exit_ebitda", "exit_rab", "exit_other"}
+NO_GROWTH = {"none"} | EXITS  # terminal values with no growth rate to source
 
 
 def growth_applies(terminal: dict | None) -> str | None:
@@ -331,9 +421,11 @@ def check(sess, summary: dict, where: dict, facts: list[dict], asm: dict, traced
     db = rodb.connect(db)
     out = {"rate": rate(asm, facts)}
     na = growth_applies(terminal)
-    for key, fn in (("growth", lambda: {"ends": {e: {"ok": None, "why": na} for e in ("low", "high")}, "report": [],
-                                        "ok": None, "na": na} if na else growth(db, traced, out["rate"], facts)),
-                    ("franking", lambda: franking(sess, summary, db, traced, where, facts, unit))):
+    jobs = [("growth", lambda: {"ends": {e: {"ok": None, "why": na} for e in ("low", "high")}, "report": [],
+                                "ok": None, "na": na} if na else growth(db, traced, out["rate"], facts))]
+    if (terminal or {}).get("kind") in EXITS:  # the report's terminal value is an exit multiple: source it
+        jobs.append(("multiple", lambda: multiple(db, traced, facts, terminal)))
+    for key, fn in jobs + [("franking", lambda: franking(sess, summary, db, traced, where, facts, unit))]:
         try:
             out[key] = fn()
         except Exception as ex:  # beside the value, not in its way
