@@ -1233,19 +1233,43 @@ function imagesMeta(d) {
 // what the report says, and how sure we are: the equity value, the four figures the rebuild needs, the counts
 const seenShort = f => { const v = f?.visual; if (!v) return ""; if (String(v.status).startsWith("confirmed")) return `<span class="okt">✓ image</span>`;
   if (v.status === "corrected") return `<span class="infot">corrected on the image</span>`; if (v.status === "native") return "slide text"; return `<span class="warnt">the image differs</span>`; };
+// The report's figures and assumptions, low · mid · high. The mid is the report's own where it prints one; where it
+// gives only the ends, their midpoint, marked as such (the equity value's convention, for the assumptions too).
+const LMH = [["terminal_value", "Terminal value"], ["pv_forecast", "PV of the forecast"], ["pv_terminal_value", "PV of the terminal value"],
+  ["franking_credits_value", "Value of franking credits"], ["franking_credits_share", "Franking credits, % of the equity value"],
+  ["discount_rate", "Discount rate"], ["terminal_growth_rate", "Terminal growth rate"], ["terminal_multiple", "Terminal multiple"],
+  ["franking_utilisation", "Franking utilisation"]];
+const numIn = t => { const m = String(t || "").match(/-?\d[\d,]*(?:\.\d+)?/); return m ? {raw: m[0], v: parseFloat(m[0].replace(/,/g, "")), d: (m[0].split(".")[1] || "").length} : null; };
+function midpointOf(lo, hi) {
+  const a = numIn(lo), b = numIn(hi); if (!a || !b) return null;
+  const d = Math.max(a.d, b.d);
+  return String(lo).replace(a.raw, ((a.v + b.v) / 2).toLocaleString(undefined, {minimumFractionDigits: d, maximumFractionDigits: d}));
+}
+function lowMidHigh(F) {
+  const rows = LMH.map(([k, label]) => [F(k), label]).filter(([f]) => f && (f.value_text || f.low_text || f.high_text));
+  if (!rows.length) return "";
+  const row = ([f, label]) => {
+    const where = `<td class="small muted nowrap">p. ${esc(f.page ?? "?")} · ${seenShort(f) || "not looked at"}</td>`;
+    const head = `<td>${esc(label)}${f.basis ? `<div class="small muted">${esc(f.basis)}</div>` : ""}</td>`;
+    if (!f.low_text && !f.high_text)  // one figure: the mid where the report says so, else the same at every end
+      return /\bmid|prefer/i.test(f.basis || "") ? `<tr>${head}<td class="num">–</td><td class="num"><b>${esc(f.value_text)}</b></td><td class="num">–</td>${where}</tr>`
+        : `<tr>${head}<td class="num" colspan="3"><b>${esc(f.value_text)}</b> <span class="small muted">one figure</span></td>${where}</tr>`;
+    const mid = f.value_text ? `<b>${esc(f.value_text)}</b>` : midpointOf(f.low_text, f.high_text) ? `<b>${esc(midpointOf(f.low_text, f.high_text))}</b> <span class="small muted" title="The report gives the low and the high only: their midpoint">midpoint</span>` : "–";
+    return `<tr>${head}<td class="num">${esc(f.low_text || "–")}</td><td class="num">${mid}</td><td class="num">${esc(f.high_text || "–")}</td>${where}</tr>`;
+  };
+  return `<div class="scroll" style="margin-top:12px"><table class="lmh"><thead><tr><th>The report's figures and assumptions</th><th class="num">Low</th><th class="num">Mid</th><th class="num">High</th><th></th></tr></thead><tbody>${rows.map(row).join("")}</tbody></table></div>`;
+}
 function reportSummary(d, fs) {
   const F = k => { const f = fs.find(x => x.key === k && x.status !== "rejected"); return f && f.status === "approved" && f.final ? {...f, ...f.final} : f; };
   if (!fs.length) return `<div class="card" id="reportCard"><h2>What the report says</h2><p class="muted small" style="margin:0">${d.facts_status === "error" ? "Reading its key facts failed: see All facts below." : "The key facts appear here once the report is read."}</p></div>`;
   const eq = F("equity_value"), H = E.result?.head, units = H?.units || F("currency_units")?.value_text || "";
   const basis = /cum/i.test(H?.basis || eq?.basis || "") ? "cum-distribution" : "ex-distribution";
   const [low, mid, high] = H ? [vN(H.low), vN(H.mid), vN(H.high)] : [eq?.low_text || "–", eq?.value_text || "–", eq?.high_text || "–"];
-  const tile = (k, label) => { const f = F(k), v = f ? f.value_text || [f.low_text, f.high_text].filter(Boolean).join(" – ") : "";
-    return `<div class="tile"><span>${label}</span><b>${esc(v || "–")}</b><span>${f ? `p. ${esc(f.page ?? "?")} · ${seenShort(f) || "not looked at"}` : "not in the report's facts"}</span></div>`; };
   const n = {page: fs.filter(f => f.check?.ok).length, image: fs.filter(f => ["confirmed", "confirmed by the reviewer", "corrected"].includes(f.visual?.status)).length, you: fs.filter(needsYou).length};
   return `<div class="card" id="reportCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">What the report says</h2><span class="small muted">${esc(d.filename)}${units ? ` · ${esc(units)}` : ""} · ${basis}</span></div>
     <div class="eqrow"><div><span class="k">Low</span><b>${esc(low)}</b></div><div class="mid"><span class="k">Mid, the midpoint</span><b>${esc(mid)}</b></div><div><span class="k">High</span><b>${esc(high)}</b></div></div>
-    <div class="small muted" style="margin-top:6px">Equity value${eq?.page ? `, p. ${esc(eq.page)}` : ""}${eq ? ` · ${seenShort(eq) || "not looked at"}` : ""}</div>
-    <div class="tiles" style="margin-top:12px">${tile("valuation_date", "Valuation date")}${tile("discount_rate", "Discount rate")}${tile("terminal_growth_rate", "Terminal growth")}${tile("franking_utilisation", "Franking utilisation")}</div>
+    <div class="small muted" style="margin-top:6px">Equity value${eq?.page ? `, p. ${esc(eq.page)}` : ""}${eq ? ` · ${seenShort(eq) || "not looked at"}` : ""}${F("valuation_date") ? ` · valuation date ${esc(F("valuation_date").value_text)}, p. ${esc(F("valuation_date").page ?? "?")} · ${seenShort(F("valuation_date")) || "not looked at"}` : ""}</div>
+    ${lowMidHigh(F)}
     <div class="conf"><span><b>${fs.length}</b> facts</span><span><b>${n.page}</b> checked against the page</span><span><b>${n.image}</b> confirmed on the image</span><span${n.you ? ` class="warnt"` : ""}><b>${n.you}</b> need you</span></div></div>`;
 }
 // the key tables read from their images (visual.read_tables), loaded with the document

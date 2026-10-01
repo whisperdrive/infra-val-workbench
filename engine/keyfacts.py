@@ -48,8 +48,8 @@ conclusion: equity_value: the concluded equity value. low_text / high_text for t
             cash flows), pv_terminal_value (present value of the terminal value), franking_credits_value (the
             value of franking credits in the equity value), franking_credits_share (that value as a % of the
             equity value: not the utilisation rate)
-assumption: discount_rate (low_text / high_text for a range; basis e.g. cost of equity, or a post-tax nominal WACC),
-            terminal_growth_rate, franking_utilisation (the share of franking credits' face value counted in the
+assumption: discount_rate (basis e.g. cost of equity, or a post-tax nominal WACC), terminal_growth_rate,
+            franking_utilisation (the share of franking credits' face value counted in the
             valuation, whatever the report calls it: utilisation rate, gamma, theta, or "X% value ascribed to franking
             credits"; as printed, a % (80%) or a fraction (0.80))
 Nothing else: no other keys."""
@@ -58,9 +58,12 @@ KNOWN = {"target_name", "client", "valuation_date", "currency_units", "equity_va
          "franking_credits_share", "discount_rate", "terminal_growth_rate", "franking_utilisation"}
 CRITICAL = ("valuation_date", "equity_value", "discount_rate")  # the bridge can't start without them
 
-FIELDS = """- value_text: exactly as printed ("7.25%", "A$2,296.7m", "30 June 2025"); low_text / high_text for a range,
-  else "". value: the number in value_text (7.25 for 7.25%, 2296.7 for A$2,296.7m, 20250630 for a date as
-  YYYYMMDD) or null for text. unit: "%", "x", "date", "years", "text" or the currency units ("A$m").
+FIELDS = """- Low, mid and high, for every figure, the values and the assumptions alike: where the report gives a range
+  (a low and a high, or a figure for each end of its range), low_text and high_text are its ends and value_text its
+  mid or preferred figure if the report prints one, else ""; a single figure is value_text alone. Never compute a
+  mid the report doesn't print.
+- value_text: exactly as printed ("7.25%", "A$2,296.7m", "30 June 2025"). value: the number in value_text (7.25
+  for 7.25%, 2296.7 for A$2,296.7m, 20250630 for a date as YYYYMMDD) or null for text. unit: "%", "x", "date", "years", "text" or the currency units ("A$m").
 - basis: what the figure is on (e.g. "cost of equity", "post-tax nominal WACC", "preferred", "real"), else "".
 - page: the N of the nearest "<!-- page N -->" marker above the text you used.
 - quote: copied verbatim from the document, the shortest sentence or table row that states the value

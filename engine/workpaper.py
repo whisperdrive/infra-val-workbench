@@ -416,18 +416,34 @@ def _reconcile(S: _Sheet, res: dict):
                f"franking credits are found by their label.", f["muted"], 8)
 
 
+def _midpoint(lo: str, hi: str) -> str | None:
+    """The midpoint of a range's two ends, printed as the low end is (its prefix, unit and decimals)."""
+    a, b = (re.search(r"-?\d[\d,]*(?:\.\d+)?", t or "") for t in (lo, hi))
+    if not a or not b:
+        return None
+    d = max(len((m[0].split(".") + [""])[1]) for m in (a, b))
+    m = (float(a[0].replace(",", "")) + float(b[0].replace(",", ""))) / 2
+    return lo[:a.start()] + f"{m:,.{d}f}" + lo[a.end():]
+
+
 def _facts(S: _Sheet, g: dict):
     f = S.f
     S.title("The report's key facts", "As the workbench read them from last year's report: who decided each, and how "
                                       "it was checked on its page and on the page's image.", 9)
-    S.header("Fact", "Value", "Unit", "Basis", "Page", "Status", "Decided by", "On its page", "On its image")
+    S.header("Fact", "Low", "Mid", "High", "Unit", "Basis", "Page", "Status", "Decided by", "On its page", "On its image")
     for x in g.get("facts") or []:
-        v = x.get("final") or x
-        value = v.get("value_text") or " – ".join(t for t in (v.get("low_text"), v.get("high_text")) if t)
+        v = {**x, **(x.get("final") or {})}
+        lo, hi, mid = v.get("low_text") or "", v.get("high_text") or "", v.get("value_text") or ""
+        if lo and hi and not mid:  # the report gives the ends only: their midpoint, marked as such
+            mid = f"{_midpoint(lo, hi)} (midpoint)" if _midpoint(lo, hi) else ""
+        if not lo and not hi and not re.search(r"\bmid|prefer", v.get("basis") or "", re.I):
+            lo = hi = mid  # one figure: the same at every end (one the report gives at its mid stays the mid)
         seen = (x.get("visual") or {}).get("status") or ""
-        S.line(x.get("label") or x.get("key"), value, v.get("unit") or "", v.get("basis") or "", v.get("page") or x.get("page"),
-               x.get("status") or "", x.get("decided_by") or "", mark((x.get("check") or {}).get("ok")), seen.replace("_", " "),
-               fs=[f["bwrap"], f["wrap"], None, f["wrap"], None, None, None, _okf(f, (x.get("check") or {}).get("ok")), f["wrap"]])
+        S.line(x.get("label") or x.get("key"), lo, mid, hi, v.get("unit") or "", v.get("basis") or "",
+               v.get("page") or x.get("page"), x.get("status") or "", x.get("decided_by") or "",
+               mark((x.get("check") or {}).get("ok")), seen.replace("_", " "),
+               fs=[f["bwrap"], f["wrap"], f["wrap"], f["wrap"], None, f["wrap"], None, None, None,
+                   _okf(f, (x.get("check") or {}).get("ok")), f["wrap"]])
     S.ws.freeze_panes(3, 1)
 
 
@@ -528,7 +544,7 @@ def build(eid: int) -> bytes | None:
     _flows(_Sheet(book, fmt, "Cash flows", [16, 18, 18, 14]), book, res)
     _inputs(_Sheet(book, fmt, "Inputs", [26, 12, 8, 18, 34, 12, 26, 30, 70]), res)
     _reconcile(_Sheet(book, fmt, "Reconciliation", [40, 30, 14, 14, 14, 14, 20, 10]), res)
-    _facts(_Sheet(book, fmt, "Key facts", [30, 30, 10, 26, 7, 12, 14, 10, 18]), g)
+    _facts(_Sheet(book, fmt, "Key facts", [30, 16, 18, 16, 8, 26, 6, 11, 12, 9, 16]), g)
     _files(_Sheet(book, fmt, "Files and roles", [26, 44, 16, 30, 18, 10, 60]), g)
     _review(_Sheet(book, fmt, "Review", [4, 10, 40, 80, 16, 14]), review)
     _log(_Sheet(book, fmt, "Run log", [22, 18, 12, 100, 16]), eid)
