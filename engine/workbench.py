@@ -1531,7 +1531,81 @@ def _row_ref(text: str) -> tuple[str, int]:
     return m[1], int(m[2])
 
 
-def row_found(sess, s: str, r: int) -> dict:
+def _num(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def row_context(sess, s: str, r: int, origins=()) -> dict:
+    """What one of last year's rows is, for finding it this year: the heading it sits under and the rows beside it,
+    what its formula adds up or reads (a "Total" says what it totals), last year's figures for its first periods,
+    which overlay rows read it and whether it feeds the discounted cash flows under the value (origins: those rows),
+    and this year's candidates with their own figures for the same periods."""
+    import dcf
+    from xlruntime import to_date
+    prior = sess.prior or sess.ov
+    labels, vals, tl = prior.labels(), prior.sheet(s), prior.timeline(s)
+    cols = sorted(tl, key=tl.get)
+    figures = lambda rr: [vals.get((rr, c)) for c in cols] if cols else [v for (r2, _c), v in vals.items() if r2 == rr]
+    # the timeline's own rows (period dates, financial-year labels) are neither headings nor line items
+    dated = lambda rr: cols and sum(1 for c in cols if _num(vals.get((rr, c))) and round(vals[(rr, c)]) == round(tl[c])) > len(cols) // 2
+    has_figures = lambda rr: any(_num(v) for v in figures(rr)) and not dated(rr)
+    empty = lambda rr: not any(v not in (None, "") for v in figures(rr))
+    words = lambda rr: labels.get((s, rr)) or next((v for (r2, c), v in sorted(vals.items()) if r2 == rr and c not in tl
+                                                    and isinstance(v, str) and v.strip()), None)
+    heading = next((words(rr) for rr in range(r - 1, max(0, r - 80), -1)
+                    if words(rr) and empty(rr)), None)  # a label (or a title) with nothing across the periods
+    near = lambda rng: next(({"row": f"{s}!r{rr}", "label": labels[(s, rr)]} for rr in rng
+                             if labels.get((s, rr)) and has_figures(rr)), None)
+    out = {"heading": heading, "above": near(range(r - 1, max(0, r - 12), -1)), "below": near(range(r + 1, r + 12))}
+    # its formula, where it has one: what it adds up, or what it reads
+    got = next(((c, f) for c in (cols or sorted({c for (r2, c) in vals if r2 == r}))
+                for (f,) in [prior.db.execute("SELECT formula FROM cells WHERE sheet=? AND row=? AND col=?", (s, r, c))
+                             .fetchone() or (None,)] if f), None)
+    if got:
+        c0, f = got
+        refs = [dcf._ref(m[0], s) for m in dcf._FREF.finditer(re.sub(r'"[^"]*"', "", f))]
+        refs = [x for x in refs if x and not x[0].startswith("[")]
+        rows = []
+        for sh, r1, _c1, r2, _c2 in refs:
+            for rr in range(r1, min(r2, r1 + 60) + 1):
+                if (sh, rr) != (s, r) and (sh, rr) not in [(x["sheet"], x["r"]) for x in rows]:
+                    rows.append({"sheet": sh, "r": rr, "row": f"{sh}!r{rr}", "label": prior.labels().get((sh, rr), "")})
+        total = bool(re.fullmatch(r"=?\s*SUM\(\s*\$?[A-Z]{1,3}\$?\d+\s*:\s*\$?[A-Z]{1,3}\$?\d+\s*\)\s*", f, re.I))
+        out["formula"] = {"text": f if f.startswith("=") else "=" + f, "cell": f"{s}!{dcf._addr(c0, r)}",
+                          "adds_up": total, "reads": [{k: x[k] for k in ("row", "label")} for x in rows if x["label"]][:12],
+                          "n": len([x for x in rows if x["label"]])}
+    # last year's figures for its first periods with one
+    out["values"] = [{"period": to_date(tl[c]).isoformat(), "value": vals.get((r, c))} for c in cols
+                     if _num(vals.get((r, c)))][:5]
+    # the overlay rows that read it
+    sheets = list(sess.sheets or [])
+    rx = re.compile(rf"(?:\[\d+\])?'?{re.escape(s)}'?!\$?[A-Z]{{1,3}}\$?{r}(?!\d)")
+    readers = {}
+    if sheets:
+        for sh, rr, f in sess.ov.db.execute(
+                f"SELECT sheet, row, formula FROM cells WHERE formula LIKE ? AND sheet IN ({','.join('?' * len(sheets))})",
+                (f"%{s}%", *sheets)):
+            if rx.search(f or "") and (sh, rr) != (s, r):
+                readers[(sh, rr)] = readers.get((sh, rr), 0) + 1
+    ov_labels = sess.ov.labels()
+    out["read_by"] = [{"row": f"{sh}!r{rr}", "label": ov_labels.get((sh, rr), ""), "cells": n}
+                      for (sh, rr), n in sorted(readers.items(), key=lambda kv: -kv[1])[:5]]
+    out["feeds_dcf"] = f"{s}!r{r}" in set(origins or [])
+    return out
+
+
+def _this_year_figures(sess, row: str, periods: list[str]) -> list:
+    """This year's figures of a row of this year's model (Sheet!rN) at these period ends (ISO), None where it has none."""
+    from xlruntime import serial
+    from datetime import date as _d
+    s2, r2 = _row_ref(row)
+    tl = sess.current.timeline(s2)
+    by = {round(v): c for c, v in tl.items()}
+    return [sess.current.value(s2, r2, by[round(serial(_d.fromisoformat(p)))]) if round(serial(_d.fromisoformat(p))) in by
+            else None for p in periods]
+
+
+def row_found(sess, s: str, r: int, origins=()) -> dict:
     """What this year's model has for one of last year's rows: the row found, how, the evidence, the
     alternatives, and a few periods of both years' values side by side."""
     ex = sess.rowmap.explain(s, r)
@@ -1549,6 +1623,12 @@ def row_found(sess, s: str, r: int) -> dict:
         from xlruntime import to_date
         out["side_by_side"] = [{"period": to_date(w).isoformat(), "last_year": prior.value(s, r, inv_p[w]),
                                 "this_year": sess.current.value(s2, r2, inv_c[w])} for w in both]
+    out["context"] = row_context(sess, s, r, origins)
+    periods = [x["period"] for x in out["context"]["values"]]
+    out["candidates"] = [{"row": x["row"], "label": x["label"], "why": x.get("why") or "; ".join(x.get("evidence") or []),
+                          "figures": _this_year_figures(sess, x["row"], periods)}
+                         for x in ([{"row": out["found"], "label": out.get("found_label"), "why": "what the finder found"}]
+                                   if out["found"] else []) + list(out["alternatives"] or [])][:4]
     return out
 
 
@@ -1580,7 +1660,9 @@ def row_info(eid: int, prior_row: str) -> dict:
     sess, _ = overlay_session(eid)
     if not sess.rowmap:
         raise ValueError("assign this year's client model (Roles) and rebuild in Python first")
-    return ovmod.deep(row_found, sess, *_row_ref(prior_row))
+    got = _q("SELECT json_extract(result_json, '$.figures.gaps.dcf_origins') AS o FROM engagements WHERE id=?", eid)
+    origins = json.loads((got[0]["o"] if got else None) or "[]")  # the rows the discounted cash flows come from
+    return ovmod.deep(row_found, sess, *_row_ref(prior_row), origins)
 
 
 def _rowagent_file(eid: int) -> Path:

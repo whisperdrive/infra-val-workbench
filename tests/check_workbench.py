@@ -462,6 +462,22 @@ def overview_check(eid: int) -> None:
     print("overview: ok (a finished engagement with its values and what's for a person; an empty one as empty)")
 
 
+def rows_context_check(eid: int) -> None:
+    """A row to find comes with what it is: the heading it sits under and its neighbours, what its formula works out
+    from, last year's figures, which overlay row reads it and whether that's a cash flow the value discounts; and
+    this year's candidates with their figures for the same periods."""
+    info = wb.row_info(eid, "CashFlow!r9")
+    c = info["context"]
+    assert c["heading"] == "Cash flow" and c["above"]["label"] == "Tax paid", c
+    assert [x["label"] for x in c["formula"]["reads"]] == ["EBITDA", "Capital expenditure", "Tax paid"], c["formula"]
+    assert len(c["values"]) == 5 and c["values"][0]["period"] == "2026-06-30", c["values"]
+    assert c["read_by"] and c["read_by"][0]["row"] == "DCF!r5" and c["read_by"][0]["cells"] == 20 and c["feeds_dcf"], c
+    k = info["candidates"][0]
+    assert k["row"] == "CashFlow!r9" and k["figures"][0] is None and isinstance(k["figures"][1], float), k
+    print("rows: ok (a row to find says what it is: its heading and neighbours, what it's worked out from, last "
+          "year's figures, the overlay row that reads it; this year's candidates with their figures)")
+
+
 def held_check(eid: int) -> None:
     """The inputs typed in the overlay outside its discountings (net debt, a declared distribution) are listed as held
     at last year's, each with a suggestion from this year's client model found through the row that holds last year's
@@ -907,6 +923,7 @@ def main() -> None:
     gate_check()
     review_check(eid)
     held_check(eid)
+    rows_context_check(eid)
     gating_check(eid)
     roles_check()
     escalate_check()

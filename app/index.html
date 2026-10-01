@@ -1584,13 +1584,54 @@ function bindHeld() {
 }
 function rowsCard(R) {
   const g = R.figures?.gaps; if (!g) return "";
-  const rows = [...g.dcf_missing.map(x => ({...x, kind: "not found"})), ...g.blank_rows.map(x => ({...x, kind: "found but blank"})),
-    ...g.weak_rows.map(x => ({...x, kind: "found, not sure"})), ...g.timing_open.map(x => ({...x, kind: "timing row"}))];
+  const rows = [...g.dcf_missing.map(x => ({...x, kind: "not found this year"})), ...g.blank_rows.map(x => ({...x, kind: "found, but blank this year"})),
+    ...g.weak_rows.map(x => ({...x, kind: x.found ? "found, not sure" : "not found this year"})), ...g.timing_open.map(x => ({...x, kind: "a timing row to find"}))];
   if (!rows.length) return "";
-  return `<div class="card" id="rowsCard"><h2>Rows to find in this year's model</h2><p class="sub">The value's cash flows come from these rows of last year's client model. The row agents couldn't settle them, so this year's value waits: pick this year's row, or keep last year's values for it on purpose. Last year's values are never used silently.</p>
-    <div class="scroll"><table><thead><tr><th>Last year's row</th><th>Why</th><th>This year's</th><th></th></tr></thead><tbody>${rows.map(x => `<tr id="row-${esc(x.row).replace(/[^A-Za-z0-9]/g, "_")}"><td><span class="mono">${esc(x.row)}</span><div class="small">${esc(x.label || "")}</div></td>
-      <td class="small">${esc(x.kind)}${x.why ? `: ${esc(x.why)}` : ""}${x.confidence != null ? ` (confidence ${esc(x.confidence)})` : ""}</td><td class="mono small">${esc(x.found || "–")}</td>
-      <td class="nowrap"><button class="btn small" data-rowinfo="${esc(x.row)}">Pick…</button></td></tr><tr hidden data-rowbox="${esc(x.row)}"><td colspan="4"></td></tr>`).join("")}</tbody></table></div></div>`;
+  return `<div class="card" id="rowsCard"><h2>Rows to find in this year's model</h2><p class="sub">This year's value reads these rows of last year's client model, and the row finder couldn't settle where each is this year, so the value waits. For each: what it is last year (where it sits, what it adds up, its figures, what reads it), and the rows of this year's model that might be it, with their figures for the same periods. Use one, type another, or keep last year's values on purpose; last year's values are never used silently.</p>
+    <div class="stack" style="gap:12px">${rows.map(rowBlock).join("")}</div></div>`;
+}
+// What one of last year's rows is, and what this year's model might have for it (workbench.row_info), loaded once
+const ROWCTX = {};
+const rowKey = row => `${E.id}|${row}`;
+function rowBlock(x) {
+  const info = ROWCTX[rowKey(x.row)];
+  return `<div class="rowfind" id="row-${esc(x.row).replace(/[^A-Za-z0-9]/g, "_")}" style="border:1px solid var(--rule);border-radius:6px;padding:10px 12px">
+    <div class="row" style="justify-content:space-between;align-items:flex-start;gap:8px">
+      <div><b>${esc(x.label || "(no label)")}</b> <span class="mono small muted">${esc(x.row)}</span> <span class="pill warn">${esc(x.kind)}</span>${x.why && x.why !== x.kind ? `<div class="small muted">${esc(x.why)}</div>` : ""}</div>
+      <button class="btn small" type="button" data-rowinfo="${esc(x.row)}">Pick another…</button></div>
+    <div class="grid2 small" style="margin-top:8px" data-rowctx="${esc(x.row)}">${info ? rowContext(x.row, info) : `<p class="muted" style="margin:0">Looking at what it is…</p>`}</div>
+    <div hidden data-rowbox="${esc(x.row)}" style="margin-top:8px"><div></div></div></div>`;
+}
+const figs = vs => vs.map(v => v == null || v === "" ? "–" : typeof v === "number" ? fmt(v, 1) : esc(v)).join(" · ");
+function rowContext(row, info) {
+  const c = info.context || {}, f = c.formula, periods = (c.values || []).map(v => v.period);
+  const where = [c.heading ? `under “${esc(c.heading)}”` : "", c.above ? `after “${esc(c.above.label)}”` : "", c.below ? `before “${esc(c.below.label)}”` : ""].filter(Boolean).join(", ");
+  const what = !f ? `<div>Typed in: no formula.</div>` : f.adds_up && f.reads.length
+    ? `<div>The total of ${f.n} row${f.n > 1 ? "s" : ""}: ${f.reads.slice(0, 8).map(r => `“${esc(r.label)}”`).join(", ")}${f.n > 8 ? ", …" : ""} <span class="mono muted">${esc(f.text)}</span></div>`
+    : `<div>Worked out from ${f.reads.length ? f.reads.slice(0, 6).map(r => `“${esc(r.label)}” <span class="mono muted">${esc(r.row)}</span>`).join(", ") : "figures typed into its formula"} <span class="mono muted">${esc(f.text)}</span></div>`;
+  const used = c.read_by?.length ? `<div>Read by the overlay: ${c.read_by.map(r => `“${esc(r.label || r.row)}” <span class="mono muted">${esc(r.row)}</span> (${r.cells} cell${r.cells > 1 ? "s" : ""})`).join(", ")}${c.feeds_dcf ? `: <b>a cash flow the value discounts</b>` : ": not a discounted cash flow (a flag, a date or an input the overlay uses)"}</div>` : `<div class="muted">No overlay formula names it directly (it may be read through a range or a name).</div>`;
+  const cands = (info.candidates || []).map(k => `<li style="margin:0 0 6px"><b>${esc(k.label || "(no label)")}</b> <span class="mono muted">${esc(k.row)}</span> <button class="btn small" type="button" data-rowuse-quick="${esc(row)}" data-to="${esc(k.row)}">Use</button>
+      <div>${figs(k.figures || [])}</div>${k.why ? `<div class="muted">${esc(k.why)}</div>` : ""}</li>`).join("");
+  return `<div><div class="k" style="font-weight:600;margin-bottom:2px">Last year</div>${where ? `<div>${where[0].toUpperCase() + where.slice(1)}</div>` : ""}${what}
+      ${periods.length ? `<div>${(c.values || []).map(v => `${esc(v.period)}: ${fmt(v.value, 1)}`).join(" · ")}</div>` : ""}${used}</div>
+    <div><div class="k" style="font-weight:600;margin-bottom:2px">In this year's model${periods.length ? ", at the same periods" : ""}</div>${cands ? `<ul style="margin:0;padding-left:16px">${cands}</ul>` : `<p class="muted" style="margin:0">No row like it found: pick one by its address.</p>`}</div>`;
+}
+async function loadRowContexts() {
+  for (const el of document.querySelectorAll("[data-rowctx]")) {
+    const row = el.dataset.rowctx, k = rowKey(row);
+    if (!ROWCTX[k]) {
+      try { ROWCTX[k] = await api(`/api/engagements/${E.id}/overlay/row?row=${encodeURIComponent(row)}`); }
+      catch (e) { el.innerHTML = `<p class="muted" style="margin:0">${esc(e.message)}</p>`; continue; }
+    }
+    const now = document.querySelector(`[data-rowctx="${CSS.escape(row)}"]`);
+    if (now) { now.innerHTML = rowContext(row, ROWCTX[k]); bindRowQuick(now); }
+  }
+}
+function bindRowQuick(root) {
+  root.querySelectorAll("[data-rowuse-quick]").forEach(b => b.onclick = () => act(async () => {
+    await api(`/api/engagements/${E.id}/overlay/rowpick`, {method: "POST", body: {prior: b.dataset.rowuseQuick, current: b.dataset.to}});
+    Object.keys(ROWCTX).forEach(k => delete ROWCTX[k]);
+    toast(`${b.dataset.rowuseQuick} is ${b.dataset.to} this year: the bridge runs again`); }));
 }
 async function rowPicker(row) {
   const box = document.querySelector(`[data-rowbox="${CSS.escape(row)}"]`); if (!box) return;
@@ -1610,6 +1651,8 @@ function bindResult() {
   bindHeld();
   document.querySelectorAll("[data-end]").forEach(b => b.onclick = () => { state.bridgeEnd = b.dataset.end; render(); });
   document.querySelectorAll("[data-rowinfo]").forEach(b => b.onclick = () => rowPicker(b.dataset.rowinfo));
+  document.querySelectorAll("[data-rowctx]").forEach(bindRowQuick);
+  loadRowContexts();
   const R = E.result; if (!R?.bridges) return;
   const B = R.bridges, u = B.units || R.head?.units || "", end = state.bridgeEnd;
   const tied = !!(R.tie?.low?.rebuilt_ok && R.tie?.high?.rebuilt_ok), hl = state.hl || {};

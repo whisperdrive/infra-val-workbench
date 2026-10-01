@@ -71,7 +71,10 @@ takes it from there:
    report discloses of the value (the terminal value, the PV of the forecast and of the terminal value,
    the value of franking credits and its share) is reconciled to the same split of the overlay's discountings.
 6. **Rolls forward onto this year's client model.** Rows are found by label, history and numbers, with row agents for
-   the ones in doubt. The valuation date moves wherever the discountings read it: each discounting's date is
+   the ones in doubt. A row still in doubt comes to you with what it is: the heading it sits under and its neighbours,
+   what its formula adds up or works out from, last year's figures, which overlay row reads it and whether that's a
+   cash flow the value discounts; and the rows of this year's model that might be it, each with its figures for the
+   same periods and a button to use it. The valuation date moves wherever the discountings read it: each discounting's date is
    followed back to the cell it's typed in, and every one of those moves (a copy on a DCF sheet moves with its input;
    a DCF sheet with a date of its own has it moved too). This year's value is shown only where it can be trusted, and
    is held back otherwise, with a need that says why:
