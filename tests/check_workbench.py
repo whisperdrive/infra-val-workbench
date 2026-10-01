@@ -128,7 +128,9 @@ def fake_facts(doc: str) -> list[dict]:
               "15.5%", unit="%"),
             f("conclusion", "terminal_value", "Terminal value", "the terminal value is A$4,968.9m", "A$4,968.9m"),
             f("conclusion", "pv_forecast", "PV of the forecast", "A$1,819.3m", "A$1,819.3m"),
-            f("conclusion", "pv_terminal_value", "PV of the terminal value", "A$1,173.7m", "A$1,173.7m")]
+            f("conclusion", "pv_terminal_value", "PV of the terminal value", "A$1,173.7m", "A$1,173.7m"),
+            f("assumption", "terminal_value_method", "Terminal value method", "using the Gordon growth method",
+              "the Gordon growth method", unit="text")]
 
 
 def fake_create(client, model, input, text=None, max_output_tokens=None, purpose=None, **kw):
@@ -250,6 +252,9 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     assert res["tie"]["low"]["ok"] and res["tie"]["high"]["ok"] and res["tie"]["low"]["rebuilt_ok"], res["tie"]
     held = {h["cell"]: h["suggestion"]["status"] for h in res.get("held") or []}  # either layout: found, and checked
     assert held == {"Val_Inputs!C7": "checked", "Val_Inputs!C8": "checked"}, held
+    assert res["terminal"]["kind"] == "growth_final_year" and res["terminal"]["from"] == "the fact", res["terminal"]
+    assert e["terminal"]["kind"] == "growth_final_year" and e["terminal"]["passages"], e["terminal"]
+    assert not res["inputs"]["growth"].get("na") and res["inputs"]["growth"]["ok"], res["inputs"]["growth"]
     v = res["values"]
     assert abs(v["rebuilt"]["mid"] - 2507.876) < 0.01 and v["this_year"]["mid"] > v["rebuilt"]["mid"], v
     steps = res["bridges"]["mid"]["steps"]
@@ -755,6 +760,29 @@ def facts_check() -> None:
     assert visual._same(util("80%", ""), {"value": "0.80"}) and not visual._same(util("80%", ""), {"value": "0.60"})
     assert sourced._stated([{"key": "franking_utilisation", "value_text": "0.80"}], "franking_utilisation") == [(80.0, "0.80")]
     assert sourced._tie(80.0, (80.0, "0.80")) and sourced._tie(80.0, (80.0, "80%")) and not sourced._tie(60.0, (80.0, "0.8"))
+    # the terminal value: how the report works it out, classified in code; what it says, found by searching it
+    for text, kind in (("The valuation does not include a terminal value as the concession ends in 2045.", "none"),
+                       ("A terminal value is calculated by applying an EV/EBITDA multiple of 12.0x to FY45 EBITDA.", "exit_ebitda"),
+                       ("We applied a multiple of 12.0x FY45 EBITDA.", "exit_ebitda"),
+                       ("The terminal value reflects an exit multiple of 1.35x the RAB at the end of the forecast.", "exit_rab"),
+                       ("We applied an exit multiple of 14.0x.", "exit_other"),
+                       ("The terminal cash flow is the average of the FY41 to FY45 cash flows, grown at CPI.", "growth_average"),
+                       ("The terminal value applies the Gordon growth model to the final year's normalised cash flow.",
+                        "growth_adjusted"),
+                       ("A terminal value is calculated using the Gordon growth method.", "growth_final_year"),
+                       ("Cash flows are discounted at the cost of equity.", "unknown")):
+        got = K.terminal_method([{"key": "terminal_value_method", "value_text": text, "quote": text, "page": 4}])
+        assert got["kind"] == kind, (text, got)
+    md = ("<!-- page 3 -->\nThe equity value is A$2,507.9m.\n\n<!-- page 4 -->\nA terminal value is calculated using "
+          "an exit multiple of 1.35x the RAB. Cash flows are discounted at the cost of equity.\n")
+    found = context.terminal(md)
+    assert found == [{"page": 4, "text": "A terminal value is calculated using an exit multiple of 1.35x the RAB."}], found
+    tv = K.terminal_method([], found)  # no fact for it: the report's own words decide
+    assert tv["kind"] == "exit_rab" and tv["from"] == "the report's text" and tv["page"] == 4, tv
+    assert "not applicable" in sourced.growth_applies(tv) and sourced.growth_applies({"kind": "growth_final_year"}) is None
+    f = fact(key="terminal_value_method", label="Terminal value method", category="assumption", unit="text",
+             value_text="the average of the FY41 to FY45 cash flows", quote="the average of the FY41 to FY45 cash flows")
+    assert not failed(f, "We take the average of the FY41 to FY45 cash flows.") and K.settle_value(dict(f))["value"] is None
     # a date's day isn't a figure; a quote doesn't start inside a number; a name is checked as text
     q = "As at 30 June 2025 the business was valued at A$28m."
     assert failed(fact(value_text="A$30m", quote=q), q)

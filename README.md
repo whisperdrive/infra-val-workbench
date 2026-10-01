@@ -16,12 +16,19 @@ takes it from there:
      and the two reads are compared cell by cell (a figure shifted into the next column, or swapped headings, is a
      difference);
    - a read that doesn't check out goes round the table loop (fix, check against the image, an arbiter).
-3. **Extracts the report's key facts.** Only what the rebuild needs:
+3. **Extracts the report's key facts.** Only what the rebuild needs, each figure low, mid and high where the report
+   gives a range (the mid as printed; on the page, the midpoint of the ends where it prints none, marked as such):
    - who and when;
-   - the equity value (low, high and the midpoint);
-   - the discount rate, terminal growth and franking credit utilisation;
+   - the equity value;
+   - the discount rate, terminal growth and franking credit utilisation (however the report puts it: a utilisation
+     rate, gamma, "80% value ascribed to franking credits", 80% or 0.80);
    - where disclosed, the terminal value, the present values of the forecast and of the terminal value, and the value
-     of franking credits.
+     of franking credits;
+   - how the terminal value is worked out, in the report's words, and any exit multiple. The report is searched for
+     everything it says about its terminal value, and that goes to the models with the document; code then classes the
+     method (none; an EV/EBITDA, EV/RAB or other exit multiple; growth on an average of the cash flows, on an adjusted
+     or normalised cash flow, or on the final year's). Where there's no terminal value or it's an exit multiple, there's
+     no growth rate to source, and the inputs card says so rather than "not found".
 
    One model extracts, code checks each fact against its page, a second model reviews, and they loop on what's open.
    The code check is the backstop behind the models: the quote must be on the cited page (not starting or ending

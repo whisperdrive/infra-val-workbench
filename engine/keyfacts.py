@@ -52,10 +52,17 @@ assumption: discount_rate (basis e.g. cost of equity, or a post-tax nominal WACC
             franking_utilisation (the share of franking credits' face value counted in the
             valuation, whatever the report calls it: utilisation rate, gamma, theta, or "X% value ascribed to franking
             credits"; as printed, a % (80%) or a fraction (0.80))
+terminal:   terminal_value_method: how the report works out the terminal value, in its own words copied verbatim as
+            value_text (unit "text"): a growth (Gordon, perpetuity) model on the final forecast year's cash flow, on a
+            normalised or adjusted cash flow, or on an average over a period; an exit multiple (EV/EBITDA, EV/RAB); or
+            that there is none (a concession that ends, say). basis: the period averaged, or the adjustments made, as
+            the report says. terminal_multiple: an exit multiple's figure (low / mid / high, unit "x"; basis: what
+            it's a multiple of, e.g. EV/EBITDA, EV/RAB)
 Nothing else: no other keys."""
 KNOWN = {"target_name", "client", "valuation_date", "currency_units", "equity_value", "equity_value_cum",
          "equity_value_ex", "terminal_value", "pv_forecast", "pv_terminal_value", "franking_credits_value",
-         "franking_credits_share", "discount_rate", "terminal_growth_rate", "franking_utilisation"}
+         "franking_credits_share", "discount_rate", "terminal_growth_rate", "franking_utilisation",
+         "terminal_value_method", "terminal_multiple"}
 CRITICAL = ("valuation_date", "equity_value", "discount_rate")  # the bridge can't start without them
 
 FIELDS = """- Low, mid and high, for every figure, the values and the assumptions alike: where the report gives a range
@@ -82,7 +89,7 @@ Rules:
 Rules learned from earlier reviews (apply where relevant):
 {rules}
 
-Document:
+{terminal}Document:
 {doc}"""
 
 REVIEW_PROMPT = """You are the reviewer. Another model extracted the facts below from last year's valuation report
@@ -104,7 +111,7 @@ the table's headings to its quote.
 Rules learned from earlier reviews (apply where relevant):
 {rules}
 
-Facts:
+{terminal}Facts:
 {facts}
 
 Document:
@@ -304,7 +311,8 @@ def settle_value(f: dict) -> dict:
     bare = {x.lstrip("-") for x in nums}  # "1.25%–1.75%" reads as 1.25% and -1.75%: the dash isn't a sign
     range_only = bool(lo and hi) and (not nums or (lo[0].lstrip("-") in bare and hi[0].lstrip("-") in bare)) or \
         (not lo and not hi and bool(_range_of(f.get("value_text"))))
-    f["value"] = None if f.get("category") == "identity" or not nums or range_only else float(nums[0].rstrip("%"))
+    f["value"] = None if f.get("category") == "identity" or f.get("unit") == "text" or not nums or range_only \
+        else float(nums[0].rstrip("%"))
     return f
 
 
@@ -355,6 +363,7 @@ TERMS = {"equity_value": r"equity|net assets|\bshares?\b|unitholder|securit",
          "terminal_value": r"terminal|exit|perpetu",
          "pv_forecast": r"present value|\bpv\b|discrete|forecast|explicit",
          "pv_terminal_value": r"present value|\bpv\b|terminal"}
+TERMS["terminal_multiple"] = r"multiple|ev\s*/\s*(?:ebitda|rab)|exit|times"
 TERMS.update(equity_value_ex=TERMS["equity_value"], equity_value_cum=TERMS["equity_value"],
              franking_credits_share=TERMS["franking_credits_value"])
 OTHER_TERMS = r"enterprise value|net debt|\bdebt\b|ebitda|revenue|capex|capital expenditure|tax rate"
@@ -467,7 +476,7 @@ def check(f: dict, pg: dict[int, str]) -> dict:
         v = (f.get(k) or "").strip()
         if not v or (k == "value_text" and is_date(f) and date_of(v)):  # a date: checked whole, below
             continue
-        nums = [] if f.get("category") == "identity" else numbers(_unrange(v))  # a name holding digits is a name
+        nums = [] if f.get("category") == "identity" or f.get("unit") == "text" else numbers(_unrange(v))  # text is text
         if nums:
             said = numbers(_unrange(undated))
             other_form = lambda n: pct_like(f) and any(  # 80% printed as 0.80 (gamma), or 0.80 as 80%
@@ -574,16 +583,27 @@ def _call(model: str, prompt: str, schema: dict, purpose: str, on_usage) -> dict
     raise AssertionError("unreachable")
 
 
+def terminal_passages(markdown: str) -> str:
+    """What the report says about its terminal value (context.terminal), as a prompt section, or ""."""
+    import context
+    found = context.terminal(markdown)
+    return ("What the report says about the terminal value (found by searching it; read it for terminal_value_method "
+            "and terminal_multiple, and quote from the document):\n" + "\n".join(f"- page {x['page']}: {x['text']}"
+                                                                                for x in found) + "\n\n") if found else ""
+
+
 def extract(markdown: str, model: str, on_usage=None) -> dict:
     return _call(model, EXTRACT_PROMPT.format(keys=KEYS, fields=FIELDS, rules=lessons.rules_text("facts"),
-                                              doc=select(markdown)), EXTRACT_SCHEMA, "facts", on_usage)
+                                              terminal=terminal_passages(markdown), doc=select(markdown)),
+                 EXTRACT_SCHEMA, "facts", on_usage)
 
 
 def review(markdown: str, facts: list[dict], model: str, on_usage=None) -> dict:
     brief = [{"id": f["id"], **{k: f.get(k) for k in _FACT}, "automatic_checks": [i["text"] for i in f["check"]["items"]]}
              for f in facts]
     return _call(model, REVIEW_PROMPT.format(facts=json.dumps(brief, indent=1), rules=lessons.rules_text("facts"), keys=KEYS,
-                                             doc=select(markdown)), REVIEW_SCHEMA, "facts-review", on_usage)
+                                             terminal=terminal_passages(markdown), doc=select(markdown)),
+                 REVIEW_SCHEMA, "facts-review", on_usage)
 
 
 # ---- the review and remediation loop --------------------------------------------------------------------------
@@ -863,6 +883,47 @@ def run(markdown: str, model: str = "gpt-6-luna", reviewer_model: str = "gpt-6-s
 _EX = re.compile(r"\bex[- ]?(?:distribution|dividend|div)\b", re.I)
 _CUM = re.compile(r"\bcum[- ]?(?:distribution|dividend|div)\b", re.I)
 OVERWHELMING = 3  # cum-distribution mentions per ex-distribution mention that make the report "overwhelmingly" cum
+
+
+# How the report works out its terminal value, in order: the first that matches decides ("Gordon growth on the final
+# year's normalised cash flow" is an adjusted cash flow, not the final year's as it stands).
+TV_KINDS = (("none", "No terminal value", r"no terminal value|without (?:a |any )?terminal value|(?:not|nor) (?:include|includ"
+             r"ed|apply|applied|adopt|adopted|calculate|calculated) (?:a |any )?terminal value|terminal value (?:is|was|of) nil"),
+            ("exit_ebitda", "An exit multiple of EBITDA (EV/EBITDA)", r"ev\s*/\s*ebitda|\bebitda\b[^.]*\bmultiple|"
+             r"\bmultiple\b[^.]*\bebitda\b|\d\s*x\s+(?:\w+\s+){0,2}ebitda|times (?:the )?(?:\w+ )?ebitda"),
+            ("exit_rab", "An exit multiple of the RAB (EV/RAB)", r"ev\s*/\s*rab|\brab\b[^.]*\bmultiple|\bmultiple\b[^.]*"
+             r"\b(?:rab|regulat\w* asset base)\b|\d\s*x\s+(?:the\s+)?(?:rab|regulat\w* asset base)|premium to (?:the )?rab|"
+             r"times (?:the )?rab"),
+            ("exit_other", "An exit multiple", r"exit multiple|exit value|\bmultiple\b"),
+            ("growth_average", "Growth on an average of the forecast's cash flows", r"\baverag\w*|\bmean\b"),
+            ("growth_adjusted", "Growth on an adjusted (normalised) cash flow", r"normali[sz]|adjust|maintainable|"
+             r"sustainable|steady[- ]state"),
+            ("growth_final_year", "Growth on the final forecast year's cash flow (Gordon growth)", r"gordon|perpetuit|"
+             r"perpetual|growth (?:model|method|formula)|final (?:forecast )?year|last (?:forecast )?year|terminal year"))
+
+
+def terminal_method(facts: list[dict], passages: list[dict] | None = None) -> dict:
+    """How the report works out its terminal value, from the terminal_value_method fact (its words and its quote),
+    else what the report says about it (context.terminal): {"kind" (TV_KINDS, or "unknown"), "label", "phrase" (the
+    words that decided it), "page", "from" ("the fact" / "the report's text" / None), "multiple" (the
+    terminal_multiple fact's texts, if any), "passages"}."""
+    f = next((x for x in facts if x.get("key") == "terminal_value_method" and x.get("status") != "rejected"), None)
+    v = {**(f or {}), **((f or {}).get("final") or {})}
+    m = next((x for x in facts if x.get("key") == "terminal_multiple" and x.get("status") != "rejected"), None)
+    mv = {**(m or {}), **((m or {}).get("final") or {})}
+    out = {"kind": "unknown", "label": "Not stated", "phrase": None, "page": None, "from": None, "passages": passages or [],
+           "multiple": {k: mv.get(k) for k in ("value_text", "low_text", "high_text", "basis", "page")} if m else None}
+    # the fact's own words first (its quote, its value, its basis), then each thing the report says; the phrase shown
+    # is the whole sentence that decided it
+    sources = ([("the fact", t, v.get("page")) for t in (v.get("quote"), v.get("value_text"), v.get("basis")) if t]
+               if f else []) + [("the report's text", x["text"], x["page"]) for x in passages or []]
+    for kind, label, rx in TV_KINDS:
+        for frm, text, page in sources:
+            if re.search(rx, text or "", re.I):
+                said = v.get("quote") if frm == "the fact" and v.get("quote") else text
+                return {**out, "kind": kind, "label": label, "phrase": said if len(said) <= 300 else said[:300].rsplit(" ", 1)[0] + " …",
+                        "page": page, "from": frm}
+    return out
 
 
 def _basis(f: dict) -> str | None:

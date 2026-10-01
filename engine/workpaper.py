@@ -196,9 +196,16 @@ def _summary(S: _Sheet, g: dict, res: dict, review: dict):
             X = I.get(key) or {}
             ends = X.get("ends") or {}
             S.line(name, (ends.get("low") or {}).get("value"), "", (ends.get("high") or {}).get("value"),
-                   "couldn't check" if X.get("error") else "✓ checked" if X.get("ok") is True else "to look at",
+                   "not applicable" if X.get("na") else "couldn't check" if X.get("error") else "✓ checked"
+                   if X.get("ok") is True else "to look at",
                    fs=[f["wrap"], f["pct"], None, f["pct"], _okf(f, None if X.get("error") else X.get("ok") is True or False)])
         S.text("The low is at the higher discount rate. Each input's cell and every check on it: the Inputs sheet.", f["muted"], 5)
+        S.gap()
+    T = res.get("terminal") or {}
+    if T:
+        S.head("The terminal value")
+        S.text(T.get("label") + (f": “{T['phrase']}” (p. {T.get('page')})" if T.get("phrase") else ""), f["wrap"], 5,
+               height=30 if T.get("phrase") else None)
         S.gap()
     H = res.get("held") or []
     if H:
@@ -324,12 +331,13 @@ def _inputs(S: _Sheet, res: dict):
         X = I.get(key)
         if not X:
             continue
-        state = "couldn't check" if X.get("error") else "checked" if X.get("ok") is True else "to look at"
+        state = "not applicable" if X.get("na") else "couldn't check" if X.get("error") else "checked" \
+            if X.get("ok") is True else "to look at"
         S.head(f"{name}: {state}")
         if X.get("report"):
             S.line("The report", " – ".join(X["report"]), fs=[f["b"], f["wrap"]])
-        if X.get("error"):
-            S.text(X["error"], f["muted"], 9)
+        if X.get("error") or X.get("na"):
+            S.text(X.get("na") or X["error"], f["muted"], 9)
             S.gap()
             continue
         S.header("End", "Value", "Ties", "Cell", "Label", "Heading", "Input or formula", "Read as", "Checks")
@@ -444,6 +452,12 @@ def _facts(S: _Sheet, g: dict):
                mark((x.get("check") or {}).get("ok")), seen.replace("_", " "),
                fs=[f["bwrap"], f["wrap"], f["wrap"], f["wrap"], None, f["wrap"], None, None, None,
                    _okf(f, (x.get("check") or {}).get("ok")), f["wrap"]])
+    T = (g.get("result") or {}).get("terminal") or g.get("terminal") or {}
+    if T.get("passages"):
+        S.gap()
+        S.head(f"What the report says about the terminal value: {T.get('label')}")
+        for x in T["passages"]:
+            S.text(f"p. {x['page']}: {x['text']}", f["wrap"], 9, height=30 if len(x["text"]) > 150 else None)
     S.ws.freeze_panes(3, 1)
 
 

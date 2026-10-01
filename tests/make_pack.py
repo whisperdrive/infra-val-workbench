@@ -342,7 +342,8 @@ def report_content(v: dict, n: dict) -> dict:
         "method": [
             "Our primary valuation approach is a discounted cash flow (DCF) analysis of the unlevered free cash",
             "flows in the Company's FY25 business plan model, over the forecast period to FY45.",
-            "A terminal value is calculated at the end of the forecast using the Gordon growth method.",
+            "A terminal value is calculated at the end of the forecast using the Gordon growth method,",
+            "applied to the final forecast year's cash flow.",
             "Cash flows are discounted to the Valuation Date at a post-tax nominal WACC, end of period.",
             f"At the midpoint, the terminal value is A${m(mid['tv'])}m at 30 June 2045. The present value of the",
             f"forecast cash flows is A${m(mid['pv_forecast'])}m and the present value of the terminal value is",

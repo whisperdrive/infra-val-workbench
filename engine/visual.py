@@ -203,7 +203,7 @@ def confirm(doc: dict, facts: list[dict], reader, out_dir: str | Path, source_pa
     groups: dict[str, list[dict]] = {}
     where: dict[str, str] = {}
     for f in facts:
-        if (f.get("agent") or {}).get("status") == "withdrawn" or not (
+        if (f.get("agent") or {}).get("status") == "withdrawn" or f.get("unit") == "text" or not (
                 f.get("category") in NUMERIC or f.get("key") == "valuation_date") or not any(
                 _nums(f.get(k)) for k in ("value_text", "low_text", "high_text")):
             continue

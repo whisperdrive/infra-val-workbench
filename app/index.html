@@ -1245,6 +1245,15 @@ function midpointOf(lo, hi) {
   const d = Math.max(a.d, b.d);
   return String(lo).replace(a.raw, ((a.v + b.v) / 2).toLocaleString(undefined, {minimumFractionDigits: d, maximumFractionDigits: d}));
 }
+// How the report works out its terminal value (keyfacts.terminal_method), and everything it says about it, folded
+function terminalBlock() {
+  const T = E.terminal; if (!T) return "";
+  const m = T.multiple, mult = m ? [m.low_text, m.value_text, m.high_text].filter(Boolean).join(" · ") + (m.basis ? ` ${m.basis}` : "") : "";
+  return `<div style="margin-top:12px"><div class="row" style="gap:8px"><b>Terminal value</b><span class="pill ${T.kind === "unknown" ? "warn" : "info"}">${esc(T.label)}</span>${mult ? `<span class="small">${esc(mult)}</span>` : ""}</div>
+    ${T.phrase ? `<div class="small muted" style="margin-top:4px">“${esc(T.phrase)}” (p. ${esc(T.page ?? "?")}${T.from === "the fact" ? "" : ", from the report's text"})</div>`
+      : `<div class="small muted" style="margin-top:4px">The report doesn't say how it works out its terminal value${T.passages?.length ? " in so many words: see what it does say below" : ""}.</div>`}
+    ${T.passages?.length ? `<details data-k="tv-passages" style="margin-top:6px"><summary class="small">What the report says about the terminal value (${T.passages.length})</summary><ul class="small" style="margin:6px 0 0;padding-left:18px">${T.passages.map(x => `<li>p. ${esc(x.page)}: ${esc(x.text)}</li>`).join("")}</ul></details>` : ""}</div>`;
+}
 function lowMidHigh(F) {
   const rows = LMH.map(([k, label]) => [F(k), label]).filter(([f]) => f && (f.value_text || f.low_text || f.high_text));
   if (!rows.length) return "";
@@ -1270,6 +1279,7 @@ function reportSummary(d, fs) {
     <div class="eqrow"><div><span class="k">Low</span><b>${esc(low)}</b></div><div class="mid"><span class="k">Mid, the midpoint</span><b>${esc(mid)}</b></div><div><span class="k">High</span><b>${esc(high)}</b></div></div>
     <div class="small muted" style="margin-top:6px">Equity value${eq?.page ? `, p. ${esc(eq.page)}` : ""}${eq ? ` · ${seenShort(eq) || "not looked at"}` : ""}${F("valuation_date") ? ` · valuation date ${esc(F("valuation_date").value_text)}, p. ${esc(F("valuation_date").page ?? "?")} · ${seenShort(F("valuation_date")) || "not looked at"}` : ""}</div>
     ${lowMidHigh(F)}
+    ${terminalBlock()}
     <div class="conf"><span><b>${fs.length}</b> facts</span><span><b>${n.page}</b> checked against the page</span><span><b>${n.image}</b> confirmed on the image</span><span${n.you ? ` class="warnt"` : ""}><b>${n.you}</b> need you</span></div></div>`;
 }
 // the key tables read from their images (visual.read_tables), loaded with the document
@@ -1421,6 +1431,8 @@ function inputsCard(R) {
     if (!X) return "";
     const L = X.ends?.low, H = X.ends?.high, bad = [L, H].filter(r => r?.ok === false).length;
     const brief = [["Low", L], ["High", H]].map(([n, r]) => r?.checks ? `${n} ${pct(r.value)} <span class="mono small muted">${esc(r.cell || "not sourced")}</span>` : `${n} <span class="muted">${esc(r?.why || "–")}</span>`).join(" · ");
+    if (X.na) return `<div style="padding:10px 0;border-top:1px solid var(--rule)"><div class="row" style="justify-content:space-between;gap:8px"><b>${NAMES[key]}</b><span class="pill">not applicable</span></div>
+      <p class="small muted" style="margin:4px 0 0">${esc(X.na[0].toUpperCase() + X.na.slice(1))}.</p></div>`;
     const mark = X.error ? `<span class="pill warn">couldn't check</span>` : X.ok === true ? `<span class="pill ok">✓ checked</span>` : bad ? `<span class="pill bad">${bad === 2 ? "both ends" : "one end"} to look at</span>` : `<span class="pill warn">not found</span>`;
     return `<div style="padding:10px 0;border-top:1px solid var(--rule)"><div class="row" style="justify-content:space-between;gap:8px"><b>${NAMES[key]}</b>${mark}</div>
       <div class="small" style="margin:4px 0">${brief}${X.report?.length ? ` <span class="muted">· the report: ${X.report.map(esc).join(" – ")}</span>` : ""}</div>

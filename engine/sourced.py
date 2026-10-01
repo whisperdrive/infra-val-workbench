@@ -309,13 +309,30 @@ def franking(sess, summary: dict, db, traced: dict, where: dict, facts: list[dic
     return _wrap(ends, stated)
 
 
-def check(sess, summary: dict, where: dict, facts: list[dict], asm: dict, traced: dict, unit) -> dict:
-    """{"rate", "growth", "franking"}: each {"ends": {"low", "high"}, "report", "ok"}. Runs in overlay.deep."""
+NO_GROWTH = {"none", "exit_ebitda", "exit_rab", "exit_other"}  # terminal values with no growth rate to source
+
+
+def growth_applies(terminal: dict | None) -> str | None:
+    """Why the terminal growth rate isn't one to source, where the report's terminal value has none (none at all, or
+    an exit multiple); None where it applies."""
+    if terminal and terminal.get("kind") in NO_GROWTH:
+        return (f"not applicable: the report's terminal value is {terminal['label'][0].lower() + terminal['label'][1:]}"
+                + (f" (p. {terminal['page']})" if terminal.get("page") else ""))
+    return None
+
+
+def check(sess, summary: dict, where: dict, facts: list[dict], asm: dict, traced: dict, unit,
+          terminal: dict | None = None) -> dict:
+    """{"rate", "growth", "franking"}: each {"ends": {"low", "high"}, "report", "ok"}. Runs in overlay.deep. terminal:
+    how the report works out its terminal value (keyfacts.terminal_method): no growth rate to source where it's an
+    exit multiple or there's none."""
     db = summary["wiring"]["overlay"]["db_path"]
     import rodb
     db = rodb.connect(db)
     out = {"rate": rate(asm, facts)}
-    for key, fn in (("growth", lambda: growth(db, traced, out["rate"], facts)),
+    na = growth_applies(terminal)
+    for key, fn in (("growth", lambda: {"ends": {e: {"ok": None, "why": na} for e in ("low", "high")}, "report": [],
+                                        "ok": None, "na": na} if na else growth(db, traced, out["rate"], facts)),
                     ("franking", lambda: franking(sess, summary, db, traced, where, facts, unit))):
         try:
             out[key] = fn()

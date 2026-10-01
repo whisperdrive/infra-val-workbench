@@ -277,9 +277,28 @@ def get(eid: int) -> dict | None:
         w["identity_check"] = ident.get("auto_check")  # the agents' check of the date, where it didn't confirm
     import orchestrator  # what runs, and what it's waiting for: the orchestrator's view (reading it starts nothing)
     rl = roles(eid)
+    terminal = terminal_view(eid, rl)
     return {**e, "documents": documents(eid), "workbooks": wbs, "facts": facts(eid), "roles": rl,
             "session": _session(eid), "now": time.time(), "run": orchestrator.view(eid),
-            "dates": dates(eid, e.get("result"), wbs, rl)}
+            "dates": dates(eid, e.get("result"), wbs, rl), "terminal": terminal}
+
+
+def terminal_view(eid: int, rl: dict | None = None) -> dict | None:
+    """How last year's report works out its terminal value (keyfacts.terminal_method), with what it says about it
+    (context.terminal: searched once per report, kept with its loop notes)."""
+    import context
+    rl = rl if rl is not None else roles(eid)
+    did = (rl.get("prior_report") or {}).get("id") if (rl.get("prior_report") or {}).get("kind") == "document" else None
+    d = next((x for x in documents(eid) if x["id"] == did), None) if did else \
+        next((x for x in documents(eid) if x.get("facts_status") == "done"), None)
+    if not d or d.get("facts_status") != "done":
+        return None
+    passages = (d.get("loop") or {}).get("terminal")
+    if passages is None:
+        doc = (document(d["id"]) or {}).get("doc") or {}
+        passages = context.terminal(doc.get("markdown") or "")
+        _note_loop(d["id"], terminal=passages)
+    return keyfacts.terminal_method(reference(eid), passages)
 
 
 def dates(eid: int, res: dict | None, wbs: list[dict], rl: dict) -> list[dict]:
@@ -1741,7 +1760,8 @@ def _process_facts(did: int) -> None:
                         json.dumps(f.get("review")), "pending", now, json.dumps(f.get("agent")),
                         json.dumps(f.get("visual"))))
     _set("documents", did, facts_notes=res.get("notes"), review_summary=res.get("review_summary"))
-    _note_loop(did, visual={**note, "at": now})
+    import context
+    _note_loop(did, visual={**note, "at": now}, terminal=context.terminal(doc["markdown"]))  # what it says of its TV
     if res.get("loop"):
         _note_loop(did, facts={**res["loop"]["summary"], **auto_decide(did), "at": now}, lessons_facts=None)
         step("Writing down what the loop taught")

@@ -88,6 +88,24 @@ def find(markdown: str) -> dict:
     return out
 
 
+TV_WORDS = re.compile(r"terminal (?:value|year|cash flow|growth)|exit (?:multiple|value)|perpetuit|perpetual|gordon|"
+                      r"ev\s*/\s*(?:ebitda|rab)|(?:ebitda|rab) multiple|maintainable|normali[sz]ed cash|no terminal|"
+                      r"beyond the (?:forecast|concession)|end of the concession", re.I)
+
+
+def terminal(markdown: str, limit: int = 12) -> list[dict]:
+    """What the report says about its terminal value, found by searching it: every sentence or table row with a
+    terminal-value word, page by page, each once: [{"page", "text"}], at most limit."""
+    out, seen = [], set()
+    for n, t in sorted(pages(markdown).items()):
+        for piece in re.split(r"(?<=[.;])\s+|\n+", _clean(t)):
+            piece = re.sub(r"\s*\|\s*", " | ", piece).strip(" |")
+            if len(piece) > 12 and TV_WORDS.search(piece) and piece.lower()[:120] not in seen:
+                seen.add(piece.lower()[:120])
+                out.append({"page": n, "text": _cap(piece, 400)})
+    return out[:limit]
+
+
 def pages_for(ctx: dict) -> list[int]:
     return sorted({n for part in ctx.values() for n in part.get("pages", [])})
 

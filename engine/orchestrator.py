@@ -886,6 +886,7 @@ def _review_job(eid: int, key: str):
                                "this_year": (res.get("bridges") or {}).get("valuation_date")},
            "cash_flows_by_year": ch.get("series"), "this_year_gaps_reliable": ((res.get("figures") or {}).get("gaps") or {}).get("reliable"),
            "assumptions": res.get("assumptions"),
+           "terminal_value_basis": {k: (res.get("terminal") or {}).get(k) for k in ("label", "phrase", "page", "multiple")},
            "held_inputs": [{"input": h["label"], "last_year": h["value"], "this_year": h.get("this_year"),
                             "still_held": h["held"], "suggested_from_this_years_model": (h.get("suggestion") or {}).get("value")}
                            for h in res.get("held") or []],

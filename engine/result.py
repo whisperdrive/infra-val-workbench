@@ -696,10 +696,12 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
     asm = assumptions(summary, where)
     with rodb.connect(summary["wiring"]["overlay"]["db_path"]) as db:
         traced = {e: (_traced(db, where[e]) or (None, []))[1] for e in ("low", "high")}
-    inputs = ov.deep(sourced.check, sess, summary, where, facts, asm, traced, unit)
+    import context
+    terminal = keyfacts.terminal_method(facts, context.terminal(markdown))  # how the report works out its terminal value
+    inputs = ov.deep(sourced.check, sess, summary, where, facts, asm, traced, unit, terminal)
     held_inputs = ov.deep(held_list, sess, summary, where, figs)
     return {"head": head, "where": where, "tie": tie, "figures": figs, "bridges": br, "chart": ch, "reconcile": rec,
-            "assumptions": asm, "inputs": inputs, "held": held_inputs,
+            "assumptions": asm, "inputs": inputs, "held": held_inputs, "terminal": terminal,
             "values": {"report": {e: head[e] for e in ("low", "mid", "high")},
                        "rebuilt": {"low": tie["low"]["rebuilt"], "high": tie["high"]["rebuilt"],
                                    "mid": (tie["low"]["rebuilt"] + tie["high"]["rebuilt"]) / 2
