@@ -374,7 +374,8 @@ def delete(eid: int) -> dict | None:
     if not rows:
         return None
     docs = documents(eid)
-    wbs = [w for w in (library.get(r["file_id"]) for r in _q("SELECT file_id FROM eng_files WHERE engagement_id=?", eid)) if w]
+    linked = _q("SELECT file_id FROM eng_files WHERE engagement_id=?", eid)
+    wbs = [w for w in (library.get(r["file_id"], full=True) for r in linked) if w]
     busy = orchestrator.busy_with(eid) + \
         [d["filename"] for d in docs if d["status"] in ("queued", "processing") or d["facts_status"] in ("queued", "running")] + \
         [w["filename"] for w in wbs if w["status"] in ("queued", "processing")]
@@ -383,6 +384,7 @@ def delete(eid: int) -> dict | None:
     kept = [w for w in wbs if _q("SELECT 1 FROM eng_files WHERE file_id=? AND engagement_id<>?", w["id"], eid)]
     gone = [w for w in wbs if w not in kept]
     _exec("DELETE FROM engagements WHERE id=?", eid)  # first: the orchestrator stops looking at it
+    _let_go({eid}, {w["db_path"] for w in gone})
     for d in docs:
         remove_document(d["id"])
     for w in gone:
@@ -393,7 +395,6 @@ def delete(eid: int) -> dict | None:
                        ("stages", "engagement_id"), ("runlog", "engagement_id"), ("engagements", "id")):
             db.execute(f"DELETE FROM {t} WHERE {col}=?", (eid,))
     shutil.rmtree(OUT / "overlays" / f"e{eid}", ignore_errors=True)
-    _SESSIONS.pop(eid, None)
     calllog.forget(eid, [w["id"] for w in gone])
     usage.forget(_session(eid), [w["id"] for w in gone])
     return {"name": rows[0]["name"], "reports": len(docs), "models": len(gone), "kept": [w["filename"] for w in kept]}
@@ -1973,16 +1974,25 @@ def _release(eid: int, fid: int) -> dict:
     w = next((w for w in workbooks(eid) if w["id"] == fid), None)
     if not w:
         raise ValueError("that workbook isn't in this engagement")
-    for other, (sess, _) in list(_SESSIONS.items()):
-        if w["db_path"] and w["db_path"] in sess.paths():
-            try:
-                import overlay as ovmod
-                ovmod.deep(sess.close)
-            finally:
-                _SESSIONS.pop(other, None)
+    _let_go(set(), {w["db_path"]})
     for key in [k for k in _SHEET_NAMES if k[0] == w["db_path"]]:
         _SHEET_NAMES.pop(key, None)
     return w
+
+
+def _let_go(eids: set[int], paths: set[str]) -> None:
+    """The live Python overlays of these engagements, and any other reading one of these model.db files, let go of
+    their files; then what's left over is collected. Windows won't delete an open file, and a sqlite connection or a
+    read-only openpyxl workbook no longer used keeps its file open until the garbage collector gets to it."""
+    import gc
+    import overlay as ovmod
+    for other, (sess, _) in list(_SESSIONS.items()):
+        if other in eids or sess.paths() & paths:
+            try:
+                ovmod.deep(sess.close)
+            finally:
+                _SESSIONS.pop(other, None)
+    gc.collect()
 
 
 def retry_document(did: int) -> None:
