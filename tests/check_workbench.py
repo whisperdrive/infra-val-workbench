@@ -541,6 +541,91 @@ def held_check(eid: int) -> None:
           f"by it; back, the first result)")
 
 
+def rate_check(eid: int) -> None:
+    """This year's discount rate, set by a person: the low end at the higher rate whichever order it's typed in, on the
+    cells each end's discountings read. The roll-forward's steps stay at last year's rate and the rate is a step of its
+    own; the zero-roll check stays at last year's rate (a new rate isn't a row matched wrongly); back to last year's,
+    it's the first result again."""
+    res = wb.get(eid)["result"]
+    ends0 = res["inputs"]["rate"]["ends"]
+    was = {e: ends0[e]["value"] for e in ("low", "high")}
+    steps0 = {e: {x["key"]: x["value"] for x in res["bridges"][e]["steps"]} for e in ("low", "mid", "high")}
+    zero0 = {c: x["zero_roll"]["ratio"] for c, x in res["figures"]["gaps"]["by_cell"].items()}
+    assert all(abs(steps0[e]["rate"]) < 1e-12 for e in steps0), steps0
+    mid0 = res["values"]["this_year"]["mid"]
+    new = {"low": was["low"] + 0.0025, "high": was["high"] + 0.0025}
+    finished = lambda: orc.stage(eid, "result").get("finished_at")
+    t0 = finished()
+    got = wb.set_this_year_rate(eid, f"{100 * new['high']:.2f}%", 100 * new["low"])  # the lower rate first, as typed
+    assert abs(got["low"] - new["low"]) < 1e-12 and abs(got["high"] - new["high"]) < 1e-12, got
+    orc.poke()
+    wait(eid, lambda v: finished() != t0 and not v["busy"] and status(v)["result"] in orc.SETTLED, "the result at this year's rate")
+    res = wb.get(eid)["result"]
+    rt = res["inputs"]["rate"]["this_year"]
+    assert rt["applied"] and rt["cells"] == {ends0["low"]["cell"]: got["low"], ends0["high"]["cell"]: got["high"]} \
+        or (ends0["low"]["cell"] == ends0["high"]["cell"]), rt
+    for e in ("low", "mid", "high"):
+        s = {x["key"]: x for x in res["bridges"][e]["steps"]}
+        for k in ("time", "cash", "forecast"):  # at last year's rate, as before
+            assert abs(s[k]["value"] - steps0[e][k]) < 1e-6, (e, k, s[k]["value"], steps0[e][k])
+        assert s["rate"]["value"] < 0 and "this year's, " in s["rate"]["label"] and "last year's" in s["rate"]["label"], s["rate"]
+        assert abs(s["this_year"]["value"] - (steps0[e]["this_year"] + s["rate"]["value"])) < 1e-6, (e, s)
+    assert {c: x["zero_roll"]["ratio"] for c, x in res["figures"]["gaps"]["by_cell"].items()} == zero0
+    assert res["values"]["this_year"]["mid"] < mid0 and not [n for n in orc.view(eid)["needs"] if n["id"] == "rate-this-year"]
+    import io
+    import openpyxl
+    book = openpyxl.load_workbook(io.BytesIO(workpaper.build(eid)), data_only=True)
+    assert any(r[0] == "This year" and "set by you" in str(r[2]) for r in book["Inputs"].iter_rows(values_only=True))
+    move = res["bridges"]["mid"]["steps"][-2]["value"]
+    t0 = finished()
+    wb.set_this_year_rate(eid, None)
+    orc.poke()
+    wait(eid, lambda v: finished() != t0 and not v["busy"] and status(v)["review"] in orc.SETTLED, "the result back again")
+    res = wb.get(eid)["result"]
+    assert abs(res["values"]["this_year"]["mid"] - mid0) < 1e-9 and res["inputs"]["rate"]["this_year"] is None
+    print(f"rate: ok (this year's discount rate set 25bp up, the low end at the higher rate: a step of its own "
+          f"({move:+.1f} at the mid), the roll-forward's steps and the zero-roll check at last year's; back, the first result)")
+
+
+def methods_check(eid: int) -> None:
+    """This year's value worked out other ways (engine/methods.py), on the same feed: the default is this year's value;
+    the recompute ties to the overlay's own formulas; mid-period and mid-year are worth more than end of period, the mid
+    at the midpoint rate less than the average of the ends; a method that can't be worked out says why. Preferred, a
+    method is this year's value with a bridge step of its own; back to the default, the first result again."""
+    import methods
+    res = wb.get(eid)["result"]
+    inv = res["methods"]
+    by = {m["key"]: m for m in inv["methods"]}
+    assert [m["key"] for m in inv["methods"]] == [k for k, _l, _w in methods.METHODS] and inv["preferred"] == "overlay", inv
+    base, ty = by["overlay"], res["values"]["this_year"]
+    assert all(abs(base[e] - ty[e]) < 1e-9 for e in ("low", "mid", "high")), (base, ty)
+    assert inv["ties"] and all(abs(by["recompute"]["vs_default"][e]) < 1e-6 for e in ("low", "mid", "high")), by["recompute"]
+    assert by["mid_period"]["vs_default"]["mid"] > 0 and by["mid_year"]["vs_default"]["mid"] > 0, (by["mid_period"], by["mid_year"])
+    assert by["mid_rate"]["vs_default"]["mid"] < 0 and by["mid_rate"]["low"] is None, by["mid_rate"]
+    assert by["overlay_on_date"]["ok"] and by["overlay_on_date"]["vs_default"]["mid"] >= -1e-9, by["overlay_on_date"]
+    assert not by["own_flags"]["ok"] and by["own_flags"]["why"], by["own_flags"]  # the pack's overlay has no flags of its own
+    mid0, move = ty["mid"], by["mid_period"]["vs_default"]
+    finished = lambda: orc.stage(eid, "result").get("finished_at")
+    t0 = finished()
+    wb.set_method(eid, "mid_period")
+    orc.poke()
+    wait(eid, lambda v: finished() != t0 and not v["busy"] and status(v)["result"] in orc.SETTLED, "the result by mid-period")
+    res = wb.get(eid)["result"]
+    assert res["methods"]["preferred"] == "mid_period", res["methods"]["preferred"]
+    for e in ("low", "mid", "high"):
+        s = {x["key"]: x for x in res["bridges"][e]["steps"]}
+        assert abs(s["method"]["value"] - move[e]) < 1e-6 and abs(res["values"]["this_year"][e] - s["this_year"]["value"]) < 1e-9
+    assert abs(res["values"]["this_year"]["mid"] - (mid0 + move["mid"])) < 1e-6
+    t0 = finished()
+    wb.set_method(eid, None)
+    orc.poke()
+    wait(eid, lambda v: finished() != t0 and not v["busy"] and status(v)["review"] in orc.SETTLED, "the result back again")
+    res = wb.get(eid)["result"]
+    assert abs(res["values"]["this_year"]["mid"] - mid0) < 1e-9 and "method" not in [x["key"] for x in res["bridges"]["mid"]["steps"]]
+    print(f"methods: ok ({sum(m['ok'] for m in inv['methods'])} of {len(inv['methods'])} worked out, the recompute tying to "
+          f"the overlay; mid-period {move['mid']:+.1f} at the mid, preferred: a bridge step of its own; back, the first result)")
+
+
 def review_check(eid: int) -> None:
     """The review is a decision like the others: once per result. A "try again" on the result that works out the same
     result, or on the review itself, doesn't buy another review (the same points stand); a result that changes is
@@ -719,7 +804,8 @@ def workpaper_check(eid: int) -> None:
     charts = [n for n in zipfile.ZipFile(io.BytesIO(data)).namelist() if n.startswith("xl/charts/chart")]
     assert len(charts) == 2, charts  # the bridge's waterfall and the cash flows'
     book = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
-    want = ["Summary", "Bridge", "Cash flows", "Inputs", "Reconciliation", "Key facts", "Files and roles", "Review", "Run log"]
+    want = ["Summary", "Bridge", "Cash flows", "Inputs", "Methods", "Reconciliation", "Key facts", "Files and roles", "Review",
+            "Run log"]
     assert book.sheetnames == want, book.sheetnames
     cells = lambda name: [[c for c in row] for row in book[name].iter_rows(values_only=True)]
     res = wb.get(eid)["result"]
@@ -743,7 +829,7 @@ def workpaper_check(eid: int) -> None:
     finally:
         wb.delete(e["id"])
     assert workpaper.build(10 ** 6) is None
-    print("workpaper: ok (9 sheets and 2 charts; the bridge's mid ends at this year's value; 21 financial years; the "
+    print("workpaper: ok (10 sheets and 2 charts; the bridge's mid ends at this year's value; 21 financial years; the "
           "disclaimer; the rate's figure then its cell; roles, not model names; none before the bridge)")
 
 
@@ -1002,6 +1088,8 @@ def main() -> None:
     gate_check()
     review_check(eid)
     held_check(eid)
+    rate_check(eid)
+    methods_check(eid)
     rows_context_check(eid)
     gating_check(eid)
     roles_check()

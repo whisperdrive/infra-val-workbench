@@ -6,6 +6,7 @@
   Cash flows       last year's model against this year's, by financial year
   Inputs           the discount rate, the terminal growth rate and franking: the cell each was sourced from and every
                    check on it; the discountings under the value
+  Methods          this year's value worked out other ways (methods.py), against the default; the preferred one
   Reconciliation   what the report discloses of the value against the overlay's own split
   Key facts        the report's, with who decided each and how it was checked
   Files and roles  the four files and who placed each
@@ -151,6 +152,12 @@ def _basis(res: dict) -> str:
     return "cum-distribution" if (res.get("head") or {}).get("basis") == "cum" else "ex-distribution"
 
 
+def _rates(rt: dict) -> str:
+    """This year's discount rate as a range, the lower first: 7.90% to 8.90%."""
+    import result
+    return result._range_pct(rt.get("low"), rt.get("high"))
+
+
 def _totals(steps: list[dict]) -> tuple:
     t = [s["value"] for s in steps if s.get("total") and s.get("value") is not None]
     return (t[0], t[-1]) if len(t) > 1 else (None, None)
@@ -241,8 +248,10 @@ def _summary(S: _Sheet, g: dict, res: dict, review: dict):
 def _bridge(S: _Sheet, book, res: dict):
     f, B = S.f, res.get("bridges") or {}
     to = f" to {B['valuation_date'][:10]}" if B.get("valuation_date") else ""
+    rt = ((res.get("inputs") or {}).get("rate") or {}).get("this_year") or {}
+    at = f"at this year's discount rate, {_rates(rt)}" if rt.get("applied") else "at last year's discount rate"
     S.title("The value bridge: last year to this year",
-            f"{_units(res)} · equity value, {_basis(res)} · at last year's discount rate{to}. The mid is the midpoint of "
+            f"{_units(res)} · equity value, {_basis(res)} · {at}{to}. The mid is the midpoint of "
             f"the low and the high, step by step. A total is the value at that point; the other rows are the change.", 5)
     by = {e: {s["key"]: s for s in (B.get(e) or {}).get("steps") or []} for e in ("low", "mid", "high")}
     keys = [k for k in STEPS if any(k in by[e] for e in by)]
@@ -359,6 +368,10 @@ def _inputs(S: _Sheet, res: dict):
                    fs=[f["b"], f["mult" if key == "multiple" else "pct"], _okf(f, r.get("ties")), f["mono"], f["wrap"],
                        f["wrap"], f["wrap"], f["mono"], f["wrap"]],
                    height=max(15, 13 * (len(r["checks"]) + checks.count("\n") // 3 + 1)))
+        rt = X.get("this_year") if key == "rate" else None
+        if rt:
+            S.line("This year", _rates(rt), "set by you" + ("" if rt.get("applied") else f"; not applied: {rt.get('why') or ''}"),
+                   fs=[f["b"], f["wrap"], f["wrap"] if rt.get("applied") else f["warn"]])
         S.gap()
 
     H = res.get("held") or []
@@ -391,6 +404,28 @@ def _inputs(S: _Sheet, res: dict):
                 S.line(e.title(), a.get("pv"), a.get("rate"), a.get("valuation_date") or "", a.get("label") or a.get("kind") or "",
                        a.get("timing") or "", a.get("day_count") or "", a.get("periods"), a.get("terminal_date") or "", a.get("cell") or "",
                        fs=[f["b"], f["num"], f["pct"], None, f["wrap"], f["wrap"], None, None, None, f["mono"]])
+
+
+def _methods(S: _Sheet, res: dict):
+    f, M = S.f, res.get("methods") or {}
+    S.title("Methods: this year's value worked out other ways",
+            f"{_units(res)}. On the same rolled-forward model and discount rates. The default is the overlay's own formulas "
+            f"with the periods ending on or before the new valuation date cut off; the preferred method is this year's "
+            f"value, with a bridge step of its own for the move to it.", 7)
+    if M.get("error") or not M.get("methods"):
+        S.text(M.get("error") or "Worked out once this year's value is.", f["muted"], 7)
+        return
+    S.header("Method", "Low", "Mid", "High", "Mid vs the default", "", "How")
+    for m in M["methods"]:
+        tag = " (this year's value)" if m["key"] == M.get("preferred") else " (the default)" if m["key"] == M.get("default") else ""
+        S.line(m["label"] + tag, m["low"], m["mid"], m["high"], (m.get("vs_default") or {}).get("mid"), "",
+               m["what"] if m["ok"] else f"not worked out: {m.get('why') or ''}",
+               fs=[f["bwrap"] if tag else f["wrap"], f["num"], f["num"], f["num"], f["chg"], None, f["wrap" if m["ok"] else "muted"]])
+    S.gap()
+    S.text(("The recompute ties to the overlay's own formulas." if M.get("ties") else
+            "The recompute doesn't tie to the overlay's own formulas: read the recomputed methods as indicative.")
+           + (f" The overlay's own forecast flags ({', '.join(M['flags'])}) were rolled as a method of their own."
+              if M.get("flags") else ""), f["muted"], 7)
 
 
 def _reconcile(S: _Sheet, res: dict):
@@ -562,6 +597,7 @@ def build(eid: int) -> bytes | None:
     _bridge(_Sheet(book, fmt, "Bridge", [70, 14, 14, 14, 3, 3, 16, 12, 12, 12, 12]), book, res)
     _flows(_Sheet(book, fmt, "Cash flows", [16, 18, 18, 14]), book, res)
     _inputs(_Sheet(book, fmt, "Inputs", [26, 12, 8, 18, 34, 12, 26, 30, 70]), res)
+    _methods(_Sheet(book, fmt, "Methods", [56, 14, 14, 14, 16, 3, 80]), res)
     _reconcile(_Sheet(book, fmt, "Reconciliation", [40, 30, 14, 14, 14, 14, 20, 10]), res)
     _facts(_Sheet(book, fmt, "Key facts", [30, 16, 18, 16, 8, 26, 6, 11, 12, 9, 16]), g)
     _files(_Sheet(book, fmt, "Files and roles", [26, 44, 16, 30, 18, 10, 60]), g)

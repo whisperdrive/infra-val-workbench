@@ -38,6 +38,8 @@ def _vocabulary() -> set[str]:
     import orchestrator
     words = set(orchestrator.STAGES) | set(orchestrator.LABEL) | {k for _p, k, _w in orchestrator.KINDS} | set(keyfacts.KNOWN)
     words |= {k for k, _l, _r in keyfacts.TV_KINDS} | {"unknown"}
+    import methods
+    words |= set(methods.LABEL)
     words |= {"waiting", "queued", "running", "done", "attention", "blocked", "failed", "error", "pending", "approved",
               "rejected", "agreed", "escalated", "withdrawn", "open", "ready", "processing", "unread", "verified",
               "flagged", "resolved", "edited", "figure", "confirmed", "confirmed by the reviewer", "corrected", "disputed",
@@ -211,6 +213,10 @@ def _result(eid: int, res: dict) -> dict:
                     for k, x in (res.get("inputs") or {}).items()},
          "held_inputs": {"n": len(res.get("held") or []), "still_held": sum(1 for h in res.get("held") or [] if h["held"]),
                          "suggestions": _count((h.get("suggestion") or {}).get("status") for h in res.get("held") or [])},
+         "rate_this_year": {"set": bool(((res.get("inputs") or {}).get("rate") or {}).get("this_year")),
+                            "applied": bool((((res.get("inputs") or {}).get("rate") or {}).get("this_year") or {}).get("applied"))},
+         "cut_off": (res.get("figures") or {}).get("cut_off"),
+         "methods": _methods(res.get("methods") or {}),
          "chart": {"years": len((res.get("chart") or {}).get("years") or []), "found": bool((res.get("chart") or {}).get("years"))}}
     # the discountings traced under each end: how many, and how many can be read here
     try:
@@ -275,6 +281,16 @@ def _result(eid: int, res: dict) -> dict:
     return r
 
 
+def _methods(inv: dict) -> dict:
+    """The methods inventory as ratios: each method's mid against the default's, whether it was worked out, the
+    preferred one, whether the recompute ties, how many forecast flags of the overlay's own were found."""
+    base = next((m for m in inv.get("methods") or [] if m["key"] == inv.get("default")), {}).get("mid")
+    return {"preferred": inv.get("preferred"), "ties": inv.get("ties"), "flags": len(inv.get("flags") or []),
+            "error": bool(inv.get("error")),
+            "each": [{"key": m["key"], "ok": m["ok"], "vs_default": round(m["mid"] / base - 1, 5)
+                      if m.get("mid") is not None and base else None} for m in inv.get("methods") or []]}
+
+
 def redact(obj, words: set | None = None, n: list | None = None):
     """The export with every string not the app's own word, a date or the app's version replaced (keys too)."""
     words = words if words is not None else _vocabulary()
@@ -317,7 +333,8 @@ _KEYS = {"app", "generated", "files", "reports", "workbooks", "roles", "placed",
          "dcf_rows", "dcf_missing", "blank_rows", "weak_rows", "timing_open", "zero_roll", "date_cells_off",
          "date_by_label", "family", "rows", "frequency", "units_scale", "timing", "units_from_facts", "kind", "confidence", "has_formula", "adds_up", "reads_rows", "read_by_cells",
          "feeds_dcf", "values", "candidates", "candidates_with_figures", "redacted", "rebuilt", "rebuilt_rows", "how",
-         "copies_passed_over", "low", "high", "mid",
+         "copies_passed_over", "low", "high", "mid", "rate_this_year", "set", "applied", "cut_off",
+         "methods", "preferred", "ties", "flags", "each", "key", "vs_default",
          "monthly", "quarterly", "semi-annual", "annual", "irregular"}
 
 

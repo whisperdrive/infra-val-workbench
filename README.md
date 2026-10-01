@@ -76,7 +76,13 @@ takes it from there:
    cash flow the value discounts; and the rows of this year's model that might be it, each with its figures for the
    same periods and a button to use it. The valuation date moves wherever the discountings read it: each discounting's date is
    followed back to the cell it's typed in, and every one of those moves (a copy on a DCF sheet moves with its input;
-   a DCF sheet with a date of its own has it moved too). This year's value is shown only where it can be trusted, and
+   a DCF sheet with a date of its own has it moved too). And each discounting's periods that end before the new date
+   are cut off (its present-value row, else its factor row, else its cash flows, at nil): last year's overlay needed no
+   cut-off of its own where last year's model had nothing before last year's date, but this year's model can have the
+   year between the two dates filled in (a fixed horizon, a model dated before its valuation date), and a factor worked
+   out from the date would compound those quarters into the value. The period ending on the new date is cut off too,
+   as a valuer zeroing the overlay's own period flags by hand does (keeping it is one of the methods below). This
+   year's value is shown only where it can be trusted, and
    is held back otherwise, with a need that says why:
    - the rows its cash flows come from weren't found (or were found blank, or not surely);
    - a discounting still reads another date than this year's valuation date;
@@ -100,7 +106,17 @@ takes it from there:
    last year's valuation date (its label agreeing) is the row read in this year's model at this year's date. A
    suggestion is only applied when you use it, or type your own figure; the bridge then has a step of its own for it.
 7. **Bridges last year's value to this year's.** Report → rounding → rebuilt → time value → last year's cash flows paid
-   → this year's forecast → discount rate → this year, for the low and the high; the mid is their average. Where a
+   → this year's forecast → discount rate → this year, for the low and the high; the mid is their average. The time
+   value, the cash flows and the new forecast are at last year's discount rate; where you set this year's (the Result
+   page's discount rate card: a range's two ends, the low end of the value at the higher rate), it goes on the cells
+   each end's discountings read for it, and the discount rate step is the move to it (the zero-roll check stays at
+   last year's rate: a new rate isn't a row matched wrongly). This year's value is also worked out other ways, the
+   **methods** (`methods.py`), each against the default (the overlay's own formulas, rolled, the periods ending on or
+   before the new date cut off): the period ending on the date kept in; the overlay's own forecast flags rolled in
+   place of the cut-off (where it has any, the default's figure); each discounting recomputed in code as the overlay
+   discounts (the default's figure, to the cent: the check that the others are like for like), mid-period, mid-year
+   and on the other day count; and the mid at the midpoint rate rather than the average of the ends. The method you
+   prefer is this year's value, with a bridge step of its own for the move from the default. Where a
    discounting under the value can't be read here, the roll-forward is one step, not its unwind landed in the new
    forecast. A chart compares the undiscounted forecast cash flows, last year's and this year's.
 8. **Has gpt-sol review the run end to end** and says what looks implausible: once per result, like any other
@@ -113,7 +129,7 @@ takes it from there:
 - The conclusion is the **equity value**, low / mid / high, where the mid is the midpoint of the low and the high.
 - **Ex-distribution** by default, unless the report is overwhelmingly cum-distribution or only the cum-distribution
   figure is in the model.
-- This year's discount rate is **last year's** (there's no control yet to set another).
+- This year's discount rate is **last year's** unless you set this year's on the Result page.
 
 ## The orchestrator
 
@@ -150,7 +166,9 @@ the Run page.
   needs you opens in full; every fact and table is folded below.
 - **Rebuild**: the tie to the report and the model inputs sourced and checked; the reconciliation, the assumptions
   and the Python module folded, each with its result on the fold.
-- **Result**: the value bridge (low, mid, high) and the cash-flow chart, the review, and how the files link up (the
+- **Result**: the value bridge (low, mid, high), this year's discount rate (last year's until you set it), the
+  methods (and the one you prefer), the inputs held at last year's, the cash-flow chart, the review, and how the files
+  link up (the
   map) folded. A review point names the years and the bridge step it's about (checked against the run), and a click
   marks them on the chart and the bridge. **Export workpaper** downloads it all as an Excel file: the summary (the
   equity value low / mid / high: the report's, rebuilt, this year's and the move; the inputs; the dates; the review),
@@ -196,7 +214,7 @@ Your firm's logo goes in the git-ignored `brand/` folder, and the mascot shows w
 ```
 uv run python tests/make_pack.py        # a synthetic pack: fictional names and numbers, both overlay layouts
 uv run python tests/check_workbench.py  # the whole run on it, every model call stubbed; the orchestrator's rules
-uv run python tests/check_trace.py      # reading a DCF back from its factors
+uv run python tests/check_trace.py      # reading a DCF back from its factors; the roll's dates and cut-off
 uv run python tests/check_xlruntime.py  # Excel functions in the Python runtime
 ```
 
@@ -211,6 +229,7 @@ uv run python tests/check_xlruntime.py  # Excel functions in the Python runtime
   - `context.py`: what the report says around a figure (the page, the letter, the scope, definitions).
   - `result.py`: the tie, the bridge and the cash flows.
   - `sourced.py`: the discount rate, terminal growth and franking credit utilisation, sourced and checked.
+  - `methods.py`: this year's value worked out other ways, against the default; the preferred one.
   - `workpaper.py`: the Excel workpaper, built in memory from the engagement's result.
   - The rest came from the Valuation Desk: the workbook library and row map, the roles, the Python overlay
     (`xlcompile.py`, `xlruntime.py`, `overlay.py`), the DCF tracer, row finding and the map.

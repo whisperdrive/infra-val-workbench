@@ -1502,7 +1502,7 @@ function bindRebuild() {
 
 // ---- the result: the bridge and the cash flows -------------------------------------------------------------------
 const STEP_SHORT = {report: "Report", rounding: "Rounding", prior_feed: "Client file", rebuilt: "Rebuilt", time: "Time value", cash: "Cash flows paid",
-  forecast: "New forecast", roll: "Roll-forward", held: "Held inputs", rate: "Discount rate", this_year: "This year"};  // "Last year" when the rebuild ties
+  forecast: "New forecast", roll: "Roll-forward", held: "Held inputs", rate: "Discount rate", method: "Method", this_year: "This year"};  // "Last year" when the rebuild ties
 function bridgeSpec(steps, title, units, tied, step) {
   // where the rebuild ties to the report (low and high), one "last year" bar: two identical bars say nothing
   const keep = steps.filter(s => s.value != null && (s.total || Math.abs(s.value) >= 0.05 || ["time", "cash", "forecast", "roll"].includes(s.key)))
@@ -1527,12 +1527,14 @@ function viewResult() {
     return `<tr class="${x.total ? "tot" : ""}"><td class="${x.total ? "" : "step"}">${esc(x.label)}</td><td class="num">${x.total ? "" : signed(x.value)}</td><td class="num"><b>${vN(run)}</b></td></tr>`; }).join("");
   const tots = steps.filter(x => x.total && x.value != null), from = tots[0]?.value, to = tots[tots.length - 1]?.value;
   return `<div class="card" id="bridgeCard"><div class="row" style="justify-content:space-between;align-items:flex-start">
-      <div><h2>Last year to this year</h2><p class="sub" style="margin:0">${esc(u)} · equity value, ${R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution"} · at last year's discount rate${B.valuation_date ? ` · to ${esc(B.valuation_date)}` : ""}${heldNote(R)}</p></div>
+      <div><h2>Last year to this year</h2><p class="sub" style="margin:0">${esc(u)} · equity value, ${R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution"} · ${rateNow(R)?.applied ? `at this year's discount rate, ${esc(rateRange(rateNow(R).low, rateNow(R).high))}` : "at last year's discount rate"}${B.valuation_date ? ` · to ${esc(B.valuation_date)}` : ""}${heldNote(R)}</p></div>
       <div class="row">${state.hl?.step ? hlNote(STEP_SHORT[state.hl.step] || state.hl.step) : ""}<a class="btn small" href="${workpaperUrl()}" download title="The result, the bridge, the cash flows, the inputs and their checks, the facts, the review and the run log, as an Excel file">Export workpaper</a><div class="seg" role="group" aria-label="Which end">${["low", "mid", "high"].map(k => `<button type="button" data-end="${k}" class="${end === k ? "on" : ""}" aria-pressed="${end === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div></div></div>
     ${from != null && to != null && !B.held ? `<div class="move"><span class="from">${vN(from)}</span><span class="muted">→</span><span class="to">${vN(to)}</span><span class="${to - from >= 0 ? "okt" : "warnt"}">${signed(to - from)}</span><span class="small muted">the ${end}${end === "mid" ? ", the midpoint of the low and the high" : ""}</span></div>` : ""}
     ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until the rows below are found: the bridge stops at last year's rebuilt value.</div>` : ""}
     <div class="grid2" style="margin-top:10px"><div id="brChart"></div><div class="scroll"><table class="bridge"><thead><tr><th>Step</th><th class="num">Change</th><th class="num">Value</th></tr></thead><tbody>${rows}</tbody></table>
     ${(B.notes || []).length ? `<p class="small muted">${esc(B.notes.join("; "))}</p>` : ""}</div></div></div>
+  ${rateCard(R)}
+  ${methodsCard(R)}
   ${heldCard(R)}
   ${rowsCard(R)}
   <div class="card" id="cfCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">The forecast cash flows</h2>${state.hl?.years?.length ? hlNote(yearsText(state.hl.years)) : ""}</div><p class="sub">Undiscounted, by financial year, the terminal value left out${R.chart?.left_out?.length ? ` (${esc(R.chart.left_out.join(", "))})` : ""}: last year's model against this year's.</p>
@@ -1552,6 +1554,53 @@ function reviewCard() {
       ${p.years?.length || p.step ? `<div class="row small">${p.years?.length ? `<button class="btn small" type="button" data-hl-years="${esc(p.years.join(","))}">Show ${esc(yearsText(p.years))} on the chart</button>` : ""}${p.step ? `<button class="btn small" type="button" data-hl-step="${esc(p.step)}">Show it on the bridge</button>` : ""}</div>` : ""}</div>`).join("")}
     ${!pts.length && said ? `<p style="margin:10px 0 0">${esc(said)}</p>` : ""}
     <p class="small muted" style="margin:10px 0 0">By the reviewer (${esc(E.reviewer_model)}), reading the facts, the tie, the bridge, the cash flows and the run log end to end.</p></div>`;
+}
+// This year's discount rate: last year's (sourced, checked) unless you set this year's; the roll-forward then runs at
+// it, and the bridge has a step of its own for the move.
+const rateNow = R => R.inputs?.rate?.this_year || null;
+const rateRange = (lo, hi) => [...new Set([lo, hi].filter(x => x != null).sort((a, b) => a - b))].map(vPct).join(" to ");
+function rateCard(R) {
+  const L = R.inputs?.rate?.ends || {}, T = rateNow(R); if (L.low?.value == null && !T) return "";
+  const shown = x => x == null ? "" : (100 * x).toFixed(2);
+  return `<div class="card" id="rateCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">This year's discount rate</h2>${
+      !T ? `<span class="pill">last year's</span>` : T.applied ? `<span class="pill ok">this year's · set by you</span>` : `<span class="pill warn">not applied</span>`}</div>
+    <p class="sub">The roll-forward runs at last year's rate (${esc(rateRange(L.low?.value, L.high?.value) || "not sourced")}) until you set this year's; then the time value, the cash flows and the new forecast stay at last year's, and the rate is a step of its own. The low end of the value is at the higher rate.</p>
+    ${T && !T.applied ? `<div class="callout warn small">${esc(T.why || "")}</div>` : ""}
+    <div class="row small" style="gap:8px;align-items:center"><label>From <input type="text" inputmode="decimal" data-rate-in="lo" value="${shown(T ? T.high : null)}" placeholder="${shown(L.high?.value)}" aria-label="This year's lower discount rate, %" style="width:70px;text-align:right">%</label>
+      <label>to <input type="text" inputmode="decimal" data-rate-in="hi" value="${shown(T ? T.low : null)}" placeholder="${shown(L.low?.value)}" aria-label="This year's higher discount rate, %" style="width:70px;text-align:right">%</label>
+      <button class="btn small primary" type="button" data-rate-set>Set</button>${T ? `<button class="linkbtn" type="button" data-rate-clear>Back to last year's</button>` : ""}</div></div>`;
+}
+function bindRate() {
+  const post = (low, high) => act(async () => {
+    const r = await api(`/api/engagements/${E.id}/this_year_rate`, {method: "POST", body: {low, high}});
+    toast(r.low != null ? `This year's discount rate ${rateRange(r.low, r.high)}: the bridge runs again` : "Back to last year's discount rate"); });
+  document.querySelector("[data-rate-set]")?.addEventListener("click", () => {
+    const v = k => (document.querySelector(`[data-rate-in="${k}"]`)?.value || "").trim();
+    const lo = v("lo"), hi = v("hi");
+    if (!lo && !hi) { toast("Type this year's rate, a range's two ends or one rate, in %"); return; }
+    if ([lo, hi].some(x => x && !isFinite(parseFloat(x)))) { toast("Type the rate as a number, in %"); return; }
+    post(lo ? `${parseFloat(lo)}%` : null, hi ? `${parseFloat(hi)}%` : null); });
+  document.querySelector("[data-rate-clear]")?.addEventListener("click", () => post(null, null));
+}
+// This year's value worked out other ways (engine/methods.py), each against the default; the one you prefer is this
+// year's value, with a bridge step of its own.
+function methodsCard(R) {
+  const M = R.methods; if (!M?.methods?.length) return M?.error ? `<div class="card" id="methodsCard"><h2>Methods</h2><p class="small muted">${esc(M.error)}</p></div>` : "";
+  const d = x => x == null ? `<span class="muted">–</span>` : Math.abs(x) < 0.05 ? `<span class="muted">same</span>` : signed(x);
+  const row = m => { const pref = M.preferred === m.key, def = m.key === M.default;
+    return `<tr class="${pref ? "tot" : ""}"><td><b>${esc(m.label)}</b> ${def ? `<span class="pill">default</span>` : ""}${pref ? ` <span class="pill ok">this year's value</span>` : ""}<div class="small muted">${esc(m.ok ? m.what : m.why || m.what)}</div></td>
+      <td class="num">${m.ok ? vN(m.low) : ""}</td><td class="num">${m.ok ? vN(m.mid) : ""}</td><td class="num">${m.ok ? vN(m.high) : ""}</td>
+      <td class="num">${m.ok ? d(m.vs_default?.mid) : `<span class="muted">not worked out</span>`}</td>
+      <td>${m.ok && !pref ? `<button class="btn small" type="button" data-method="${esc(m.key)}">Prefer</button>` : ""}</td></tr>`; };
+  return `<div class="card" id="methodsCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Methods</h2>${M.ties ? `<span class="pill ok">the recompute ties to the overlay</span>` : `<span class="pill warn">the recompute doesn't tie</span>`}</div>
+    <p class="sub">This year's value worked out other ways, on the same rolled-forward model and rates. The default is the overlay's own formulas with the periods ending on or before the new date cut off; the one you prefer is this year's value, and the bridge has a step for the move to it.${M.flags?.length ? " The overlay's own forecast flags were found and rolled as a method of their own." : ""}</p>
+    <div class="scroll"><table class="stack-sm"><thead><tr><th>Method</th><th class="num">Low</th><th class="num">Mid</th><th class="num">High</th><th class="num">Mid vs default</th><th></th></tr></thead><tbody>${M.methods.map(row).join("")}</tbody></table></div>
+    ${M.preferred !== M.default ? `<p class="small" style="margin:8px 0 0"><button class="linkbtn" type="button" data-method="">Back to the default</button></p>` : ""}</div>`;
+}
+function bindMethods() {
+  document.querySelectorAll("[data-method]").forEach(b => b.onclick = () => act(async () => {
+    const r = await api(`/api/engagements/${E.id}/method`, {method: "POST", body: {key: b.dataset.method || null}});
+    toast(`This year's value by ${r.label.toLowerCase()}${r.default ? " (the default)" : ""}: the bridge runs again`); }));
 }
 // The inputs typed in the overlay outside its discountings (net debt, a cash balance, a declared distribution): held at
 // last year's until you set this year's, each with a suggestion from this year's client model, checked against last
@@ -1655,6 +1704,8 @@ async function rowPicker(row) {
 }
 function bindResult() {
   bindHeld();
+  bindRate();
+  bindMethods();
   document.querySelectorAll("[data-end]").forEach(b => b.onclick = () => { state.bridgeEnd = b.dataset.end; render(); });
   document.querySelectorAll("[data-rowinfo]").forEach(b => b.onclick = () => rowPicker(b.dataset.rowinfo));
   document.querySelectorAll("[data-rowctx]").forEach(bindRowQuick);

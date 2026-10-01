@@ -1138,22 +1138,102 @@ def set_held(eid: int, cell: str, value: float | None, source: str = "typed") ->
     return {"cell": cell, "label": item["label"], "value": value, "was": item["value"], "from": source}
 
 
+def rate_file(eid: int) -> Path:
+    return OUT / "overlays" / f"e{eid}" / "this_year_rate.json"
+
+
+def this_year_rate(eid: int) -> dict:
+    """This year's discount rate as a person set it: {"low", "high" (the low end at the higher rate), "by", "at"},
+    or {} for last year's."""
+    try:
+        return json.loads(rate_file(eid).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _rate_in(v) -> float | None:
+    """A discount rate as typed: 8.9, "8.9%", 0.089 -> 0.089."""
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    t = str(v).replace(",", "").strip()
+    x = float(t.rstrip("%"))
+    x = x / 100 if t.endswith("%") or x >= 1 else x
+    if not 0 < x < 0.5:
+        raise ValueError(f"{v} isn't a discount rate")
+    return x
+
+
+def set_this_year_rate(eid: int, low, high=None) -> dict:
+    """This year's discount rate (low None: back to last year's): a range's two ends, or one rate for both. The low
+    end of the value is at the higher rate, whichever order they're given in. The roll-forward runs at it, and the
+    bridge has a step of its own for it."""
+    a, b = _rate_in(low), _rate_in(high)
+    f = rate_file(eid)
+    if a is None and b is None:
+        f.unlink(missing_ok=True)
+        got = {}
+    else:
+        a, b = (a, b if b is not None else a) if a is not None else (b, b)
+        got = {"low": max(a, b), "high": min(a, b), "by": "you", "at": time.time()}
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(got), encoding="utf-8")
+    if eid in _SESSIONS:
+        _SESSIONS[eid][1]["this_year_rate"] = got
+    _touch(eid)  # the result's inputs changed: the orchestrator works it out again
+    return got
+
+
+def method_file(eid: int) -> Path:
+    return OUT / "overlays" / f"e{eid}" / "method.json"
+
+
+def preferred_method(eid: int) -> str | None:
+    """The method a person prefers for this year's value (methods.py), or None for the default."""
+    try:
+        return json.loads(method_file(eid).read_text(encoding="utf-8")).get("key")
+    except (OSError, ValueError):
+        return None
+
+
+def set_method(eid: int, key: str | None) -> dict:
+    """The method this year's value is worked out by (None: the default). The bridge then has a step of its own
+    for the move from the default to it."""
+    import methods
+    f = method_file(eid)
+    if key in (None, "", methods.DEFAULT):
+        f.unlink(missing_ok=True)
+        key = None
+    elif key not in methods.LABEL:
+        raise ValueError(f"no method {key}: one of {', '.join(methods.LABEL)}")
+    else:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps({"key": key, "by": "you", "at": time.time()}), encoding="utf-8")
+    if eid in _SESSIONS:
+        _SESSIONS[eid][1]["method"] = key
+    _touch(eid)  # the result's inputs changed: the orchestrator works it out again
+    return {"key": key or methods.DEFAULT, "label": methods.LABEL[key or methods.DEFAULT], "default": key is None}
+
+
 def _sync_roll(eid: int, sess, summary: dict) -> None:
     """The roll-forward from the dates as they are now (a file's valuation date can be corrected after the build),
-    and last year's valuation date set on the session."""
+    last year's valuation date and the discountings' cut-off set on the session."""
     import overlay as ovmod
     want = _profile(eid).get("horizon")  # set in the engagement's profile, else worked out
     if getattr(sess, "horizon_set", None) != want:
         sess.horizon_set = want
         sess._pshift.clear()
     summary["held_values"] = held_values(eid)  # this year's figures a person set, on this year's feed
+    summary["this_year_rate"] = this_year_rate(eid)  # and this year's discount rate (result.this_year_rate)
+    summary["method"] = preferred_method(eid)  # and the method this year's value is worked out by (methods.py)
     roll = summary.get("roll")
     if not roll or not summary["wiring"].get("current"):
         return
-    if "valuation_date_reads" not in roll:  # built before every date the discountings read was moved: work them out
+    if "valuation_date_reads" not in roll or "cutoff" not in roll:
+        # built before every date the discountings read was moved, or before their periods were cut off: work them out
         lever = next((l for l in summary.get("levers") or [] if l["key"] == "valuation_date"), None)
         roll.update(ovmod.deep(ovmod.date_cells, summary["wiring"]["overlay"]["db_path"], summary.get("outputs") or [],
                                summary.get("sheets"), lever))
+    sess.cutoffs = [(*ovmod.parse_a1(c), ovmod.serial(ovmod.date.fromisoformat(d))) for c, d in roll.get("cutoff") or []]
     now = _dates(eid)
     d = now["dates"]
     if d != roll.get("dates") or roll.get("plan") != ovmod.ROLL_PLAN or roll.get("horizon_set") != want:

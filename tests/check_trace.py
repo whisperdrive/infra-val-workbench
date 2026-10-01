@@ -250,6 +250,93 @@ def roll_dates_check() -> None:
           f"discountings at {new:%d %B %Y}, {want:,.1f} each)")
 
 
+def cutoff_check() -> None:
+    """Rolled forward, the periods before the new valuation date are cut off the discounting. The overlay (inside
+    last year's client model) discounts its client sheet's cash flows with a factor worked out from the date, and
+    last year's model has nothing on or before last year's date, so the overlay never needed a cut-off. This year's
+    model, on the same quarters (a fixed horizon), has the year between the two dates filled in: without the cut-off
+    those quarters are compounded into this year's value; with it, the value is the quarters after the new date (the
+    one ending on it is past too, the convention dcf keeps; kept, it's in undiscounted: a method of its own)."""
+    import overlay as ov
+    import xlcompile
+    from xlruntime import serial
+    out = Path(tempfile.mkdtemp(prefix="trace_cutoff_"))
+    vd, new, rate = date(2025, 6, 30), date(2026, 6, 30), 0.085
+    ends, y, m = [], 2024, 9
+    for _ in range(24):  # quarters, 30 September 2024 to 30 June 2030
+        ends.append(date(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1))
+        y, m = (y + 1, 3) if m == 12 else (y, m + 3)
+    flows = {"prior": [0.0 if e <= vd else 50.0 + 2 * k for k, e in enumerate(ends)],
+             "current": [0.0 if e <= vd else 52.0 + 2 * k for k, e in enumerate(ends)]}
+    paths = {}
+    for which in ("prior", "current"):
+        wb = xlsxwriter.Workbook(out / f"{which}.xlsx")
+        dt = wb.add_format({"num_format": "dd-mmm-yy"})
+        cl = wb.add_worksheet("Client")
+        cl.write(5, 1, "Period ending")
+        cl.write(9, 1, "Distributions to equity")
+        for k, e in enumerate(ends):
+            cl.write_datetime(5, 3 + k, e, dt)
+            cl.write_number(9, 3 + k, flows[which][k])
+        if which == "prior":  # the overlay, inside last year's client model
+            va = wb.add_worksheet("Val")
+            va.write(3, 1, "Valuation date")
+            va.write_datetime(3, 2, vd, dt)
+            va.write(4, 1, "Discount rate")
+            va.write_number(4, 2, rate)
+            for r, label in ((5, "Period ending"), (9, "Cash flow"), (12, "Discount factor"), (13, "Present value"),
+                             (15, "Equity value")):
+                va.write(r, 1, label)
+            total = 0.0
+            for k, e in enumerate(ends):
+                c = COL(3 + k)
+                f = 1 / (1 + rate) ** ((e - vd).days / 365)
+                total += flows["prior"][k] * f
+                va.write_formula(f"{c}6", f"=Client!{c}6", dt, (e - date(1899, 12, 30)).days)
+                va.write_formula(f"{c}10", f"=Client!{c}10", None, flows["prior"][k])
+                va.write_formula(f"{c}13", f"=1/(1+$C$5)^(({c}6-$C$4)/365)", None, f)
+                va.write_formula(f"{c}14", f"={c}10*{c}13", None, flows["prior"][k] * f)
+            va.write_formula("C16", f"=SUM(D14:{COL(3 + len(ends) - 1)}14)", None, total)
+        wb.close()
+        paths[which] = build_map.main(str(out / f"{which}.xlsx"), str(out / f"db_{which}"))["db"]
+    db = paths["prior"]
+    src, _ = xlcompile.compile_overlay(db, ["Val"])
+    mod = out / "overlay.py"
+    mod.write_text(src)
+    sess = ov.Session(str(mod), db, ["Val"], None, paths["current"], None, ["Client"])
+    roll = ov.plan_roll(sess, None, {"sheets": ["Val"]}, True, vd.isoformat(), None, new.isoformat())
+    roll.update(ov.date_cells(db, [{"cell": "Val!C16"}], ["Val"], None))
+    assert roll["months"] == 12 and roll["fixed_horizon"] and roll["valuation_date_cells"] == ["Val!C4"], roll
+    assert len(roll["cutoff"]) == len(ends) and roll["cutoff"][0] == ["Val!D14", ends[0].isoformat()], roll["cutoff"][:2]
+
+    def at_new(cutoffs, keep=False):
+        sess.cutoffs, sess.keep_on_date = cutoffs, keep
+        sess.configure("current", {("Val", 4, 3): serial(new)}, roll["months"])
+        v = sess.values([("Val", 16, 3)])[0]
+        n_cut = len(sess.cut)
+        sess.configure("workbook")
+        sess.keep_on_date = False
+        return v, n_cut
+    pv = lambda keep: sum(x / (1 + rate) ** ((e - new).days / 365) for x, e in zip(flows["current"], ends) if keep(e))
+    want, on, past = pv(lambda e: e > new), pv(lambda e: e == new), pv(lambda e: vd < e < new)
+    cut = [(*ov.parse_a1(c), serial(date.fromisoformat(d))) for c, d in roll["cutoff"]]
+    got, n_cut = at_new(cut)
+    kept, n_kept = at_new(cut, keep=True)
+    without, _ = at_new([])
+    assert abs(got - want) < 1e-6, (got, want)
+    assert abs(kept - (want + on)) < 1e-6 and on > 0 and n_kept == n_cut - 1, (kept, want, on)
+    assert abs(without - (want + on + past)) < 1e-6 and past > 0, (without, want, past)
+    assert n_cut == sum(1 for e in ends if e <= new), n_cut  # the quarter ending on the new date is cut too
+    sess.base_vd = serial(vd)  # at last year's date (the zero-roll check) the cut-off is last year's: nothing of it
+    sess.cutoffs = cut
+    sess.configure("current", {}, 0)
+    assert {k[2] for k in sess.cut} == {c for (_, _, c, e) in cut if e <= serial(vd)}, sorted(sess.cut)
+    sess.configure("workbook")
+    print(f"cut-off: ok (rolled a year onto a fixed horizon, the {sum(1 for e in ends if vd < e <= new)} quarters to the "
+          f"new date are cut off this year's discounting: {got:,.1f}, not {without:,.1f} with them compounded in; the one "
+          f"ending on the date kept, {kept:,.1f})")
+
+
 def multiple_check() -> None:
     """Where the report's terminal value is an exit multiple: the multiple is the cell the terminal value's formula
     reads in M x X, the terminal value recomputed from it, the metric X what the report says it's a multiple of, the
@@ -313,4 +400,5 @@ if __name__ == "__main__":
     sourcing_check()
     growth_check()
     roll_dates_check()
+    cutoff_check()
     multiple_check()

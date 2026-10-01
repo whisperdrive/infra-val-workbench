@@ -383,7 +383,7 @@ def report_content(v: dict, n: dict) -> dict:
     share = mid["franking"] / mid["equity"]
     return {
         "title": "Asset A Pty Ltd",
-        "subtitle": f"Independent valuation as at {VD:%-d %B %Y}  |  Project Alpha",
+        "subtitle": f"Independent valuation as at {VD.day} {VD:%B %Y}  |  Project Alpha",
         "client": "Holdco A Pty Ltd",
         "letter": [
             "Private and confidential",
@@ -400,7 +400,7 @@ def report_content(v: dict, n: dict) -> dict:
         ],
         "summary": [
             "We have been engaged by Holdco A Pty Ltd to assess the fair market value of 100% of the ordinary",
-            f"equity in Asset A Pty Ltd (the Company) as at {VD:%-d %B %Y} (the Valuation Date).",
+            f"equity in Asset A Pty Ltd (the Company) as at {VD.day} {VD:%B %Y} (the Valuation Date).",
             f"We have assessed the equity value, on an ex-distribution basis, to be in the range of A${m(lo['equity'])}m",
             f"to A${m(hi['equity'])}m, with a midpoint of A${m(mid['equity'])}m. On a cum-distribution basis, including",
             f"the declared distribution of A${m(DISTRIBUTION)}m, the midpoint would be A${m(mid['cum'])}m.",

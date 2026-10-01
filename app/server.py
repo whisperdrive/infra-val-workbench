@@ -220,6 +220,32 @@ async def set_held(eid: int, body: Held):
     return got
 
 
+class Rate(BaseModel):
+    low: float | str | None = None   # this year's discount rate: a range's ends in either order, or one rate
+    high: float | str | None = None  # (8.9, "8.9%" or 0.089); both null: back to last year's
+
+
+@app.post("/api/engagements/{eid}/this_year_rate")
+async def set_rate(eid: int, body: Rate):
+    """This year's discount rate: the roll-forward runs at it, with a bridge step of its own."""
+    got = await _run(workbench.set_this_year_rate, eid, body.low, body.high)
+    orchestrator.person(eid, "result", "this year's discount rate: " + (
+        f"{100 * got['high']:.2f}% to {100 * got['low']:.2f}%" if got else "back to last year's"))
+    return got
+
+
+class Method(BaseModel):
+    key: str | None = None  # methods.METHODS' key; null: the default
+
+
+@app.post("/api/engagements/{eid}/method")
+async def set_method(eid: int, body: Method):
+    """The method this year's value is worked out by (the methods inventory): the bridge has a step of its own for it."""
+    got = await _run(workbench.set_method, eid, body.key)
+    orchestrator.person(eid, "result", f"this year's value by: {got['label']}" + (" (the default)" if got["default"] else ""))
+    return got
+
+
 @app.post("/api/engagements/{eid}/files")
 async def upload(eid: int, file: UploadFile = File(...), role: str | None = Form(None)):
     """A file for the engagement; with role, placed in that role by you (the orchestrator fills in the others)."""

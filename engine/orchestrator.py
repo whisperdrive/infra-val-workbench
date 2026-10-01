@@ -148,7 +148,9 @@ def inputs(eid: int, name: str, snap: dict, holds: bool = True) -> str:
         return _h(rows)
     res = [rows, equity_pick(eid), (snap.get("profile") or {}).get("fy_end_month"),
            sorted([f["key"], f.get("value_text"), f.get("status")] for f in snap["facts"]),
-           _file_state(wb.held_file(eid))]  # this year's figures a person set for held inputs
+           _file_state(wb.held_file(eid)),  # this year's figures a person set for held inputs
+           _file_state(wb.rate_file(eid)),  # and this year's discount rate
+           _file_state(wb.method_file(eid))]  # and the method this year's value is worked out by
     return _h(res) if name == "result" else _h(["review", result_digest(eid)])
 
 
@@ -814,6 +816,17 @@ def _result_job(eid: int, key: str):
                           f"; {sg['value']:,.1f} in this year's model" + (", checked" if sg["status"] == "checked" else "")
                           if sg.get("value") is not None else ""),
                       "detail": sg.get("text") or "", "go": {"step": "result", "anchor": "heldCard"}})
+    inv = res.get("methods") or {}
+    if inv.get("asked") and inv.get("asked") != inv.get("preferred"):
+        m = next((x for x in inv.get("methods") or [] if x["key"] == inv["asked"]), {})
+        needs.append({"id": "method", "stage": "result", "severity": "check",
+                      "title": "The preferred method can't be worked out here: this year's value is the default's",
+                      "detail": m.get("why") or inv.get("error") or "", "go": {"step": "result", "anchor": "methodsCard"}})
+    rt = ((res.get("inputs") or {}).get("rate") or {}).get("this_year") or {}
+    if rt and not rt.get("applied"):
+        needs.append({"id": "rate-this-year", "stage": "result", "severity": "check",
+                      "title": "This year's discount rate isn't applied: the roll-forward is at last year's",
+                      "detail": rt.get("why") or "", "go": {"step": "result", "anchor": "rateCard"}})
     names = {"rate": "discount rate", "growth": "terminal growth rate", "multiple": "exit multiple",
              "franking": "franking credit utilisation"}
     for key, what in names.items():
@@ -871,7 +884,12 @@ as franking credits). The inputs typed in the overlay outside the discountings (
 distribution, an adjustment) stay at last year's figures unless a person set this year's: see held_inputs, and the
 "held" step of the bridge where they were set. So the time value is about the discount rate times the discounted
 streams (not the equity value) over the years between the dates, and the cash flows paid are the first year of every
-stream. The discount rate is last year's unless a person set another.
+stream (the periods ending on or before the new valuation date: they're cut off this year's discounting). The time
+value, the cash flows and the new forecast are at last year's discount rate; where a person set this year's
+(discount_rate_this_year), the "rate" step is the move from last year's rate to it, else it's nil. methods is this
+year's value worked out other ways (the period ending on the date kept, mid-period, mid-year, the other day count,
+the mid at the midpoint rate), each against the default; where a person prefers one, the "method" step is the move
+to it. A method far from the default is a convention, not an error: say so only where the preferred one looks wrong.
 
 The run:
 {run}"""
@@ -896,6 +914,11 @@ def _review_job(eid: int, key: str):
                                "this_year": (res.get("bridges") or {}).get("valuation_date")},
            "cash_flows_by_year": ch.get("series"), "this_year_gaps_reliable": ((res.get("figures") or {}).get("gaps") or {}).get("reliable"),
            "assumptions": res.get("assumptions"),
+           "discount_rate_this_year": {k: (((res.get("inputs") or {}).get("rate") or {}).get("this_year") or {}).get(k)
+                                       for k in ("low", "high", "was", "applied", "why")},
+           "methods": {"preferred": (res.get("methods") or {}).get("preferred"),
+                       "each": [{k: m.get(k) for k in ("key", "label", "mid", "vs_default", "why")}
+                                for m in (res.get("methods") or {}).get("methods") or []]},
            "terminal_value_basis": {k: (res.get("terminal") or {}).get(k) for k in ("label", "phrase", "page", "multiple")},
            "held_inputs": [{"input": h["label"], "last_year": h["value"], "this_year": h.get("this_year"),
                             "still_held": h["held"], "suggested_from_this_years_model": (h.get("suggestion") or {}).get("value")}
@@ -964,7 +987,8 @@ KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact"
          ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),
          ("rate-", "check-input", "A model input to check"), ("growth-", "check-input", "A model input to check"),
          ("franking-", "check-input", "A model input to check"), ("tie-", "check-tie", "A tie to check"),
-         ("review-", "review-point", "A review point"), ("failed-", "retry", "A step that failed"))
+         ("review-", "review-point", "A review point"), ("failed-", "retry", "A step that failed"),
+         ("method", "check-method", "A method to check"))
 
 
 def dress(n: dict) -> dict:

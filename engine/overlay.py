@@ -263,6 +263,9 @@ class Session:
         self.horizon_set = None  # "fixed" / "rolling": the engagement's profile says, not worked out (fixed_horizon)
         self.mode = None
         self.holds = {}  # (sheet, row, col) -> value: cells held at Excel's value on every feed (the doctor's fixes)
+        self.cutoffs = []  # (sheet, row, col, period end serial): the discountings' per-period cells (cutoff_cells)
+        self.cut = set()  # those of them cut off on the current feed (_cut_off)
+        self.keep_on_date = False  # the period ending on the new valuation date stays in (a method: methods.py)
         self.configure("workbook")
 
     # feeds
@@ -300,7 +303,29 @@ class Session:
             raise ValueError(f"unknown feed {mode}")
         for k, v in (overrides or {}).items():
             B.overrides[k] = v
+        self.cut = self._cut_off(shift_months) if mode == "current" else set()
         B.range_cache.clear()
+
+    def _cut_off(self, months: int) -> set:
+        """On this year's feed, a discounting's periods that end on or before the new valuation date count as nil.
+        Last year's overlay discounts what its client model forecast after last year's date, and needed no cut-off of
+        its own where that model had nothing before it; rolled forward, the periods up to the new date are past (the
+        bridge's cash flows paid), and a factor worked out from the date would compound them into the value instead.
+        The period ending on the date is past too (the convention dcf.factors keeps, and a valuer zeroing the
+        overlay's own period flags by hand does); keep_on_date leaves it in, undiscounted (methods.py). A cell a
+        person or the feed set is left as set. -> the cells cut off."""
+        if not self.cutoffs or self.base_vd is None:
+            return set()
+        new_vd = add_months(self.base_vd, months)
+        shift, cut = {}, set()
+        for s, r, c, end in self.cutoffs:
+            if s not in shift:
+                shift[s] = self.period_shift(self.ov if s in self.sheets else (self.prior or self.ov), s)
+            e = add_months(end, shift[s]) if shift[s] else end
+            if (e < new_vd or e == new_vd and not self.keep_on_date) and (s, r, c) not in self.B.overrides:
+                self.B.overrides[(s, r, c)] = 0.0
+                cut.add((s, r, c))
+        return cut
 
     def _rolled(self, prior: Workbook, s, r, c):
         """Prior client cell -> the current model's value: the same line item (found by rowfind, wherever it is
@@ -577,29 +602,63 @@ def build(out_dir: Path, overlay: dict, prior: dict | None, current: dict | None
     return summary, sess
 
 
-def discount_date_cells(path: str, outputs: list[dict], sheets=None) -> tuple[list[str], list[str]]:
+def _cores(db, outputs: list[dict]) -> list[dict]:
+    """The discountings under the outputs (dcftrace), each once, in the order they're met."""
+    import dcftrace
+    out, seen = [], set()
+    for o in outputs[:8]:
+        try:
+            got = dcftrace.cores(dcftrace.trace(db, o["cell"]))
+        except ValueError:
+            continue
+        for c in got:
+            if (c["cell"], c["call"]) not in seen:
+                seen.add((c["cell"], c["call"]))
+                out.append(c)
+    return out
+
+
+def discount_date_cells(path: str, outputs: list[dict], sheets=None,
+                        cores: list[dict] | None = None) -> tuple[list[str], list[str]]:
     """The valuation dates the discountings under the outputs read (dcftrace), and the cells to move for them: each
     followed back through plain references (DCF_High!C3 = Inputs!C4) to the cell it's typed in, so a copy and
     everything else reading the date move together; a discounting with a date of its own has it moved too.
-    -> (the cells to move, the cells the discountings read)."""
+    cores: the discountings, where they're traced already. -> (the cells to move, the cells the discountings read)."""
     import dcf
-    import dcftrace
     move, read = [], []
     with _ro(path) as db:
-        for o in outputs[:8]:
-            try:
-                cores = dcftrace.cores(dcftrace.trace(db, o["cell"]))
-            except ValueError:
+        for c in cores if cores is not None else _cores(db, outputs):
+            v = (c.get("inputs") or {}).get("valuation_date")
+            r = dcf._ref(v, "") if isinstance(v, str) else None
+            if not r:
                 continue
-            for c in cores:
-                v = (c.get("inputs") or {}).get("valuation_date")
-                r = dcf._ref(v, "") if isinstance(v, str) else None
-                if not r:
-                    continue
-                at, root = _a1(r[0], r[1], r[2]), _typed_in(db, r[0], r[1], r[2], sheets)
-                read += [at] if at not in read else []
-                move += [root] if root not in move else []
+            at, root = _a1(r[0], r[1], r[2]), _typed_in(db, r[0], r[1], r[2], sheets)
+            read += [at] if at not in read else []
+            move += [root] if root not in move else []
     return move, read
+
+
+def cutoff_cells(path: str, outputs: list[dict], cores: list[dict] | None = None) -> list[list[str]]:
+    """Each discounting's per-period cells under the outputs, with the date its period ends, for the roll's cut-off
+    (Session._cut_off): [[cell, period end (ISO)]]. Its present-value row where it sums one, else its factor row,
+    else its cash flows (the factors worked out in its formula). Not an XNPV or an NPV: they count from their own
+    first date or column, which the roll doesn't move."""
+    import dcf
+    out, seen = [], set()
+    with _ro(path) as db:
+        for c in cores if cores is not None else _cores(db, outputs):
+            if c.get("kind") in ("xnpv", "npv") or not c.get("inputs"):
+                continue
+            try:
+                sheet, r, cols = dcf._row_range(db, c.get("pv_row") or c.get("factor_row") or c["inputs"]["cashflow"][0])
+                ends, _ = dcf.period_ends(db, sheet, cols, c["inputs"].get("dates"))
+            except (ValueError, KeyError, IndexError):
+                continue
+            for col in cols:
+                if col in ends and (sheet, r, col) not in seen:
+                    seen.add((sheet, r, col))
+                    out.append([_a1(sheet, r, col), ends[col].isoformat()])
+    return out
 
 
 def _typed_in(db, sheet: str, row: int, col: int, sheets=None, hops: int = 8) -> str:
@@ -621,12 +680,15 @@ def _typed_in(db, sheet: str, row: int, col: int, sheets=None, hops: int = 8) ->
 def date_cells(path: str, outputs: list[dict], sheets, lever: dict | None) -> dict:
     """The roll's valuation date cells: {"valuation_date_cells" (to move), "valuation_date_reads" (the cells the
     discountings read, checked on this year's feed), "valuation_date_cell" (the first, shown), "valuation_date_by_label"
-    (none traced: the cell labelled as the valuation date is moved, unconfirmed)}."""
-    move, read = discount_date_cells(path, outputs, sheets)
+    (none traced: the cell labelled as the valuation date is moved, unconfirmed), "cutoff" (each discounting's
+    per-period cells and their period ends: cutoff_cells)}."""
+    with _ro(path) as db:
+        cores = _cores(db, outputs)
+    move, read = discount_date_cells(path, outputs, sheets, cores)
     if not move and lever:
         move = [lever["cell"]]
     return {"valuation_date_cells": move, "valuation_date_reads": read, "valuation_date_cell": move[0] if move else None,
-            "valuation_date_by_label": bool(move) and not read}
+            "valuation_date_by_label": bool(move) and not read, "cutoff": cutoff_cells(path, outputs, cores)}
 
 
 def horizon(prior: Workbook, current: Workbook, sheets, sheet_for=None) -> tuple[str | None, dict]:
@@ -725,11 +787,12 @@ def plan_roll(sess: Session, prior: dict | None, overlay: dict, same_file: bool,
 
 
 def _feed(summary: dict, mode: str, valuation_date: str | None, months: int | None,
-          held: bool = True) -> tuple[dict, dict | None, int]:
+          held: bool = True, rates: bool = True) -> tuple[dict, dict | None, int]:
     """A feed's own settings, the base that a person's changes go on top of: rolled forward, the months to roll,
-    the new valuation date on its lever, and this year's figures a person set for inputs otherwise held at last
-    year's (held.py; held=False leaves them at last year's, for the bridge's step). -> (overrides, roll info or None,
-    months)."""
+    the new valuation date on its lever, this year's figures a person set for inputs otherwise held at last
+    year's (held.py; held=False leaves them at last year's, for the bridge's step), and this year's discount rate
+    where a person set it, on the cells the discountings read for it (result.this_year_rate; rates=False leaves
+    last year's, for the bridge's step and the zero-roll check). -> (overrides, roll info or None, months)."""
     if mode != "current":
         return {}, None, 0
     roll = summary.get("roll") or {}
@@ -743,6 +806,8 @@ def _feed(summary: dict, mode: str, valuation_date: str | None, months: int | No
     if held:
         defaults.update({parse_a1(c): float(x["value"]) for c, x in (summary.get("held_values") or {}).items()
                          if x.get("value") is not None})
+    if rates:
+        defaults.update({parse_a1(c): float(v) for c, v in (summary.get("rate_values") or {}).items()})
     return defaults, {"months": months, "valuation_date": valuation_date, "valuation_date_cell": vd_cells[0] if vd_cells
                       else None, "valuation_date_cells": vd_cells}, months
 

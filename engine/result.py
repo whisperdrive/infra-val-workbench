@@ -111,8 +111,8 @@ def _pair(ms: list[dict]) -> dict | None:
 # ---- values on each feed, and whether this year's can be trusted -------------------------------------------------
 
 def _read(sess, summary: dict, feed: str, cells: list[tuple], vd: str | None = None, months: int | None = None,
-          held: bool = True):
-    defaults, roll, months = ov._feed(summary, feed, vd, months, held)
+          held: bool = True, rates: bool = True):
+    defaults, roll, months = ov._feed(summary, feed, vd, months, held, rates)
     sess.configure(feed, defaults, months or 0)
     return dict(zip(cells, sess.values(cells))), roll, defaults, months
 
@@ -133,8 +133,13 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
         out["gaps"] = _gaps(sess, summary, cells)
         got, out["roll"], _, _ = _read(sess, summary, "current", keys)
         out["this_year"] = {c: ov._show(got[k]) for c, k in zip(cells, keys)}
+        out["cut_off"] = len(sess.cut)  # the discountings' periods before the new date, cut off on this year's feed
+        if summary.get("rate_values"):
+            got, _, _, _ = _read(sess, summary, "current", keys, rates=False)  # at last year's rate: the rate's own step
+            out["this_year_last_rate"] = {c: ov._show(got[k]) for c, k in zip(cells, keys)}
         if any(x.get("value") is not None for x in (summary.get("held_values") or {}).values()):
-            got, _, _, _ = _read(sess, summary, "current", keys, held=False)  # the inputs a person set, left at last year's
+            # the inputs a person set left at last year's, and the rate too: the roll-forward's steps end here
+            got, _, _, _ = _read(sess, summary, "current", keys, held=False, rates=False)
             out["this_year_held"] = {c: ov._show(got[k]) for c, k in zip(cells, keys)}
         if out["roll"]:
             tl = sess.rolled_timeline(out["roll"]["months"] or 0)
@@ -166,7 +171,8 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
             if rule:
                 sess.derived[(s_, r_)] = rule
     keys = [ov.parse_a1(c) for c in cells]
-    this, info, _, _ = _read(sess, summary, "current", keys)
+    # at last year's discount rate, wherever a person set this year's: a new rate isn't a row matched wrongly
+    this, info, _, _ = _read(sess, summary, "current", keys, rates=False)
     roll = summary.get("roll") or {}
     date_hold = bool(roll.get("date_check"))
     # every discounting under the figures reads this year's valuation date on this year's feed (not one of them
@@ -199,7 +205,7 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
     reads = len(sess.client_reads)
     share = 1 - len(sess.unmatched) / reads if reads else 0.0  # nothing read of this year's model: nothing found
     pvd = roll.get("prior_valuation_date")
-    zero = this if date_hold else (_read(sess, summary, "current", keys, pvd, 0)[0] if pvd else None)
+    zero = this if date_hold else (_read(sess, summary, "current", keys, pvd, 0, rates=False)[0] if pvd else None)
     last, _, _, _ = _read(sess, summary, "prior" if summary["wiring"].get("prior") else "workbook", keys)
     by_cell = {}
     for c, k in zip(cells, keys):
@@ -253,6 +259,49 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
                            "confidence": ex(s_, r_)["confidence"], "how": ex(s_, r_)["how"]} for s_, r_ in weak_rows],
             "timing_open": [{"row": f"{s_}!r{r_}", "label": labels.get((s_, r_), ""), "found": found((s_, r_))}
                             for s_, r_ in timing_open]}
+
+
+# ---- this year's discount rate -----------------------------------------------------------------------------------
+
+def this_year_rate(summary: dict, asm: dict, facts: list[dict]) -> dict | None:
+    """This year's discount rate where a person set it (workbench.set_this_year_rate: the low end at the higher rate),
+    put on the cells each end's discountings read for it (sourced.rate, followed to the input), and so on this year's
+    feed (summary["rate_values"], read by overlay._feed). All or nothing: where an end's rate isn't sourced to a cell,
+    or the low and the high read one cell, it isn't applied, and says why. None where none is set.
+    -> {"low", "high", "was" (last year's, by end), "cells" ({cell: this year's rate}), "applied", "why"}."""
+    want = summary.get("this_year_rate") or {}
+    summary["rate_values"] = {}
+    if want.get("low") is None or want.get("high") is None:
+        return None
+    ends = sourced.rate(asm, facts)["ends"]
+    cells, was, why = {}, {}, []
+    for e in ("low", "high"):
+        x = ends.get(e) or {}
+        if not x.get("sourced"):
+            why.append(f"the {e} end's discount rate isn't sourced to a cell")
+            continue
+        was[e] = x["value"]
+        for c in x.get("cells") or [x["cell"]]:
+            if c in cells and abs(cells[c] - want[e]) > 1e-12:
+                why.append(f"the low and the high read one discount rate cell ({c})")
+            cells[c] = want[e]
+    if why:
+        cells = {}
+    summary["rate_values"] = cells
+    return {"low": want["low"], "high": want["high"], "was": was, "cells": cells, "applied": bool(cells),
+            "why": "; ".join(why) or None, "by": want.get("by")}
+
+
+def _range_pct(lo: float | None, hi: float | None) -> str:
+    """Two ends' rates as the report prints a range, the lower first: 7.90% to 8.90%."""
+    xs = sorted(x for x in (lo, hi) if x is not None)
+    return " to ".join(f"{100 * x:.2f}%" for x in dict.fromkeys(xs))
+
+
+def rate_label(rt: dict) -> str:
+    was = rt.get("was") or {}
+    return (f"Discount rate: this year's, {_range_pct(rt.get('low'), rt.get('high'))}"
+            + (f" (last year's {_range_pct(was.get('low'), was.get('high'))})" if was else ""))
 
 
 # ---- the bridge --------------------------------------------------------------------------------------------------
@@ -355,16 +404,20 @@ def bridges(sess, summary: dict, head: dict, where: dict, figs: dict) -> dict:
             traced = _traced(db, cell)
             need = _need(db, *traced) if traced and traced[1] else set()
             prior_db = _patched(sess, summary, db, figs["feeds"]["rebuilt"], need)
-            # the steps in the overlay's units, then shown in the report's
-            before = (figs.get("this_year_held") or figs["this_year"])[cell]  # the inputs a person set: a step of their own
+            # the steps in the overlay's units, then shown in the report's; the inputs a person set and this year's
+            # discount rate are steps of their own, after the roll-forward
+            at_rate = (figs.get("this_year_last_rate") or figs["this_year"])[cell]
+            before = (figs.get("this_year_held") or {}).get(cell, at_rate)
             raw, note = _steps(prior_db, traced, figs["rebuilt"][cell], before, vd1)
             steps += [{**x, "value": unit(x["value"])} for x in raw]
             if figs.get("this_year_held"):
                 names = ", ".join(x.get("label") or c for c, x in (summary.get("held_values") or {}).items()
                                   if x.get("value") is not None)
                 steps.append({"key": "held", "label": f"This year's figures for inputs held at last year's ({names})",
-                              "value": v2 - unit(before)})
-            steps.append({"key": "rate", "label": "Discount rate: last year's, unchanged", "value": 0.0})
+                              "value": unit(at_rate) - unit(before)})
+            rt = figs.get("rate") or {}
+            steps.append({"key": "rate", "label": rate_label(rt) if figs.get("this_year_last_rate") else
+                          "Discount rate: last year's, unchanged", "value": v2 - unit(at_rate)})
             steps.append({"key": "this_year", "label": f"This year, rolled forward{f' to {vd1[:10]}' if vd1 else ''}",
                           "value": v2, "total": True})
             if note:
@@ -515,10 +568,10 @@ def _end_split(db, cs: list[dict]) -> dict:
     main, fr, other = _streams(cs)
     if not main:
         return {}
+    pv = lambda c: dcf.compute(db, **{**c["inputs"], "compare_to": None}, fix=False)["pv"]
     out = _split(db, main)
-    out["franking"] = sum(dcf.compute(db, **{**c["inputs"], "compare_to": None}, fix=False)["pv"] for c in fr) if fr else None
-    out["other"] = [{"cell": c["cell"], "label": c.get("cashflow_label"),
-                     "pv": dcf.compute(db, **{**c["inputs"], "compare_to": None}, fix=False)["pv"]} for c in other]
+    out["franking"] = sum(pv(c) for c in fr) if fr else None
+    out["other"] = [{"cell": c["cell"], "label": c.get("cashflow_label"), "pv": pv(c)} for c in other]
     out["main_label"] = main.get("cashflow_label")
     return out
 
@@ -676,7 +729,10 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
         return {"stop": "not_located", "head": head, "candidates": candidates(summary, head),
                 "why": "the report's equity value (low and high) wasn't found in the overlay"}
     cells = list(dict.fromkeys(x for x in (where["low"], where["high"], where.get("mid")) if x))
+    asm = assumptions(summary, where)
+    rate_now = this_year_rate(summary, asm, facts)  # on this year's feed from here on, where it's applied
     figs = ov.deep(figures, sess, summary, cells)
+    figs["rate"] = rate_now
     if where.get("basis") == "cum" and head["basis"] != "cum" and head.get("other"):
         head = {**head, **{k: head["other"][k] for k in ("low", "high")}, "basis": "cum",
                 "texts": head["other"]["texts"], "why": head["why"] + ["the overlay gives the cum-distribution value"]}
@@ -700,19 +756,28 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
         rec = {"rows": [], "error": f"{type(ex).__name__}: {ex}"}
     ch = ov.deep(chart, sess, summary, where, figs, fy_end)
     this = {e: unit((figs.get("this_year") or {}).get(where[e])) for e in ("low", "high")} if figs.get("this_year") else None
-    asm = assumptions(summary, where)
     with rodb.connect(summary["wiring"]["overlay"]["db_path"]) as db:
         traced = {e: (_traced(db, where[e]) or (None, []))[1] for e in ("low", "high")}
     import context
     terminal = keyfacts.terminal_method(facts, context.terminal(markdown))  # how the report works out its terminal value
     inputs = ov.deep(sourced.check, sess, summary, where, facts, asm, traced, unit, terminal)
+    inputs["rate"]["this_year"] = rate_now  # last year's is sourced and checked; this year's is a person's
     held_inputs = ov.deep(held_list, sess, summary, where, figs)
+    this_year = ({**this, "mid": (this["low"] + this["high"]) / 2 if this["low"] is not None and this["high"] is not None
+                  else None} if this and not br["held"] else None)
+    inv = None
+    if this_year and this_year["mid"] is not None:  # this year's value worked out the other ways (methods.py)
+        import methods
+        try:
+            inv = ov.deep(methods.inventory, sess, summary, where, unit, rate_now, summary.get("method"))
+            this_year = methods.apply(br, inv) or this_year  # the preferred method's, with its own bridge step
+        except Exception as ex:  # beside the value, not in its way
+            inv = {"methods": [], "default": methods.DEFAULT, "preferred": methods.DEFAULT, "asked": summary.get("method"),
+                   "error": f"{type(ex).__name__}: {ex}"}
     return {"head": head, "where": where, "tie": tie, "figures": figs, "bridges": br, "chart": ch, "reconcile": rec,
-            "assumptions": asm, "inputs": inputs, "held": held_inputs, "terminal": terminal,
+            "assumptions": asm, "inputs": inputs, "held": held_inputs, "terminal": terminal, "methods": inv,
             "values": {"report": {e: head[e] for e in ("low", "mid", "high")},
                        "rebuilt": {"low": tie["low"]["rebuilt"], "high": tie["high"]["rebuilt"],
                                    "mid": (tie["low"]["rebuilt"] + tie["high"]["rebuilt"]) / 2
                                    if tie["low"]["rebuilt"] is not None and tie["high"]["rebuilt"] is not None else None},
-                       "this_year": ({**this, "mid": (this["low"] + this["high"]) / 2
-                                      if this["low"] is not None and this["high"] is not None else None}
-                                     if this and not br["held"] else None)}}
+                       "this_year": this_year}}
