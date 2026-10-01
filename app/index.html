@@ -371,6 +371,7 @@ dialog#uploadDlg { border: 1px solid var(--rule-strong); border-radius: 10px; ba
       <button type="button" role="menuitem" id="newEng">New engagement</button>
       <button type="button" role="menuitem" id="modelsBtn" data-e aria-haspopup="true" aria-expanded="false" title="Which Azure models extract, review and decide">Models…</button>
       <button type="button" role="menuitem" id="callsBtn" data-e>Tokens and the call log</button>
+      <button type="button" role="menuitem" id="diagMenu" data-e title="The run described without a word of the client's: counts, yes / no, ratios, dates and the app's own words. Safe to paste where the files can't go.">Export diagnostics (anonymised)</button>
       <button type="button" role="menuitem" id="wpMenu" data-e data-r title="The result, the bridge, the cash flows, the inputs and their checks, the facts, the review and the run log, as an Excel file">Export the workpaper (Excel)</button>
       <button type="button" role="menuitem" id="delEng" class="danger" data-e title="Delete this engagement and everything worked out for it, to run the same files again from the start">Delete this engagement…</button>
     </div>
@@ -589,6 +590,7 @@ $("#menuBtn").onclick = e => { e.stopPropagation(); menu($("#menuPop").hidden); 
 document.addEventListener("click", e => { if (!$("#menuPop").hidden && !e.target.closest("#menuPop, #menuBtn")) menu(false); });
 $("#callsBtn").onclick = () => { menu(false); openCalls(); };
 $("#wpMenu").onclick = () => { menu(false); if (E) location.href = workpaperUrl(); };
+$("#diagMenu").onclick = () => { menu(false); if (E) location.href = `/api/engagements/${E.id}/diagnostics.json`; };
 const workpaperUrl = () => `/api/engagements/${E.id}/workpaper.xlsx`;
 for (const [id, key, what] of [["mSel", "model", "Extraction model"], ["rSel", "reviewer_model", "Reviewer and orchestrator"], ["aSel", "arbiter_model", "Arbiter"]])
   $("#" + id).onchange = async e => { E = {...E, ...await api(`/api/engagements/${E.id}`, {method: "PATCH", body: {[key]: e.target.value}})}; toast(`${what}: ${e.target.value}`); };
@@ -1586,9 +1588,13 @@ function rowsCard(R) {
   const g = R.figures?.gaps; if (!g) return "";
   const rows = [...g.dcf_missing.map(x => ({...x, kind: "not found this year"})), ...g.blank_rows.map(x => ({...x, kind: "found, but blank this year"})),
     ...g.weak_rows.map(x => ({...x, kind: x.found ? "found, not sure" : "not found this year"})), ...g.timing_open.map(x => ({...x, kind: "a timing row to find"}))];
-  if (!rows.length) return "";
+  const check = (g.rebuilt_rows || []).filter(x => !rows.some(y => y.row === x.row)).map(x => ({...x, kind: `found by its ${x.how === "history" ? "history" : "numbers or words"}, not its label`}));
+  if (!rows.length && !check.length) return "";
+  if (!rows.length) return `<div class="card" id="rowsCard"><h2>Rows to check: this year's model looks rebuilt</h2><p class="sub">Only ${Math.round(100 * (g.family || 0))}% of this year's line items are last year's, so these rows the value reads were found by their numbers or words rather than their labels. The value stands, as its checks pass; confirm each is the line item it should be, or pick another.</p>
+    <div class="stack" style="gap:12px">${check.map(rowBlock).join("")}</div></div>`;
   return `<div class="card" id="rowsCard"><h2>Rows to find in this year's model</h2><p class="sub">This year's value reads these rows of last year's client model, and the row finder couldn't settle where each is this year, so the value waits. For each: what it is last year (where it sits, what it adds up, its figures, what reads it), and the rows of this year's model that might be it, with their figures for the same periods. Use one, type another, or keep last year's values on purpose; last year's values are never used silently.</p>
-    <div class="stack" style="gap:12px">${rows.map(rowBlock).join("")}</div></div>`;
+    <div class="stack" style="gap:12px">${rows.map(rowBlock).join("")}</div>
+    ${check.length ? `<h3 style="font-size:15px;margin:16px 0 6px">And to check: found by their numbers in a model that looks rebuilt</h3><div class="stack" style="gap:12px">${check.map(rowBlock).join("")}</div>` : ""}</div>`;
 }
 // What one of last year's rows is, and what this year's model might have for it (workbench.row_info), loaded once
 const ROWCTX = {};
@@ -1614,7 +1620,7 @@ function rowContext(row, info) {
       <div>${figs(k.figures || [])}</div>${k.why ? `<div class="muted">${esc(k.why)}</div>` : ""}</li>`).join("");
   return `<div><div class="k" style="font-weight:600;margin-bottom:2px">Last year</div>${where ? `<div>${where[0].toUpperCase() + where.slice(1)}</div>` : ""}${what}
       ${periods.length ? `<div>${(c.values || []).map(v => `${esc(v.period)}: ${fmt(v.value, 1)}`).join(" · ")}</div>` : ""}${used}</div>
-    <div><div class="k" style="font-weight:600;margin-bottom:2px">In this year's model${periods.length ? ", at the same periods" : ""}</div>${cands ? `<ul style="margin:0;padding-left:16px">${cands}</ul>` : `<p class="muted" style="margin:0">No row like it found: pick one by its address.</p>`}</div>`;
+    <div><div class="k" style="font-weight:600;margin-bottom:2px">In this year's model${periods.length ? ", at the same periods" : ""}</div>${info.copies?.length ? `<div class="muted" style="margin-bottom:4px">Passed over: ${info.copies.map(c => `<span class="mono">${esc(c)}</span>`).join(", ")}, last year's figures pasted in, not this year's.</div>` : ""}${cands ? `<ul style="margin:0;padding-left:16px">${cands}</ul>` : `<p class="muted" style="margin:0">No row like it found: pick one by its address.</p>`}</div>`;
 }
 async function loadRowContexts() {
   for (const el of document.querySelectorAll("[data-rowctx]")) {

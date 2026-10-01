@@ -8,6 +8,8 @@ forward. Two layouts of the same prior valuation, so both ways an overlay is del
     AssetA_BP25_client_model_Jun25.xlsx          AssetA_BP25_with_overlay.xlsx
     Alpha_valuation_overlay_FY25.xlsx            (Val_Inputs / DCF / Summary sheets inside it)
     AssetA_BP26_client_model_Jun26.xlsx          AssetA_BP26_client_model_Jun26.xlsx
+    AssetA_FY26_plan_rebuilt.xlsx (this year's model rebuilt: other sheets and labels, quarterly, a lookalike
+                                   sheet of last year's numbers, the client's own bridge)
 
 The valuation follows the conventions the workbench is built for:
   - the conclusion is the equity value as a low / mid / high range: low at the higher discount rate, high at
@@ -157,6 +159,78 @@ def write_client(wb, n: dict, inputs: dict, insurance: bool, balances: tuple[flo
                 bs.write_number(r, FIRST_COL - 1 + k, round(v0 * step ** k, 1), num)
             rows[label] = ("BalanceSheet", r + 1)
     return rows
+
+
+# ---- this year's client model, rebuilt ------------------------------------------------------------------------
+
+def write_rebuilt(wb, n: dict, prior: dict, vd: date) -> None:
+    """This year's client model rebuilt from the ground up, with this year's economics (n) and almost nothing of
+    last year's to go by: its own sheet names and labels, quarterly cash flows (each year's a quarter at a time) with
+    an annual summary that totals them, a sheet of last year's numbers pasted in under last year's labels (a
+    lookalike: last year's figures, not this year's), the client's own bridge from last year's value, and its
+    balances under other names. The value it should give is the one this year's ordinary model gives."""
+    b = wb.add_format({"bold": True})
+    num, dt, pct = wb.add_format({"num_format": "#,##0.0"}), wb.add_format({"num_format": "dd-mmm-yy"}), \
+        wb.add_format({"num_format": "0.00%"})
+    a = wb.add_worksheet("Assumptions")
+    a.write(0, 0, "Key assumptions", b)
+    for r, (label, v, f) in enumerate((("Valuation date", vd, dt), ("Annual escalation", 0.03, pct),
+                                       ("Corporate tax rate", 0.30, pct)), start=2):
+        a.write(r, 0, label)
+        (a.write_datetime if isinstance(v, date) else a.write)(r, 1, v, f)
+    quarters = [date(e.year - 1, 9, 30) if q == 0 else date(e.year - 1, 12, 31) if q == 1 else date(e.year, 3, 31) if q == 2
+                else e for e in n["ends"] for q in range(4)]
+    qm = wb.add_worksheet("Qtr_Model")
+    qm.write(0, 0, "Quarterly cash flow model", b)
+    qm.write(2, 0, "Quarter ending", b)
+    for k, d in enumerate(quarters):
+        qm.write_datetime(2, 2 + k, d, dt)
+    parts = (("Gross receipts", "revenue", 1), ("Operating spend", "opex", 1), ("Insurance cost", "insurance", 1),
+             ("Sustaining capex", "capex", 1), ("Income tax", "tax", 1))
+    for i, (label, key, sign) in enumerate(parts):
+        qm.write(5 + i, 0, label)
+        for k in range(len(quarters)):
+            qm.write_number(5 + i, 2 + k, sign * n[key][k // 4] / 4, num)
+    net = 5 + len(parts)
+    qm.write(net, 0, "Net cash flow", b)
+    for k in range(len(quarters)):
+        c = COL(2 + k)
+        qm.write_formula(net, 2 + k, f"=SUM({c}6:{c}{net})", num,
+                         sum(n[key][k // 4] / 4 for _l, key, _s in parts))
+    an = wb.add_worksheet("Annual_Summary")
+    an.write(0, 0, "Annual summary", b)
+    an.write(2, 0, "Year ending", b)
+    for k, e in enumerate(n["ends"]):
+        an.write_datetime(2, FIRST_COL + k, e, dt)
+    for i, (label, row, key) in enumerate((("Net cash flow (FY)", net, "fcf"), ("Income tax (FY)", 9, "tax"))):
+        an.write(5 + i, 0, label)
+        for k in range(YEARS):
+            q0, q3 = COL(2 + 4 * k), COL(2 + 4 * k + 3)
+            an.write_formula(5 + i, FIRST_COL + k, f"=SUM(Qtr_Model!{q0}{row + 1}:{q3}{row + 1})", num, n[key][k])
+    rc = wb.add_worksheet("Recon_PY")  # last year's numbers, pasted in under last year's labels
+    rc.write(0, 0, "Prior-year model values (pasted for reconciliation)", b)
+    rc.write(2, 0, "Period ending", b)
+    for k, e in enumerate(prior["ends"]):
+        rc.write_datetime(2, FIRST_COL + k, e, dt)
+    for i, (label, key) in enumerate((("EBITDA", "ebitda"), ("Tax paid", "tax"), ("Unlevered free cash flow", "fcf"))):
+        rc.write(5 + i, 0, label)
+        for k in range(YEARS):
+            rc.write_number(5 + i, FIRST_COL + k, prior[key][k], num)
+    vb = wb.add_worksheet("Val_Bridge")  # the client's own bridge from last year's value
+    vb.write(0, 0, "Valuation movement (client)", b)
+    for i, (label, v) in enumerate((("Prior valuation", 2507.9), ("Unwind of discount", 253.3), ("Cash flows received", -160.5),
+                                    ("Forecast changes", 784.0), ("Current valuation", 3384.7))):
+        vb.write(2 + i, 0, label)
+        vb.write_number(2 + i, 1, v, num)
+    nb = wb.add_worksheet("Net_Borrowings")
+    nb.write(0, 0, "Funding position", b)
+    nb.write(2, 0, "As at", b)
+    for k, d in enumerate([vd] + n["ends"][:5]):
+        nb.write_datetime(2, FIRST_COL - 1 + k, d, dt)
+    for i, (label, v0) in enumerate((("Net borrowings", NET_DEBT_NEW), ("Distributions declared, unpaid", DISTRIBUTION_NEW))):
+        nb.write(5 + i, 0, label)
+        for k in range(6):
+            nb.write_number(5 + i, FIRST_COL - 1 + k, round(v0 * 0.97 ** k, 1), num)
 
 
 # ---- the overlay (valuation) -----------------------------------------------------------------------------
@@ -503,6 +577,11 @@ def main() -> dict:
     write_client(wb, current, inputs_rows(VD_NEW, **cur_in, insurance=4.0), insurance=True,
                  balances=(NET_DEBT_NEW, DISTRIBUTION_NEW))
     wb.close(); files["current client model"] = p
+
+    p = OUT / "AssetA_FY26_plan_rebuilt.xlsx"  # this year's model, rebuilt from the ground up
+    wb = xlsxwriter.Workbook(p)
+    write_rebuilt(wb, current, prior, VD_NEW)
+    wb.close(); files["current client model (rebuilt)"] = p
 
     fcf_row, tax_row = rows["cf_fcf"][1], rows["cf_tax"][1]
     p = OUT / "Alpha_valuation_overlay_FY25.xlsx"

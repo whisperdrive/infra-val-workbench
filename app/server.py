@@ -183,6 +183,16 @@ async def delete_engagement(eid: int):
     return {"ok": True, **await _run(workbench.delete, eid)}
 
 
+@app.get("/api/engagements/{eid}/diagnostics.json")
+async def diagnostics_json(eid: int):
+    """The run described for diagnosis without a word of the client's: counts, yes / no, ratios, dates and the app's
+    own words (engine/diagnostics.py), to paste from a machine with real files."""
+    import diagnostics
+    data = await _run(diagnostics.as_text, eid)
+    return Response(data, media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="diagnostics e{eid}.json"', **FRESH})
+
+
 @app.get("/api/engagements/{eid}/workpaper.xlsx")
 async def workpaper_xlsx(eid: int):
     """The engagement's workpaper, as an Excel file: once the bridge is worked out (409 before)."""

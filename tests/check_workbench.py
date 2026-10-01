@@ -19,6 +19,9 @@
   held      inputs typed in the overlay outside its discountings: held at last year's, a suggestion from this year's
             model checked against last year's, applied when a person sets it, a bridge step of its own
   review    the review is a decision like the others: once per result, a try again doesn't buy another
+  diagnostics  the run described in counts, ratios, dates and the app's own words: no name from the files
+  rebuilt   this year's model rebuilt, with last year's figures pasted in under last year's labels: the copy is passed
+            over, the rows found by their numbers, the value this year's; a point says the model looks rebuilt
   gate      this year's value held, with the reason, where it can't be trusted: a discounting left on last year's
             date, nothing of this year's model read; a big move at last year's date is a point to check
   overview  every engagement at a glance: where it is (a finished one, an empty one), its values
@@ -180,6 +183,13 @@ def fake_create(client, model, input, text=None, max_output_tokens=None, purpose
              "years": ["FY45", "FY46", "FY99"], "step": "forecast"}]})
     if name == "test_decision":
         return Reply({"choice": "pick", "reason": "test", "question": ""})
+    if name == "row_action":  # the row agents, at their most careful: this year's model has no such row
+        return Reply({"action": "not_in_this_model", "query": None, "row": None, "why": "no line item like it",
+                      "confidence": "medium"})
+    if name == "row_verdict":
+        return Reply({"verdict": "reject", "why": "not the same line item", "better_row": None})
+    if name == "row_advice":
+        return Reply({"rows": [], "done": True})
     raise AssertionError(f"unexpected model call {name}")
 
 
@@ -221,6 +231,8 @@ def status(v: dict) -> dict:
 
 PACK_A = ("AssetA_valuation_report_FY25.pdf", "AssetA_BP25_client_model_Jun25.xlsx", "Alpha_valuation_overlay_FY25.xlsx",
           "AssetA_BP26_client_model_Jun26.xlsx")
+PACK_R = ("AssetA_valuation_report_FY25.pdf", "AssetA_BP25_client_model_Jun25.xlsx", "Alpha_valuation_overlay_FY25.xlsx",
+          "AssetA_FY26_plan_rebuilt.xlsx")  # this year's model rebuilt
 PACK_B = ("AssetA_valuation_report_FY25.pptx", "AssetA_BP25_with_overlay.xlsx", "AssetA_BP26_client_model_Jun26.xlsx")
 
 
@@ -558,6 +570,71 @@ def review_check(eid: int) -> None:
     assert n() == before + 1, CALLS[-5:]  # back to the first result: its review stands
     print("review: ok (once per result: a try again on the same result, or on the review, doesn't buy another; a new "
           "result is reviewed again with the earlier points in view)")
+
+
+NAMES_IN_PACK = ("Asset", "Alpha", "Holdco", "CashFlow", "Val_Inputs", "Operations", "BalanceSheet", "Unlevered",
+                 "Recon_PY", "Annual_Summary", "Qtr_Model", "Summary!", "DCF!", "Net cash flow", "valuation_report")
+
+
+def diagnostics_check(eid: int) -> None:
+    """The diagnostics export describes the run in the app's own words, counts, ratios and dates only: nothing of
+    the files (no sheet, label or file name), every string known, the models' shapes and how alike they are."""
+    import diagnostics
+    d = diagnostics.export(eid)
+    text = json.dumps(d, default=str).lower()
+    leaked = [n for n in NAMES_IN_PACK if n.lower() in text]
+    assert not leaked and d["redacted"] == 0, (leaked, d["redacted"])
+    m = d["models"]
+    assert m["prior_model"]["timelines"]["annual"]["periods_max"] == 21 and "quarterly" not in m["current_model"]["timelines"], m
+    assert d["alike"]["prior_model_vs_current_model"]["labels"] > 0.8 and d["profile"]["fy_end_month"] == 6, d["alike"]
+    r = d["result"]
+    assert r["worked_out"] and r["tied"] == {"low": True, "high": True} and r["terminal"] == "growth_final_year", r
+    assert r["discountings"]["low"]["readable"] == 2 and r["gate"]["reliable"] and not r["gate"]["rebuilt"], r
+    print("diagnostics: ok (the run in the app's own words, counts, ratios and dates: no sheet, label or file name; "
+          "the models' shapes and how alike they are)")
+
+
+def rebuilt_check() -> None:
+    """This year's client model rebuilt from the ground up (its own sheets and labels, quarterly with an annual
+    summary, a sheet of last year's figures pasted in under last year's labels, the client's own bridge): the
+    value is this year's, not a pasted copy's. The pasted copy is passed over as a candidate for a row and as the
+    sheet last year's became (so it doesn't make the horizon look fixed); the rows are found by their numbers; the
+    value matches the one this year's ordinary model gives, step for step; a point says the model looks rebuilt and
+    lists the rows to check. (The zero-roll check can't catch a pasted copy: it reproduces last year's numbers
+    exactly, which is why the copy is refused in the finder.) The diagnostics say all of this without a name."""
+    import diagnostics
+    ordinary = next(e for e in wb.all_engagements() if e["name"] == "Asset A, FY26")
+    want = wb.get(ordinary["id"])["result"]
+    e = wb.create("Asset A, FY26 (model rebuilt)")
+    eid = e["id"]
+    for f in PACK_R:
+        upload(eid, f)
+    v = wait(eid, lambda v: status(v)["result"] in (*orc.SETTLED, "blocked", "failed") and not v["busy"], "the result", 600)
+    res = wb.get(eid)["result"]
+    assert abs(res["values"]["this_year"]["mid"] - want["values"]["this_year"]["mid"]) < 1e-6, (res["values"], want["values"])
+    assert [(x["key"], round(x["value"], 6)) for x in res["bridges"]["mid"]["steps"]] == \
+        [(x["key"], round(x["value"], 6)) for x in want["bridges"]["mid"]["steps"]], res["bridges"]["mid"]["steps"]
+    g = res["figures"]["gaps"]
+    assert g["rebuilt"] and g["family"] < 0.2 and {x["found"] for x in g["rebuilt_rows"]} == \
+        {"Annual_Summary!r6", "Annual_Summary!r7"}, g
+    need = next(n for n in v["needs"] if n["id"] == "rebuilt")
+    assert need["severity"] == "check" and need["go"]["anchor"] == "rowsCard", need
+    info = wb.row_info(eid, "CashFlow!r9")
+    assert info["found"] == "Annual_Summary!r6" and info["copies"] == ["Recon_PY!r8"], info
+    sess, _ = wb.overlay_session(eid)
+    assert sess.rowmap.sheet_for("CashFlow") is None and not sess.fixed_horizon()
+    d = diagnostics.export(eid)
+    text = json.dumps(d, default=str).lower()
+    assert not [n for n in NAMES_IN_PACK if n.lower() in text] and d["redacted"] == 0, d["redacted"]
+    cur = d["models"]["current_model"]["timelines"]
+    assert cur["quarterly"]["periods_max"] == 80 and cur["annual"]["periods_max"] == 20, cur
+    assert d["alike"]["prior_model_vs_current_model"]["labels"] < 0.2 and d["result"]["gate"]["rebuilt"], d["alike"]
+    assert {x["kind"] for x in d["result"]["rows"]} == {"rebuilt_rows"} and \
+        sum(x["copies_passed_over"] for x in d["result"]["rows"]) == 2, d["result"]["rows"]
+    wb.delete(eid)
+    print("rebuilt: ok (a rebuilt model with a pasted copy of last year's figures: the copy passed over for rows and "
+          "sheets, the rows found by their numbers, this year's value as the ordinary model's, step for step; a point "
+          "to check; the diagnostics say so without a name)")
 
 
 def gate_check() -> None:
@@ -920,6 +997,8 @@ def main() -> None:
     eid = run_check()
     workpaper_check(eid)
     overview_check(eid)
+    diagnostics_check(eid)
+    rebuilt_check()
     gate_check()
     review_check(eid)
     held_check(eid)

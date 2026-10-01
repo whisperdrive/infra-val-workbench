@@ -1612,7 +1612,7 @@ def row_found(sess, s: str, r: int, origins=()) -> dict:
     prior = sess.prior or sess.ov
     out = {"row": f"{s}!r{r}", "label": prior.labels().get((s, r), ""), "found": None, "how": ex["how"],
            "evidence": [f"{n}: {t}" for n, t in ex["evidence"]], "confidence": ex["confidence"],
-           "alternatives": ex["alternatives"], "picked": (s, r) in sess.rowmap.picks,
+           "alternatives": ex["alternatives"], "picked": (s, r) in sess.rowmap.picks, "copies": ex.get("copies") or sess.rowmap.copies(s, r),
            "stand_in": bool(ex.get("stand_in")), "confident": sess.rowmap.confident(s, r)}
     if ex["found"]:
         s2, r2 = ex["found"]

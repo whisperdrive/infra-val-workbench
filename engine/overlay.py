@@ -703,6 +703,7 @@ def roll_months(sess: Session, prior: dict | None, overlay: dict, same_file: boo
 
 
 ZERO_ROLL = (0.75, 1.33)  # this year's model at last year's date, against last year's figure: about the same
+REBUILT = 0.5  # the two client models share fewer line-item labels than this (rowfind.family): this year's is rebuilt
 ZERO_ROLL_CHECK = (0.87, 1.15)  # inside ZERO_ROLL but outside this, the value runs and a person is asked to confirm
                                 # the move is the new forecast (a judgment call: forecasts move, a mismatched row too)
 ROLL_PLAN = 4  # the rules' version: a roll planned by older rules is planned again when a session loads

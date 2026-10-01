@@ -36,7 +36,8 @@ CHECK_PERIODS = 3    # ... over at least this many periods side by side
 SHAPE = 0.6           # a candidate whose share of formulas differs from last year's row's by this much is another shape
 STAND_IN = "stand-in"  # a person's pick: keep last year's values for the row
 LAYOUT = 0.9         # an unlabelled row found at its own row number, on a sheet laid out as before
-VERSION = 2          # bump when finding changes: the agents' picks made under another version are dropped and redone
+VERSION = 3          # bump when finding changes: the agents' picks made under another version are dropped and redone
+                     # (3: a pasted copy of last year's figures is no candidate)
                      # (2: unlabelled rows followed by the layout, blank rows settled by code)
 
 
@@ -112,7 +113,7 @@ class RowFinder:
             return s
         best, share = None, 0.0
         for sh in idx["sheets"]:
-            if sh == s or self._has_prior_sheet(sh):
+            if sh == s or self._has_prior_sheet(sh) or self._pasted_for(s, sh):
                 continue
             j = _jaccard(mine, labels_of(sh))
             if j > share:
@@ -153,6 +154,36 @@ class RowFinder:
             except Exception:
                 self._shapes[id(wb)] = {}
         return self._shapes[id(wb)].get(k)
+
+    def _pasted_for(self, s: str, sh: str) -> bool:
+        """Is this year's sheet sh typed values where last year's sheet s was formulas: a pasted copy (a
+        reconciliation of last year's figures, say), which can't be the sheet s became, nor tell its horizon."""
+        def share(wb, sheet):
+            got = [self._shape(wb, (sheet, r)) for (x, r) in wb.labels() if x == sheet]
+            f, c = sum(g[0] for g in got if g), sum(g[1] for g in got if g)
+            return f / (f + c) if f + c else None
+        a, b = share(self.prior, s), share(self.current, sh)
+        return a is not None and b is not None and a >= 0.5 and b < 0.1
+
+    def copies(self, s, r) -> list[str]:
+        """The pasted copies of last year's row among the candidates its label and its history find ("Sheet!rN")."""
+        got = set()
+        for fn in (self._by_label, self._by_history):
+            try:
+                got |= {k for k, _sc, _t in fn(s, r) if k}
+            except Exception:
+                continue
+        return [f"{k[0]}!r{k[1]}" for k in sorted(got) if self.is_copy(s, r, k)]
+
+    def is_copy(self, s, r, k) -> bool:
+        """Is candidate k a pasted copy of last year's row, not this year's line item: typed values where last
+        year's row was formulas (other_shape), and last year's figures in every period both have, forecast
+        included (forecasts are revised between valuations; a schedule that isn't is still built of formulas)."""
+        if not self.other_shape(s, r, k):
+            return False
+        mine, theirs = self._series(self.prior, s, r), self._series(self.current, *k)
+        both = [w for w in mine if w in theirs and mine[w]]
+        return len(both) >= 3 and all(abs(theirs[w] - mine[w]) <= EXACT * max(1.0, abs(mine[w])) for w in both)
 
     def other_shape(self, s, r, k) -> str | None:
         """Why candidate k is another shape than last year's row (formulas against typed values), or None."""
@@ -335,6 +366,9 @@ class RowFinder:
                         found[k][name] = (score, text)
             except Exception:
                 continue
+        copies = [k for k in found if self.is_copy(s, r, k)]  # last year's figures pasted in: not a candidate at all
+        for k in copies:
+            found.pop(k)
         mine = self._series(self.prior, s, r)
         for k, ev in found.items():  # every candidate's own history, not only the closest lookalikes'
             if "history" not in ev and mine:
@@ -362,6 +396,7 @@ class RowFinder:
         ranked.sort(key=lambda x: (-x[4], -x[0], -x[1], x[2]))
         ranked = [x[:4] for x in ranked]
         res = {"found": None, "how": None, "evidence": [], "confidence": 0.0, "in_place": False,
+               "copies": [f"{k[0]}!r{k[1]}" for k in copies],  # pasted copies of last year's figures, passed over
                "alternatives": [{"row": f"{k[0]}!r{k[1]}", "label": self.current.labels().get(k, ""),
                                  "score": round(t, 2), "evidence": [f"{n}: {tx}" for n, (_, tx) in ev.items()]}
                                 for _, t, k, ev in ranked[:4]]}

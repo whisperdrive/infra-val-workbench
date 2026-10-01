@@ -227,8 +227,15 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
     ov_labels = sess.ov.labels()
     zero_off = [{"cell": c, "label": ov_labels.get(ov.parse_a1(c)[:2], "") or c, **x["zero_roll"]}
                 for c, x in by_cell.items() if not x["zero_roll"]["ok"]]
+    # a rebuilt model (few line-item labels in common): the rows found other than by their own label are listed to
+    # check, though the value stands where the checks pass (a pasted copy of last year's figures is never a match)
+    fam = sess.rowmap.family()
+    by_label = lambda k: any(n == "label" for n, _t in (ex(*k).get("evidence") or []))
+    rebuilt_rows = [{"row": f"{s_}!r{r_}", "label": labels.get((s_, r_), ""), "found": found((s_, r_)),
+                     "how": ex(s_, r_).get("how")} for s_, r_ in sorted(read_by_row)
+                    if fam < ov.REBUILT and found((s_, r_)) and not by_label((s_, r_))]
     return {"reliable": all(x["reliable"] for x in by_cell.values()), "by_cell": by_cell, "date_check": date_hold,
-            "no_reads": reads == 0,
+            "no_reads": reads == 0, "family": fam, "rebuilt": fam < ov.REBUILT, "rebuilt_rows": rebuilt_rows,
             "date_cells": {"moved": roll.get("valuation_date_cells") or [], "read": vd_reads, "off": vd_off,
                            "by_label": bool(roll.get("valuation_date_by_label")), "to": (info or {}).get("valuation_date")},
             "zero_roll_off": zero_off, "read_rows": [f"{s_}!r{r_}" for s_, r_ in sorted(read_by_row)],

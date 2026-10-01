@@ -777,6 +777,14 @@ def _result_job(eid: int, key: str):
                       "detail": "the discountings under the value couldn't be traced and no cell is labelled as the valuation "
                                 "date, so this year's value may still be discounted to last year's",
                       "go": {"step": "workbench", "anchor": "datesCard"}})
+    if g and g.get("rebuilt"):
+        rr = g.get("rebuilt_rows") or []
+        needs.append({"id": "rebuilt", "stage": "result", "severity": "check",
+                      "title": f"This year's model looks rebuilt: {100 * g['family']:.0f}% of its line items are last year's",
+                      "detail": (f"{len(rr)} row(s) the value reads were found by their numbers or words, not their labels: "
+                                 "check they're the right ones" if rr else "the rows the value reads were found by their labels")
+                                + ("" if g["reliable"] else "; this year's value waits on the rows listed"),
+                      "go": {"step": "result", "anchor": "rowsCard"}})
     if g and dc.get("by_label"):
         needs.append({"id": "dates-label", "stage": "result", "severity": "check",
                       "title": f"The valuation date moved is the one labelled so ({dc['moved'][0]})",
@@ -950,7 +958,7 @@ PAGE_ANCHOR = {"workbench": "filesCard", "report": "reportCard", "rebuild": "tie
 KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact", "A fact to add"),
          ("roles", "confirm-roles", "The roles to confirm"), ("no-reads", "check-roles", "The roles to check"),
          ("dates-", "check-date", "A date to check"), ("zero-roll", "check-forecast", "A move to check"),
-         ("held-", "check-held", "An input held at last year's"),
+         ("held-", "check-held", "An input held at last year's"), ("rebuilt", "confirm-rows", "Rows to confirm"),
          ("date-overlay", "check-date", "A date to check"),
          ("date", "confirm-date", "A date to confirm"), ("equity", "pick-cells", "Cells to pick"),
          ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),

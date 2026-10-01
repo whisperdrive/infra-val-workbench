@@ -85,6 +85,14 @@ takes it from there:
 
    A move of more than about 15% at last year's date (`overlay.ZERO_ROLL_CHECK`, a judgment call) doesn't hold the
    value but asks you to confirm it's the new forecast and not a row matched wrongly.
+
+   A client model rebuilt between valuations is the hard case: a sheet of last year's figures pasted in under last
+   year's labels (a reconciliation, say) matches last year's rows by label and by history, and the zero-roll check
+   can't tell, since it reproduces last year's numbers exactly. So a pasted copy (typed values where last year's row
+   was formulas, last year's figures in every period both have) is never a candidate for a row, nor the sheet last
+   year's became, nor what tells the horizon. Where the two models share under half their line-item labels
+   (`overlay.REBUILT`), the rows found other than by their labels are listed to check, though the value stands where
+   its checks pass.
    Inputs typed into the overlay outside its discountings (a net debt, a cash balance, a declared distribution, an
    adjustment) aren't fed by this year's model, so they stay at last year's figures: **held**, and shown so, highlighted
    on the Result page and in the workpaper until you set this year's. Each comes with a suggestion from this year's
@@ -156,6 +164,13 @@ it). It lists every engagement: where it is
 to this year, the mid. A click opens one; tick two to compare them side by side: the equity value, the inputs and the
 dates, the bridges step by step (the mid, the same steps matched; a dash where one hasn't a step) and this year's cash
 flows. Differences aren't worked out between engagements in different units.
+
+**Export diagnostics (anonymised)**, in the ⋯ menu, describes a run for diagnosis without a word of the client's:
+counts, yes / no, ratios, dates and the app's own words. Each model's shape (its timelines by frequency: monthly,
+quarterly, semi-annual, annual; its periods, first and last), how alike the two client models are, the profile, each
+stage's outcome, the facts by status, the result's checks, the discountings traced, the roll, the reliability gate,
+and each row to find by its shape. Every string is checked against the app's own vocabulary before it leaves; anything
+else is redacted and counted. It's for pasting from a machine with real files into a session that can't see them.
 
 Evidence is folded away, never removed. All engagements, New engagement, Models, the call log, the workpaper and
 Delete are in the ⋯ menu; Delete asks for the engagement's name.
