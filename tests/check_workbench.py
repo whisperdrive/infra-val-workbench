@@ -739,6 +739,22 @@ def facts_check() -> None:
     assert failed(fact(value_text="A$4,100m", quote=q), q) and not failed(fact(value_text="A$2,500m", quote=q), q)
     q = "Discount rate (post-tax nominal WACC) 7.25% 7.75%"
     assert not failed({**rate, "value_text": "", "low_text": "7.25%", "high_text": "7.75%", "quote": q}, q)
+    # franking utilisation as reports put it: a % or a fraction, its label before or after the figure, any rate
+    import sourced
+    util = lambda v, q: fact(key="franking_utilisation", label="Franking credit utilisation", category="assumption",
+                             unit="%", value_text=v, quote=q)
+    for v, q in (("80%", "We have ascribed 80% value in franking credits."), ("80%", "an 80% utilisation rate"),
+                 ("80%", "a gamma of 0.80"), ("80%", "gamma of 0.8"), ("0.80", "a gamma of 0.80"),
+                 ("0.8", "an 80% utilisation rate"), ("60%", "franking credits are utilised at 60%"),
+                 ("80%", "WACC of 7.25% with 80% value in franking credits")):
+        assert not failed(util(v, q), q), (v, q, failed(util(v, q), q))
+    assert failed(util("60%", "an 80% utilisation rate"), "an 80% utilisation rate")
+    q = "The value of franking credits is A$389.8m, 15.5% of the equity value."  # its label further back will do
+    assert not failed(fact(key="franking_credits_share", label="Franking credits share", unit="%", value_text="15.5%",
+                           quote=q), q)
+    assert visual._same(util("80%", ""), {"value": "0.80"}) and not visual._same(util("80%", ""), {"value": "0.60"})
+    assert sourced._stated([{"key": "franking_utilisation", "value_text": "0.80"}], "franking_utilisation") == [(80.0, "0.80")]
+    assert sourced._tie(80.0, (80.0, "0.80")) and sourced._tie(80.0, (80.0, "80%")) and not sourced._tie(60.0, (80.0, "0.8"))
     # a date's day isn't a figure; a quote doesn't start inside a number; a name is checked as text
     q = "As at 30 June 2025 the business was valued at A$28m."
     assert failed(fact(value_text="A$30m", quote=q), q)

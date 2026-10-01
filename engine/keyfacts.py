@@ -47,9 +47,11 @@ conclusion: equity_value: the concluded equity value. low_text / high_text for t
             Where the report states them: terminal_value, pv_forecast (present value of the discrete forecast
             cash flows), pv_terminal_value (present value of the terminal value), franking_credits_value (the
             value of franking credits in the equity value), franking_credits_share (that value as a % of the
-            equity value)
+            equity value: not the utilisation rate)
 assumption: discount_rate (low_text / high_text for a range; basis e.g. cost of equity, or a post-tax nominal WACC),
-            terminal_growth_rate, franking_utilisation (the franking credit utilisation rate, or gamma)
+            terminal_growth_rate, franking_utilisation (the share of franking credits' face value counted in the
+            valuation, whatever the report calls it: utilisation rate, gamma, theta, or "X% value ascribed to franking
+            credits"; as printed, a % (80%) or a fraction (0.80))
 Nothing else: no other keys."""
 KNOWN = {"target_name", "client", "valuation_date", "currency_units", "equity_value", "equity_value_cum",
          "equity_value_ex", "terminal_value", "pv_forecast", "pv_terminal_value", "franking_credits_value",
@@ -345,7 +347,7 @@ def _range_of(text: str | None) -> tuple[str, str] | None:
 TERMS = {"equity_value": r"equity|net assets|\bshares?\b|unitholder|securit",
          "discount_rate": r"discount|wacc|cost of (?:capital|equity)|hurdle|required return",
          "terminal_growth_rate": r"growth|\bcpi\b|inflation|perpetu",
-         "franking_utilisation": r"utili[sz]|gamma|theta",
+         "franking_utilisation": r"utili[sz]|gamma|theta|franking|imputation|value (?:in|of|to|ascribed|attributed)",
          "franking_credits_value": r"franking|imputation",
          "terminal_value": r"terminal|exit|perpetu",
          "pv_forecast": r"present value|\bpv\b|discrete|forecast|explicit",
@@ -353,31 +355,51 @@ TERMS = {"equity_value": r"equity|net assets|\bshares?\b|unitholder|securit",
 TERMS.update(equity_value_ex=TERMS["equity_value"], equity_value_cum=TERMS["equity_value"],
              franking_credits_share=TERMS["franking_credits_value"])
 OTHER_TERMS = r"enterprise value|net debt|\bdebt\b|ebitda|revenue|capex|capital expenditure|tax rate"
+PCT_KEYS = {"discount_rate", "terminal_growth_rate", "franking_utilisation", "franking_credits_share"}
+
+
+def pct_like(f: dict) -> bool:
+    """A figure that may be printed as a % or a fraction: 80% is 0.80."""
+    return f.get("unit") == "%" or f.get("key") in PCT_KEYS
+
+
+def _same_figure(a: float, b: float, pct: bool) -> bool:
+    close = lambda x, y: abs(x - y) < 1e-9 * max(1, abs(y))
+    return close(a, b) or (pct and (close(a * 100, b) or close(a, b * 100)))
 
 
 def _under_other(f: dict, v: str, quote: str) -> str | None:
-    """Where every place the quote holds v's figure sits under another fact's label (the nearest label before it,
-    looking back past the figures in between), that label; None where one sits under its own, or no label is seen."""
+    """Where every place the quote holds v's figure sits under another fact's label, that label; None where one sits
+    under its own, or no label is seen. A figure's label is the one right before it (back to the figure before); with
+    none there, its own label after it ("80% value in franking credits") or further back past the figures between (a
+    table row: "Discount rate 7.25% 7.75%"; "franking credits of A$389.8m, 15.5% of the equity value") will do."""
     own = TERMS.get(f.get("key"))
     if not own:
         return None
     others = "|".join([t for k, t in TERMS.items() if t != own] + [OTHER_TERMS])
     q = _unrange(quote or "").lower()
-    figs, wanted = _figs(q), [x["value"] for x in _figs(v)]
+    figs, wanted, pct = _figs(q), [x["value"] for x in _figs(v)], pct_like(f)
     seen = None
+
+    def said(seg):
+        if re.search(own, seg):
+            return "own"
+        m = re.search(others, seg)
+        return seg[m.start():].strip(" :,;(") if m else None
+
     for want in wanted:
-        at = [i for i, x in enumerate(figs) if abs(x["value"] - want) < 1e-9 * max(1, abs(want))]
+        at = [i for i, x in enumerate(figs) if _same_figure(x["value"], want, pct)]
         if not at:
             return None  # found only with spacing ignored: the number check speaks for it
         for i in at:
-            j, verdict = i, None
-            while j >= 0 and verdict is None:
-                seg = q[figs[j - 1]["end"] if j else 0:figs[j]["start"]]
-                if re.search(own, seg):
-                    verdict = "own"
-                elif re.search(others, seg):
-                    verdict = seg[re.search(others, seg).start():].strip(" :,;(")
-                j -= 1
+            verdict = said(q[figs[i - 1]["end"] if i else 0:figs[i]["start"]])
+            if verdict is None:  # no label right before it: the one after it, or further back; its own in either will do
+                after = said(q[figs[i]["end"]:figs[i + 1]["start"] if i + 1 < len(figs) else len(q)])
+                back, j = None, i - 1
+                while back is None and j >= 0:
+                    back = said(q[figs[j - 1]["end"] if j else 0:figs[j]["start"]])
+                    j -= 1
+                verdict = "own" if "own" in (after, back) else after or back
             if verdict in (None, "own"):
                 break
             seen = verdict
@@ -444,7 +466,11 @@ def check(f: dict, pg: dict[int, str]) -> dict:
             continue
         nums = [] if f.get("category") == "identity" else numbers(_unrange(v))  # a name holding digits is a name
         if nums:
-            missing = [n for n in nums if n not in numbers(_unrange(undated))]
+            said = numbers(_unrange(undated))
+            other_form = lambda n: pct_like(f) and any(  # 80% printed as 0.80 (gamma), or 0.80 as 80%
+                _same_figure(float(x.rstrip("%")), float(n.rstrip("%")), True) and x.endswith("%") != n.endswith("%")
+                for x in said)
+            missing = [n for n in nums if n not in said and not other_form(n)]
             if not missing:
                 items.append((True, f"{v} in the quote", "figure"))
             elif all(_in_squashed(n, undated) for n in missing):

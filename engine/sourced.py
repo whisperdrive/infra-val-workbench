@@ -31,20 +31,34 @@ def _pct(v: float) -> str:
     return f"{100 * v:.2f}%"
 
 
-def _ties(python: float | None, text: str | None) -> bool | None:
-    import result
-    return result._ties(python, text)
+def _as_pct(n: str) -> float:
+    """A rate as printed, in percent: 7.25% is 7.25, and a fraction (0.80, a gamma) is 80."""
+    x = float(n.rstrip("%"))
+    return x if n.endswith("%") or x > 1 else 100 * x
 
 
 def _stated(facts: list[dict], key: str) -> list[tuple[float, str]]:
-    """The report's figures for a fact, lowest first: [(number, its text)]."""
+    """The report's figures for a fact, in percent, lowest first: [(number, its text)]."""
     f = next((x for x in facts if x.get("key") == key and x.get("status") != "rejected"), None)
     v = (f.get("final") or f) if f else {}
-    said = [(float(n.rstrip("%")), t) for t in (v.get("low_text"), v.get("high_text")) if t
+    said = [(_as_pct(n), t) for t in (v.get("low_text"), v.get("high_text")) if t
             for n in keyfacts.numbers(keyfacts._unrange(t))[:1]]
     if not said and v.get("value_text"):
-        said = [(float(n.rstrip("%")), n) for n in keyfacts.numbers(keyfacts._unrange(v["value_text"]))]
+        said = [(_as_pct(n), n) for n in keyfacts.numbers(keyfacts._unrange(v["value_text"]))]
     return sorted(set(said))
+
+
+def _tie(python_pct: float | None, rep) -> bool | None:
+    """Does a rate (in percent) round to the report's, printed as a % or a fraction? Within half a unit of its last
+    digit, in the units it's printed in."""
+    if python_pct is None or not rep:
+        return None
+    n = (keyfacts.numbers(keyfacts._unrange(rep[1])) or [""])[0]
+    if not n:
+        return None
+    d = len(n.rstrip("%").split(".")[1]) if "." in n else 0
+    unit = 1.0 if n.endswith("%") or float(n.rstrip("%")) > 1 else 100.0
+    return abs(python_pct - rep[0]) <= 0.5 * 10 ** -d * unit + 1e-9
 
 
 def _key(ref: str) -> tuple:
@@ -117,7 +131,7 @@ def rate(asm: dict, facts: list[dict]) -> dict:
         more = f" ({len(rows)} discountings" + (f", reading {' and '.join(cells)}" if len(cells) > 1 else "") + ")" \
             if len(rows) > 1 else ""
         rep = want[end]
-        ties = _ties(100 * top["rate"], rep[1]) if rep else None
+        ties = _tie(100 * top["rate"], rep) if rep else None
         ends[end] = _end(top["rate"], s, sourced, note, [
             (sourced, f"Sourced: the discount factors read this cell, the first and the last period's alike{more}"
              if sourced else f"Not sourced to a cell: {note}"),
@@ -184,9 +198,10 @@ def growth(db, traced: dict, rates: dict, facts: list[dict]) -> dict:
     """Each end's terminal growth rate: the cell its terminal value's formula reads as g, checked."""
     import result
     stated = _stated(facts, "terminal_growth_rate")
-    rep = stated[0] if stated else None
+    want = {"low": stated[0] if stated else None, "high": stated[-1] if stated else None}  # the low value: the lower growth
     ends = {}
     for end in ("low", "high"):
+        rep = want[end]
         main, _, _ = result._streams(traced.get(end) or [])
         fit = _gordon(db, main) if main else None
         if not fit:
@@ -201,7 +216,7 @@ def growth(db, traced: dict, rates: dict, facts: list[dict]) -> dict:
             at_rate = r_in == own["cell"]
         else:  # one of the two isn't a cell: only their values can be compared, and the card says so
             at_rate = own.get("value") is not None and abs(r - own["value"]) < 1e-12
-        ties = _ties(100 * g, rep[1]) if rep else None
+        ties = _tie(100 * g, rep) if rep else None
         form = f"{xl or xk} × (1 + {_pct(g)}) / ({_pct(r)} − {_pct(g)})" if fit["grown"] else \
             f"{xl or xk} / ({_pct(r)} − {_pct(g)})"
         ends[end] = _end(g, s, bool(gk), None if gk else f"typed into the terminal value's formula ({fit['tv_cell']})", [
@@ -255,9 +270,10 @@ def franking(sess, summary: dict, db, traced: dict, where: dict, facts: list[dic
     Python overlay with it at nil (runs in overlay.deep; the session is left on the workbook feed)."""
     import result
     stated = _stated(facts, "franking_utilisation")
-    rep = stated[0] if stated else None
+    want = {"low": stated[0] if stated else None, "high": stated[-1] if stated else None}  # the low value: the lower utilisation
     ends = {}
     for end in ("low", "high"):
+        rep = want[end]
         cs = traced.get(end) or []
         _, fr, _ = result._streams(cs)
         if not fr:
@@ -281,7 +297,7 @@ def franking(sess, summary: dict, db, traced: dict, where: dict, facts: list[dic
                 drop = base - nil
                 rerun = {"drop": unit(drop), "franking": unit(fr_pv), "restored": abs(after - base) < 1e-9,
                          "ok": abs(drop - fr_pv) <= 1e-6 * max(1.0, abs(fr_pv))}
-        ties = _ties(100 * value, rep[1]) if rep and value is not None else None
+        ties = _tie(100 * value, rep) if rep and value is not None else None
         checks = [(bool(s), "Sourced: every period's franking credits read this cell, the first and the last period's "
                             "alike" + (f"; {s['why']}" if s and s.get("why") else "") if s else f"Not sourced: {why}")]
         if rerun:

@@ -144,7 +144,8 @@ def _same(fact: dict, read: dict, dated: bool | None = None) -> bool:
     have = {k: v for k, v in f.items() if v is not None}
     if not have:
         return True
-    if all(r.get(k) is not None and abs(r[k] - v) < 1e-9 * max(1, abs(v)) for k, v in have.items()):
+    pct = keyfacts.pct_like(fact)  # 80% read as 0.80 is the same figure
+    if all(r.get(k) is not None and keyfacts._same_figure(r[k], v, pct) for k, v in have.items()):
         return True
     # a single figure the reading put as the value where the extraction has it as both ends, or the reverse
     one = {v for v in have.values()} | set()
