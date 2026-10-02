@@ -12,10 +12,12 @@ Prior vs current client model: the file the overlay reads (link name or cached v
 
 The structure comes first (likeness.py), so there is a suggestion as soon as the files are read, before the
 report: workbooks that are mostly the same are one client model twice; one that contains another plus extra
-sheets carrying valuation work is a client model with the overlay added (the extra sheets are the overlay); one
-unlike the others, with valuation vocabulary, charts, external links or the adviser's name, is a standalone
-overlay. The report's facts, once extracted and approved, add the stronger evidence above, and the suggestion is
-redone each time they change, until a person confirms.
+sheets carrying valuation work is a client model with the overlay added (the extra sheets are the overlay); the
+adviser's tabs behind its divider ("Adviser>>" up to "Client>>") in a copy of the client model are the overlay too, even
+where another copy has them (an earlier working file), and count as one more sign of it, not every overlay being
+laid out so; one unlike the others, with valuation vocabulary, charts, external links or the adviser's name, is a
+standalone overlay. The report's facts, once extracted and approved, add the stronger evidence above, and the
+suggestion is redone each time they change, until a person confirms.
 """
 import json
 import re
@@ -33,6 +35,37 @@ ROLES = {"prior_report": "Prior report", "prior_model": "Prior client model", "p
 VALUATION_KEYS = re.compile(r"discount|wacc|terminal|exit_multiple|rab|valuation_date|enterprise_value|equity_value|"
                             r"sensitivity|cost_of_equity", re.I)
 NAME_HINT = re.compile(r"val|dcf|wacc|overlay|sensitiv", re.I)
+DIVIDER = re.compile(r"^\s*<.*|.*>\s*$")  # a tab that only heads the sheets after it: "Adviser>>", "Client>", "<< Inputs"
+ADVISER_TAB = re.compile(r"^(?:adviser|advisor|overlay|valuation|val|dcf)\b", re.I)
+ADVISER_NAME = re.compile(r"^(?:adviser|advisor|overlay)\b", re.I)  # a client's model can have a "Valuation>" section too
+COPY_SHARE = 0.8  # of the sheets outside the adviser's tabs in last year's client model: the workbook is a copy of it
+
+
+def adviser_sheets(db_path: str, names: list[str], prior_names: list[str], tab: re.Pattern = ADVISER_TAB) -> list[str] | None:
+    """The overlay's own sheets, where its workbook is a copy of the client model with the adviser's sheets grouped
+    behind a divider tab ("Adviser>>" then its sheets, up to the next divider, "Client>>"): the tabs behind an adviser's
+    divider, the divider too. Only where most of the sheets outside them are last year's client model's (a copy of
+    it): a standalone overlay's own tabs ("Outputs >", "Workings>>") are all the overlay's. None otherwise
+    (another version of the model having the same sheets can't tell the overlay's from the client's here).
+    tab: the dividers that are the adviser's; where it isn't known yet which workbook is the overlay, ADVISER_NAME."""
+    if not any(DIVIDER.match(s) and tab.match(s.strip("<> ")) for s in names):
+        return None
+    db = rodb.connect(db_path)
+    cells = dict(db.execute("SELECT sheet, COUNT(*) FROM cells GROUP BY sheet").fetchall())
+    db.close()
+    own, head, tabs = [], None, set()
+    for s in names:
+        if DIVIDER.match(s) and cells.get(s, 0) <= 2:
+            head = s
+            tabs.add(s)
+            if tab.match(s.strip("<> ")):
+                own.append(s)
+        elif head and tab.match(head.strip("<> ")):
+            own.append(s)
+    rest = [s for s in names if s not in own and s not in tabs and cells.get(s)]
+    if not own or not rest or sum(s in set(prior_names) for s in rest) < COPY_SHARE * len(rest):
+        return None
+    return own
 
 
 def profile(wb: dict, fact_matches: list[dict]) -> dict:
@@ -154,16 +187,22 @@ def structure(workbooks: list[dict]) -> dict:
     return {"sigs": sigs, "pairs": pairs, "shape": shape}
 
 
-def split(prof: dict, seed: dict[str, list[str]] | None = None, shared: set[str] | None = None) -> tuple[list[str], list[str]]:
+def split(prof: dict, seed: dict[str, list[str]] | None = None, shared: set[str] | None = None,
+          tabs: list[str] | None = None) -> tuple[list[str], list[str]]:
     """(overlay sheets, client sheets), with the reasons written into each overlay sheet's "why". seed: sheets the
     structure already marks as overlay (the extra sheets over a copy of the model), with reasons. shared: sheets
     another version of the same model also has, which can't be last year's overlay unless the report's figures
-    sit there (a client model's own DCF is not the overlay)."""
+    sit there (a client model's own DCF is not the overlay). tabs: the adviser's tabs behind its divider
+    (adviser_sheets), the overlay's even where another version has them too (an earlier copy of the overlay)."""
     sh = prof["sheets"]
     overlay = set()
     for s, reasons in (seed or {}).items():
         if s in sh:
             sh[s]["why"].append("not in the other version of the model" + (": " + "; ".join(reasons) if reasons else ""))
+            overlay.add(s)
+    for s in tabs or []:
+        if s in sh and s not in overlay:
+            sh[s]["why"].append("the adviser's divider tab" if s == tabs[0] else f"behind the adviser's divider tab {tabs[0]}")
             overlay.add(s)
     shared = shared or set()
     for s, v in sh.items():
@@ -173,7 +212,7 @@ def split(prof: dict, seed: dict[str, list[str]] | None = None, shared: set[str]
             v["why"].append(f"DCF reproduced in Python: {', '.join(a['cell'] for a in v['anchors'][:2])}")
         if (v["facts"] or v["anchors"]) and s not in shared:
             overlay.add(s)
-        elif v["facts"] or v["anchors"]:
+        elif (v["facts"] or v["anchors"]) and s not in overlay:
             # a report figure can match the client's own inputs (a cost of equity on its assumptions sheet): a
             # sheet the other version of the model has too is the client's, whatever it holds
             v["why"].append("the other version of the model has this sheet too, so it's the client's own")
@@ -239,8 +278,12 @@ def suggest(reports: list[dict], workbooks: list[dict], facts: list[dict]) -> di
         shared = {s for s in prof["sheets"] if _shared(sig, [st["sigs"][j] for j in sp["family"]], s)}
         # extra sheets count as the overlay only with some sign of valuation work (a new client sheet isn't)
         seed = {s: r for s, r in sp["extra"].items() if r or prof["sheets"].get(s, {}).get("anchors")}
-        ov, cl = split(prof, seed, shared)
-        if sp["standalone"] and len(workbooks) > 1:  # a separate valuation workbook: every sheet is overlay work
+        # the adviser's tabs ("Adviser>>" up to "Client>>") in a copy of a client model another workbook here has: one more
+        # sign of the overlay, as the adviser's name is (not every overlay is laid out so)
+        tabs = next(filter(None, (adviser_sheets(wb["db_path"], sig["sheets"], o["sheets"], ADVISER_NAME)
+                                  for j, o in st["sigs"].items() if j != wb["id"])), None)
+        ov, cl = split(prof, seed, shared, tabs)
+        if sp["standalone"] and not tabs and len(workbooks) > 1:  # a separate valuation workbook: every sheet is overlay work
             for s, v in prof["sheets"].items():
                 if v["rows"] and s not in ov:
                     v["why"].append("in the separate valuation workbook")
@@ -252,10 +295,10 @@ def suggest(reports: list[dict], workbooks: list[dict], facts: list[dict]) -> di
                                               else "standalone overlay")
         facts_on = sum(len(prof["sheets"][s]["facts"]) for s in ov)
         score = sum(len(prof["sheets"][s]["facts"]) * 2 + len(prof["sheets"][s]["anchors"]) for s in ov) \
-            + 2 * len(seed) + (4 if sig["markers"] else 0)
+            + 2 * len(seed) + (4 if tabs else 0) + (4 if sig["markers"] else 0)
         info[wb["id"]] = {"mode": mode, "overlay": ov, "client": cl if mode != "standalone overlay" else [],
                           "score": score, "points": sp["points"] if mode == "standalone overlay" else 0,
-                          "facts_on": facts_on, "timeline_start": prof["timeline_start"],
+                          "facts_on": facts_on, "tabs": tabs, "timeline_start": prof["timeline_start"],
                           "client_share": round(client_share, 2),
                           "why": {s: prof["sheets"][s]["why"] for s in ov}, "structure": sp["why"],
                           "family": sp["family"]}
@@ -312,7 +355,9 @@ def suggest(reports: list[dict], workbooks: list[dict], facts: list[dict]) -> di
             roles["prior_model"] = {"kind": "workbook", "id": ov_id, "sheets": o["client"],
                                     "why": [f"same workbook as the overlay; client sheets: {', '.join(o['client'])}"]
                                     + ([f"{names[host]} is dated after it: this year's model, not the file it was copied from"]
-                                       if later else [])}
+                                       if later else [])
+                                    + [f"{names[j]} has the adviser's tabs too: another copy of the overlay, not the client's "
+                                       "model as sent" for j in o["family"] if info[j]["tabs"]]}
         else:
             # The workbook the overlay's external links read: same file name, or the cached values match.
             best, why = None, []

@@ -410,6 +410,153 @@ def roles_check() -> None:
           "checks goes to a person)")
 
 
+def adviser_tabs_check() -> None:
+    """An overlay in a copy of the client model, its sheets behind the adviser's divider tab ("Adviser>>", up to "Client>>"):
+    those are its own, the rest its copy of the client model, where last year's client model has the same sheets (even
+    with the adviser's tabs in it too); a standalone overlay's own dividers ("Outputs >") leave every sheet its own."""
+    import build_map
+    import roles as rolesmod
+    import xlsxwriter
+    out = Path(tempfile.mkdtemp(prefix="tabs_"))
+    book = xlsxwriter.Workbook(out / "copy.xlsx")
+    for name, rows in (("Adviser>>", 0), ("Valuation", 4), ("PFI", 3), ("Client>>", 0), ("Inputs", 3), ("Ops", 5),
+                       ("Fin", 4), ("SPARE>>", 0), ("Scratch", 2)):
+        ws = book.add_worksheet(name)
+        ws.write(0, 0, name.strip(">") + " section" if not rows else name)
+        for r in range(rows):
+            ws.write(r + 2, 1, f"{name} line {r}")
+            ws.write_number(r + 2, 3, 10.0 + r)
+    book.close()
+    db = build_map.main(str(out / "copy.xlsx"), str(out / "db"))["db"]
+    names = ["Adviser>>", "Valuation", "PFI", "Client>>", "Inputs", "Ops", "Fin", "SPARE>>", "Scratch"]
+    assert rolesmod.adviser_sheets(db, names, names) == ["Adviser>>", "Valuation", "PFI"]
+    assert rolesmod.adviser_sheets(db, names, ["Inputs", "Ops", "Fin", "Scratch"]) == ["Adviser>>", "Valuation", "PFI"]
+    # a standalone overlay: little of the rest is the client model's
+    assert rolesmod.adviser_sheets(db, names, ["Ops"]) is None
+    print("adviser tabs: ok (the sheets behind the Adviser>> tab are the overlay's own, the rest its copy of the client "
+          "model; a standalone overlay's tabs leave it whole)")
+
+
+def copies_check() -> None:
+    """Two copies of last year's client model with the adviser's tabs behind "Adviser>>" (the one the report came from and
+    an earlier working copy) and this year's client model, its sheets renamed and rebuilt: unlike the others, with
+    valuation words and charts, and as many of the report's figures (last year's, kept in its history). The overlay is
+    the report's copy's tabs, though the earlier copy has the same sheets, the tabs tipping it; last year's client model
+    is that copy's own client sheets, not the earlier copy. The tabs are one sign among others, not every overlay being
+    laid out so: a working copy with them doesn't outweigh a separate valuation workbook holding the report's figures,
+    and a client model's own "Valuation>" section isn't the adviser's."""
+    import build_map
+    import roles as rolesmod
+    import xlsxwriter
+    from datetime import datetime
+    from xlsxwriter.utility import xl_rowcol_to_cell as cell
+    out = Path(tempfile.mkdtemp(prefix="copies_"))
+
+    def book(i, name, sheets, vd, charts=()):
+        b = xlsxwriter.Workbook(out / name)
+        day = b.add_format({"num_format": "dd mmm yyyy"})
+        for s, rows in sheets:
+            ws = b.add_worksheet(s)
+            ws.write(0, 0, s.strip("<> ") + " section" if not rows else s)
+            for r, (label, v) in enumerate(rows, 2):
+                ws.write(r, 1, label)
+                if isinstance(v, datetime):
+                    ws.write_datetime(r, 3, v, day)
+                elif isinstance(v, tuple):  # six periods, each grown from the one before
+                    ws.write_number(r, 3, v[0])
+                    for c in range(4, 9):
+                        ws.write_formula(r, c, f"={cell(r, c - 1)}*{v[1]}")
+                else:
+                    ws.write(r, 3, v)
+            if s in charts:
+                ch = b.add_chart({"type": "line"})
+                ch.add_series({"values": [s, 2, 3, 2, 8]})
+                ws.insert_chart("K2", ch)
+        b.close()
+        db = build_map.main(str(out / name), str(out / f"db{i}"))["db"]
+        return {"id": i, "filename": name, "db_path": db, "source_path": str(out / name), "valuation_date": vd,
+                "uploaded_at": float(i)}
+
+    model = [("Inputs", [("Volume growth", 0.025), ("Unit charge", 20.0), ("Tax rate", 0.3)]),
+             ("Ops", [("Volumes", (10.0, 1.025)), ("Regulated revenue", (200.0, 1.03)),
+                      ("Operating costs", (60.0, 1.025)), ("Present value of terminal value", 1900.0)]),
+             ("CashFlow", [("EBITDA", (140.0, 1.03)), ("Capital expenditure", (50.0, 1.01)),
+                           ("Distributions", (80.0, 1.04))]),
+             ("Hist", [("Discount rate", 0.10), ("Historical revenue", (190.0, 1.04))]),
+             ("Checks", [("Balance check", "=CashFlow!D3-CashFlow!D3")])]
+    client = [("Client>>", [])] + model
+    adv = lambda equity, growth, tv: [
+        ("Adviser>>", []),
+        ("Valuation", [("Valuation date", datetime(2025, 6, 30)), ("Distributions to equity", "=CashFlow!D5"),
+                       ("Discount factor", (0.95, 0.91)), ("Terminal growth rate", growth), ("Terminal value", tv),
+                       ("Equity value", equity)]),
+        ("PFI", [("Revenue", "=Ops!D4"), ("EBITDA", "=CashFlow!D3")]),
+        ("Adviser Charts", [("Equity value low", equity * 0.95), ("Equity value high", equity * 1.05)]),
+        ("Sensitivities", [("Equity value at a 0.5% higher rate", equity * 0.93)])]
+    current = [("Title", [("Asset A valuation model", "December 2025")]),
+               ("Outputs>", []),
+               ("Dashboard_O", [("Enterprise value", "=aVal!D3"), ("Equity value", "=aVal!D4")]),
+               ("Ops_O", [("Volume", (10.5, 1.025)), ("Regulated revenue", (210.0, 1.03)),
+                          ("Operating costs", (62.0, 1.025))]),
+               ("Inputs>", []),
+               ("iOps", [("Volume growth assumption", 0.025), ("Unit charge", 21.0)]),
+               ("Analysis>", []),
+               ("aVal", [("Enterprise value", 3000.0), ("Equity value", 1500.0), ("Net debt", "=D3-D4"),
+                         ("Terminal year", 2050), ("Discount factor", (0.95, 0.91)), ("Gearing", "=D5/D3")]),
+               ("System>", []),
+               ("Hist", [("Discount rate", 0.10), ("Terminal growth rate", 0.03)]),
+               ("Log", [("Valuation date", datetime(2025, 6, 30)), ("Model updated", datetime(2025, 12, 31))])]
+    # this year's model first: on the report's figures alone it ties with the report's copy
+    wbs = [book(3, "Asset A Valuation Model December 2025.xlsx", current, "2025-12-31", charts=("Dashboard_O",)),
+           book(1, "Asset A June 2025 adviser overlay v2.xlsx", adv(1500.0, 0.03, 20000.0) + client, "2025-06-30"),
+           book(2, "20250529 Asset A June 25 Valuation.xlsx", adv(1400.0, 0.025, 19000.0) + client, "2025-06-30")]
+    facts = [{"id": 1, "category": "identity", "key": "valuation_date", "label": "Valuation date",
+              "value_text": "30 June 2025", "value": 20250630, "unit": "date"},
+             {"id": 2, "category": "conclusion", "key": "equity_value", "label": "Equity value", "value_text": "1,500.0",
+              "unit": "A$m"},
+             {"id": 3, "category": "conclusion", "key": "terminal_value", "label": "Terminal value", "value_text": "20,000",
+              "unit": "A$m"},
+             {"id": 4, "category": "conclusion", "key": "pv_terminal_value", "label": "Present value of terminal value",
+              "value_text": "1,900", "unit": "A$m"},
+             {"id": 5, "category": "assumption", "key": "discount_rate", "label": "Discount rate", "value_text": "10.0%",
+              "unit": "%"},
+             {"id": 6, "category": "assumption", "key": "terminal_growth_rate", "label": "Terminal growth rate",
+              "value_text": "3.0%", "unit": "%"}]
+    res = rolesmod.suggest([{"id": 1, "filename": "Asset A valuation report June 2025.pdf", "n_facts": 6}], wbs, facts)
+    rl, by = res["roles"], res["workbooks"]
+    assert by[3]["structure"][0].startswith("unlike the other workbooks"), by[3]["structure"]
+    assert (rl["prior_overlay"]["id"], rl["prior_overlay"]["sheets"]) == \
+        (1, ["Adviser>>", "Valuation", "PFI", "Adviser Charts", "Sensitivities"]), rl["prior_overlay"]
+    assert (rl["prior_model"]["id"], rl["prior_model"]["sheets"]) == \
+        (1, ["Inputs", "Ops", "CashFlow", "Hist", "Checks"]), rl["prior_model"]
+    assert any("20250529 Asset A June 25 Valuation.xlsx has the adviser's tabs too" in w for w in rl["prior_model"]["why"])
+    assert rl["current_model"]["id"] == 3 and by[3]["mode"] == "client model", (rl.get("current_model"), by[3])
+    # the tabs are one sign: the client's models with a valuation section of their own, an early working copy with
+    # the adviser's tabs, and the separate valuation workbook that holds the report's figures
+    own = [("Valuation>", []), ("Val_Calc", [("Discount rate", 0.10), ("Equity IRR", 0.112), ("Project NPV", (55.0, 1.02))])]
+    standalone = [("Val_Inputs", [("Valuation date", datetime(2025, 6, 30)), ("Discount rate", 0.10),
+                                  ("Terminal growth rate", 0.03)]),
+                  ("DCF", [("Distributions", (80.0, 1.04)), ("Discount factor", (0.95, 0.91)), ("Terminal value", 20000.0),
+                           ("Present value of terminal value", 1900.0)]),
+                  ("Summary", [("Enterprise value", 2350.0), ("Net debt", 850.0), ("Equity value", 1500.0),
+                               ("Sensitivity to the discount rate", 120.0)])]
+    working = [("Adviser>>", []), ("Adviser Notes", [("Valuation date", datetime(2025, 6, 30)), ("Equity value draft", 1250.0)]),
+               ("Client>>", [])]
+    wbs = [book(11, "Asset B client model June 2025.xlsx", model + own, "2025-06-30"),
+           book(12, "Asset B client model June 2026.xlsx", model + own, "2026-06-30"),
+           book(13, "Asset B model adviser working copy.xlsx", working + model + own, "2025-06-30"),
+           book(14, "Asset B valuation FY25.xlsx", standalone, "2025-06-30")]
+    res = rolesmod.suggest([{"id": 1, "filename": "Asset B valuation report June 2025.pdf", "n_facts": 6}], wbs, facts)
+    rl, by = res["roles"], res["workbooks"]
+    assert by[13]["tabs"] == ["Adviser>>", "Adviser Notes"] and by[11]["tabs"] is None and by[12]["tabs"] is None, by
+    assert (rl["prior_overlay"]["id"], rl["prior_overlay"]["sheets"]) == (14, ["Val_Inputs", "DCF", "Summary"]), rl["prior_overlay"]
+    assert rl["prior_model"]["id"] == 11 and rl["current_model"]["id"] == 12, (rl.get("prior_model"), rl.get("current_model"))
+    print("copies: ok (two copies with the adviser's tabs: the overlay is the tabs of the one holding the report's "
+          "figures, last year's client model its own client sheets, this year's renamed model a client model; the tabs "
+          "one sign among others: a working copy with them doesn't outweigh the valuation workbook holding the figures, "
+          "a client's own \"Valuation>\" section isn't the adviser's)")
+
+
 def escalate_check() -> None:
     """Where the image reading and the reviewer agree with neither each other nor the extraction, the fact goes to a
     person: not approved, the agents' status escalated, on the needs-you list with the image."""
@@ -1093,6 +1240,8 @@ def main() -> None:
     rows_context_check(eid)
     gating_check(eid)
     roles_check()
+    adviser_tabs_check()
+    copies_check()
     escalate_check()
     dates_check()
     place_check()
