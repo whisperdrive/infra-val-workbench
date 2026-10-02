@@ -234,6 +234,21 @@ async def set_rate(eid: int, body: Rate):
     return got
 
 
+class Term(BaseModel):
+    row: str             # this year's row, "Sheet!rN"
+    confirmed: bool = True
+    label: str | None = None
+
+
+@app.post("/api/engagements/{eid}/term")
+async def confirm_term(eid: int, body: Term):
+    """A new term of this year's model confirmed as belonging in this year's value (or taken back): the gate again."""
+    got = await _run(workbench.confirm_term, eid, body.row, body.confirmed, body.label)
+    orchestrator.person(eid, "result", f"{'confirmed' if got['confirmed'] else 'took back'} the new term {got['row']}"
+                        + (f" ({got['label']})" if got["label"] else "") + " in this year's value")
+    return got
+
+
 class Method(BaseModel):
     key: str | None = None  # methods.METHODS' key; null: the default
 

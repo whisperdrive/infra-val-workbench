@@ -244,6 +244,15 @@ PACK_V = ("AssetA_valuation_report_FY25.pdf", "AssetA_BP25_client_model_Jun25.xl
           "AssetA_BP26_client_model_Jun26_v2.xlsx")  # a later version of this year's model
 
 
+INSURANCE = "Operations!r10"  # this year's model adds insurance to EBITDA: a new term the value takes in
+
+
+def confirm_insurance(eid: int) -> None:
+    """A person's confirmation, ahead of the run, that this year's insurance belongs in the value (run_check sees
+    the value held on it first)."""
+    wb.confirm_term(eid, INSURANCE, True, "Insurance")
+
+
 def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     e = wb.create(name)
     eid = e["id"]
@@ -252,6 +261,17 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
         upload(eid, f)
     v = wait(eid, lambda v: status(v).get("review") in (*orc.SETTLED, "blocked", "failed") or
              any(s["status"] in ("blocked", "failed") for s in v["stages"]), "the run", 600)
+    st = status(v)
+    # this year's model adds insurance to EBITDA, a term last year's didn't have: the value takes it in, so it waits
+    # until a person confirms it belongs
+    terms = [n for n in v["needs"] if n["id"] == "new-terms"]
+    assert st["result"] == "blocked" and [n["rows"] for n in terms] == [[INSURANCE]], \
+        (st, [(s["stage"], s["note"]) for s in v["stages"]], v["needs"])
+    t0 = orc.stage(eid, "result").get("finished_at")
+    confirm_insurance(eid)
+    orc.poke()
+    v = wait(eid, lambda v: orc.stage(eid, "result").get("finished_at") != t0 and not v["busy"] and
+             status(v).get("review") in (*orc.SETTLED, "blocked", "failed"), "the run with the new term confirmed", 600)
     st = status(v)
     assert all(st[s] in orc.SETTLED for s in ("files", "facts", "roles", "rebuild", "rows", "result", "review")), \
         (st, [(s["stage"], s["note"]) for s in v["stages"]], v["needs"])
@@ -276,6 +296,9 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     sc = res["scenario"]
     assert [(x["cell"], x["this_year"], x["last_cell"], x["last_year"], x["status"]) for x in sc["selectors"]] ==         [("Inputs!B14", 1.0, "Inputs!B13", 1.0, "same")] and sc["saved"]["this_year"]["date"] == "2026-08-12", sc
     assert not res["figures"]["gaps"]["new_lines"], res["figures"]["gaps"]["new_lines"]
+    assert [(x["row"], x["label"], x["under"], x["in_value"], x["confirmed"], x["hold"]) for x in
+            res["figures"]["gaps"]["new_terms"]] == [("Operations!r10", "Insurance", "Operations!r11", True, True, False)], \
+        res["figures"]["gaps"]["new_terms"]
     assert res["terminal"]["kind"] == "growth_final_year" and res["terminal"]["from"] == "the fact", res["terminal"]
     assert e["terminal"]["kind"] == "growth_final_year" and e["terminal"]["passages"], e["terminal"]
     assert not res["inputs"]["growth"].get("na") and res["inputs"]["growth"]["ok"], res["inputs"]["growth"]
@@ -890,6 +913,7 @@ def lines_check(first: int) -> None:
     import diagnostics
     want = wb.get(first)["result"]
     eid = wb.create("Asset A, FY26 (a later model)")["id"]
+    confirm_insurance(eid)
     for f in PACK_V:
         upload(eid, f)
     v = wait(eid, lambda v: status(v)["result"] in (*orc.SETTLED, "blocked", "failed") and not v["busy"], "the result", 600)
@@ -934,6 +958,7 @@ def gate_check() -> None:
     import result
     e = wb.create("Asset A, FY26 (the gate)")
     eid = e["id"]
+    confirm_insurance(eid)
     for f in PACK_A:
         upload(eid, f)
     wait(eid, lambda v: status(v)["result"] in orc.SETTLED and status(v)["review"] in orc.SETTLED, "the result")
@@ -1345,6 +1370,89 @@ def changes_check() -> None:
           "an option and a switch the formulas read, not a note, a series or a case in passing; when each was saved)")
 
 
+def terms_check() -> None:
+    """The row finder's trace and the new terms, on two small models. This year's tax is on a new sheet under a label
+    with no word of last year's, and at another rate (its numbers aren't last year's): the trace up from EBITDA and
+    capital expenditure (anchors: the same label, last year's numbers) reaches it as the one row left once the
+    others are paired, so it's found. This year's cash flow available adds lease payments: a new term. Read through
+    the distributions the overlay reads, it's in the value and holds it until confirmed; with the overlay reading
+    the cash flow's terms instead, it's left out of the value, a point to check."""
+    from datetime import date
+    from types import SimpleNamespace
+
+    import xlsxwriter
+    from xlsxwriter.utility import xl_col_to_name as col
+    import build_map
+    import overlay as ovmod
+    import result
+    import rowfind
+    out = Path(tempfile.mkdtemp(prefix="terms_"))
+
+    def book(name, fy0, rate, grow, moved):
+        path = out / f"{name}.xlsx"
+        w = xlsxwriter.Workbook(path)
+        dt = w.add_format({"num_format": "dd-mmm-yy"})
+        inp = w.add_worksheet("Inputs")
+        inp.write(2, 0, "Tax rate")
+        inp.write(2, 1, rate)
+        sheets = [w.add_worksheet("CF")] + ([w.add_worksheet("Taxation")] if moved else [])
+        ends = [date(fy0 + k, 6, 30) for k in range(10)]
+        for sh in sheets:
+            sh.write(2, 0, "Period ending")
+            for k, e in enumerate(ends):
+                sh.write_datetime(2, 2 + k, e, dt)
+        cf = sheets[0]
+        rows = [(5, "Revenue"), (6, "Operating costs"), (7, "EBITDA"), (8, "Capital expenditure"),
+                (9, "Lease payments" if moved else "Tax paid"), (10, "Cash flow available"), (12, "Distributions to equity")]
+        for r, label in rows:
+            cf.write(r - 1, 0, label)
+        if moved:
+            sheets[1].write(5, 0, "Cash taxes")
+        for k in range(10):
+            c = col(2 + k)
+            rev, opex, capex = (200.0 + 5 * k) * grow, -(80.0 + 2 * k) * grow, -20.0 * grow
+            tax = -(rev + opex + capex) * rate
+            lease = -12.0 if moved else 0.0
+            cf.write_number(f"{c}5", rev)
+            cf.write_number(f"{c}6", opex)
+            cf.write_formula(f"{c}7", f"={c}5+{c}6", None, rev + opex)
+            cf.write_number(f"{c}8", capex)
+            if moved:
+                sheets[1].write_formula(f"{c}6", f"=-(CF!{c}7+CF!{c}8)*Inputs!$B$3", None, tax)
+                cf.write_number(f"{c}9", lease)
+                cf.write_formula(f"{c}10", f"={c}7+{c}8+Taxation!{c}6+{c}9", None, rev + opex + capex + tax + lease)
+            else:
+                cf.write_formula(f"{c}9", f"=-({c}7+{c}8)*Inputs!$B$3", None, tax)
+                cf.write_formula(f"{c}10", f"={c}7+{c}8+{c}9", None, rev + opex + capex + tax)
+            cf.write_formula(f"{c}12", f"={c}10*0.9", None, 0.9 * (rev + opex + capex + tax + lease))
+        w.close()
+        return ovmod.Workbook(build_map.main(str(path), str(out / name))["db"])
+
+    prior, cur = book("prior", 2026, 0.30, 1.0, False), book("current", 2027, 0.40, 1.03, True)
+    rm = rowfind.RowFinder(ovmod.RowMap(prior, cur), prior, cur)
+    ex = rm.explain("CF", 9)
+    assert ex["found"] == ("Taxation", 6) and "trace" in dict(ex["evidence"]) and rm.confident("CF", 9), ex
+    plain = rowfind.RowFinder(ovmod.RowMap(prior, cur), prior, cur)
+    plain._by_trace = lambda s, r: []
+    assert not plain.confident("CF", 9), plain.explain("CF", 9)  # without the trace it isn't settled
+    assert rm.terms("CF", 10) == [("CF", 9)] and rm.terms("CF", 9) == [] and rm.terms("CF", 12) == [], \
+        (rm.terms("CF", 10), rm.terms("CF", 9), rm.terms("CF", 12))
+    sess = SimpleNamespace(current=cur, prior=prior, ov=prior, rowmap=rm)
+    got = result._new_terms(sess, [("CF", 12)], "2026-06-30", set(), set())
+    assert [(x["row"], x["under"], x["in_value"], x["hold"], x["periods"], round(x["total"], 6)) for x in got] == \
+        [("CF!r9", "CF!r10", True, True, 10, -120.0)], got
+    assert not result._new_terms(sess, [("CF", 12)], "2026-06-30", {"CF!r9"}, set())[0]["hold"]
+    beside = result._new_terms(sess, [("CF", 7), ("CF", 8), ("CF", 9)], "2026-06-30", set(), set())
+    assert [(x["row"], x["in_value"], x["hold"]) for x in beside] == [("CF!r9", False, False)], beside
+    assert not result._new_terms(sess, [("CF", 7), ("CF", 8), ("CF", 9)], "2026-06-30", set(), {"CF!r9"})
+    for w in (prior, cur):
+        w.close()
+    print("terms: ok (tax moved to a new sheet under another label and at another rate, found by the trace up from "
+          "EBITDA and capex, and not without it; lease payments, a new term in the cash flow available: in the value "
+          "through the distributions, holding it until confirmed; beside the terms the overlay reads, left out and "
+          "flagged)")
+
+
 def upgrade_check() -> None:
     """A database from an earlier version gets the columns added since (a Windows install upgrades in place)."""
     import sqlite3
@@ -1365,6 +1473,7 @@ def main() -> None:
     ranges_check()
     facts_check()
     changes_check()
+    terms_check()
     upgrade_check()
     if not PACK.exists():
         sys.exit("run tests/make_pack.py first")

@@ -21,6 +21,7 @@ from datetime import date
 
 import dcf
 import dcftrace
+import forward
 import held
 import keyfacts
 import linkmap
@@ -380,6 +381,60 @@ def _new_lines(sess, read_rows: list[tuple], vd: str | None, prior_vd: str | Non
     return sorted(out, key=lambda x: -abs(x["total"]))[:NEW_LINES]
 
 
+TERM_UP, TERM_DOWN = 2, 3  # the sums looked at for new terms: rows this far above and below the rows the overlay reads
+
+
+def _new_terms(sess, read_rows: list[tuple], vd: str | None, confirmed: set, lines: set) -> list[dict]:
+    """The terms this year's model adds to the sums the overlay's rows sit in: for last year's rows the overlay reads,
+    the rows they add up or work out from (TERM_DOWN deep) and the rows that add them up (TERM_UP), each found this
+    year and its terms set against last year's (rowfind.terms: paired by the row finder, else by the trace's step).
+    A term this year's model has and last year's didn't, with figures after this year's valuation date, is:
+      in the value   it feeds a row the overlay reads (a new cost under the cash flow it reads): the value moves by
+                     it, and it holds the value back until a person confirms it (confirmed: this year's rows)
+      left out      it feeds none of them (a new line beside the ones the overlay reads): the value doesn't take it
+                     in, a point to check, not a hold; one the cash-flow lines list has (lines) isn't listed again
+    Figures in this year's model's units."""
+    cur, rm = sess.current, sess.rowmap
+    if not read_rows or not cur or not rm or not vd:
+        return []
+    (p_reads, p_by), (c_reads, _) = rm._index()["edges"]
+
+    def reach(starts, graph, depth):
+        seen, frontier = set(starts), list(starts)
+        for _ in range(depth):
+            frontier = [x for k in frontier for x in graph.get(k, ()) if x not in seen]
+            seen |= set(frontier)
+        return seen
+    sums = reach(read_rows, p_reads, TERM_DOWN) | reach(read_rows, p_by, TERM_UP)
+    here = {rm.locate(*k) for k in read_rows} - {None}
+    inside = reach(here, c_reads, 12)  # what the rows the overlay reads take in, this year
+    new_vd = ov.serial(date.fromisoformat(vd[:10]))
+    plab, labels, out = (sess.prior or sess.ov).labels(), cur.labels(), {}
+    for p in sorted(sums):
+        for k in rm.terms(*p) or []:
+            if k in out or k in here:
+                continue
+            vals, tl = cur.sheet(k[0]), cur.timeline(k[0])
+            xs = [(c, vals.get((k[1], c))) for c in _after(cur, k[0], new_vd)]
+            xs = [(c, v) for c, v in xs if isinstance(v, float) and abs(v) > 1e-9]
+            if not xs or all(0 < v <= 1 for _c, v in xs) or all(v.is_integer() and 30000 <= v <= 80000 for _c, v in xs):
+                continue  # nothing after the new date, a flag or a factor, dates
+            row = f"{k[0]}!r{k[1]}"
+            took = k in inside
+            if not took and row in lines:
+                continue
+            under = rm.locate(*p) if rm.confident(*p) else rm._anchor(p)
+            out[k] = {"row": row, "label": labels.get(k, ""), "periods": len(xs), "total": sum(v for _c, v in xs),
+                      "from": ov.to_date(tl[xs[0][0]]).isoformat() if xs[0][0] in tl else None,
+                      "to": ov.to_date(tl[xs[-1][0]]).isoformat() if xs[-1][0] in tl else None,
+                      "under": f"{under[0]}!r{under[1]}" if under else None, "under_label": labels.get(under, "") if under
+                      else "", "last_year": f"{p[0]}!r{p[1]}", "last_year_label": plab.get(p, ""),
+                      "in_value": took, "confirmed": row in confirmed, "hold": took and row not in confirmed}
+    unit = lambda k: (cur.db.execute("SELECT units FROM rows WHERE sheet=? AND row=?", k).fetchone() or ("",))[0] or ""
+    rows = [{**x, "units": unit(k)} for k, x in out.items()]
+    return sorted(rows, key=lambda x: (not x["in_value"], -abs(x["total"])))[:NEW_LINES]
+
+
 def _gaps(sess, summary: dict, cells: list[str]) -> dict:
     """Whether this year's value can be trusted, for each cell: this year's client model is read at all (an overlay
     that reads nothing of it would give last year's figures, rolled by date alone), the rows its discountings' cash
@@ -493,8 +548,16 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
         lines_error = None
     except Exception as ex_:
         lines, lines_error = [], f"{type(ex_).__name__}: {ex_}"
-    return {"reliable": all(x["reliable"] for x in by_cell.values()), "by_cell": by_cell, "date_check": date_hold,
-            "new_lines": lines, "new_lines_error": lines_error,
+    try:  # a term the value takes in that last year's model didn't have holds it until a person confirms it
+        terms = _new_terms(sess, sorted(read_by_row), None if date_hold else (info or {}).get("valuation_date"),
+                           set(summary.get("terms_confirmed") or []), {x["row"] for x in lines})
+        terms_error = None
+    except Exception as ex_:
+        terms, terms_error = [], f"{type(ex_).__name__}: {ex_}"
+    terms_held = [x for x in terms if x["hold"]]
+    return {"reliable": all(x["reliable"] for x in by_cell.values()) and not terms_held, "by_cell": by_cell,
+            "date_check": date_hold, "new_lines": lines, "new_lines_error": lines_error,
+            "new_terms": terms, "new_terms_error": terms_error, "terms_held": [x["row"] for x in terms_held],
             "no_reads": reads == 0, "family": fam, "rebuilt": fam < ov.REBUILT, "rebuilt_rows": rebuilt_rows,
             "date_cells": {"moved": roll.get("valuation_date_cells") or [], "read": vd_reads, "off": vd_off,
                            "by_label": bool(roll.get("valuation_date_by_label")), "to": (info or {}).get("valuation_date")},
@@ -932,7 +995,18 @@ def _streams(cs: list[dict]) -> tuple[dict | None, list[dict], list[dict]]:
     return main, fr, [c for c in rest if c not in fr]
 
 
-def _end_split(db, cs: list[dict]) -> dict:
+def _franking_part(db, summary: dict, facts: list[dict], cell: str, cs: list[dict]) -> dict | None:
+    """Franking credits no discounting under the figure discounts on its own, found by tracing up from the report's
+    utilisation to the figure (forward.py): the row added into a discounting's cash flows, and its sign there."""
+    if _streams(cs)[1]:
+        return None
+    stated = sourced._stated(facts, "franking_utilisation")
+    starts = forward.holding(db, [p for p, _ in stated], sourced.FRANKING, set(summary.get("sheets") or []) or None)         if stated else []
+    fw = forward.franking(db, starts, cell, cs) if starts else None
+    return {"core": fw["core"], "range": fw["range"], "sign": fw["sign"]}         if fw and fw["where"] == "part" and fw["range"] else None
+
+
+def _end_split(db, cs: list[dict], part: dict | None = None) -> dict:
     main, fr, other = _streams(cs)
     if not main:
         return {}
@@ -946,6 +1020,12 @@ def _end_split(db, cs: list[dict]) -> dict:
         out.update(pv_tv=sum(pv(c) for c in tvs), tv=sum(sum(flows(c).values()) for c in tvs), pv_forecast=out["pv"])
         fr, other = [c for c in fr if c not in tvs], [c for c in other if c not in tvs]
     out["franking"] = sum(pv(c) for c in fr) if fr else None
+    c = next((x for x in cs if part and x["cell"] == part["core"]), None)
+    if c and not fr:  # franking credits added into a discounting's cash flows: that part, discounted with them
+        fv = part["sign"] * dcf.compute(db, **{**c["inputs"], "cashflow": part["range"], "compare_to": None}, fix=False)["pv"]
+        out["franking"] = fv
+        if c is main and "pv_forecast" in out:
+            out["pv_forecast"] -= fv
     out["other"] = [{"cell": c["cell"], "label": c.get("cashflow_label"), "pv": pv(c)} for c in other]
     out["main_label"] = main.get("cashflow_label")
     return out
@@ -974,11 +1054,12 @@ def reconcile(sess, summary: dict, where: dict, facts: list[dict], figs: dict) -
     db = rodb.connect(path)
     unit = lambda v: v / (where["scale"] or 1.0) * (where["sign"] or 1) if isinstance(v, float) else None
     traced = {e: _traced(db, where[e]) for e in ("low", "high")}
+    parts = {e: _franking_part(db, summary, facts, where[e], (traced[e] or (None, []))[1]) for e in ("low", "high")}
     last, this = {}, {}
     for e in ("low", "high"):
         cs = (traced[e] or (None, []))[1]
         try:
-            last[e] = _end_split(db, cs)
+            last[e] = _end_split(db, cs, parts[e])
         except (ValueError, ZeroDivisionError) as ex:
             last[e] = {"error": str(ex)}
     if figs.get("this_year") and not (figs.get("gaps") and not figs["gaps"]["reliable"]):
@@ -989,10 +1070,12 @@ def reconcile(sess, summary: dict, where: dict, facts: list[dict], figs: dict) -
                 for rng in [_ranges(c, [p]) for p in c.get("parts") or []]:
                     if rng:
                         need |= ov._dcf_cells(db, {"cashflow": rng})
+            if parts[e]:
+                need |= ov._dcf_cells(db, {"cashflow": parts[e]["range"]})
         cur = _patched(sess, summary, db, "current", need)
         for e in ("low", "high"):
             try:
-                this[e] = _end_split(cur, (traced[e] or (None, []))[1])
+                this[e] = _end_split(cur, (traced[e] or (None, []))[1], parts[e])
             except (ValueError, ZeroDivisionError) as ex:
                 this[e] = {"error": str(ex)}
     saved = {e: figs["saved"].get(where[e]) for e in ("low", "high")}

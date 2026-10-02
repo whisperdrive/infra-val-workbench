@@ -15,6 +15,13 @@ is looked for in several independent ways, and the one the evidence supports bes
   banner       a model's summary cells in the first rows of its sheets (a total, a value at the valuation date,
                often repeated on several sheets) that read the row last year: the same banner this year reads
                the row to use
+  trace        the rows both models share, by their label and their numbers (anchors), followed to it through
+               the dependency graph: down from the ones that read it (an output: distributions, the cash flow
+               available), up from the ones it reads (an input: a volume, a tariff), each step the row paired with
+               last year's by its label, its numbers or its words, else as the one left once the others are paired.
+               It follows formulas, not sheets, so a row moved to a new sheet, or with rows put in between, is
+               still reached; two ways agreeing count for more, and a trace that leads elsewhere than the label
+               leaves the row to be looked at
 A candidate of another shape counts for less: last year's row calculated (formulas) and this one typed values,
 or the other way round. A reconciliation sheet of pasted values ("LINKED EBITDA") has last year's history exactly
 and a full series, and would otherwise win every row it copies.
@@ -36,7 +43,11 @@ CHECK_PERIODS = 3    # ... over at least this many periods side by side
 SHAPE = 0.6           # a candidate whose share of formulas differs from last year's row's by this much is another shape
 STAND_IN = "stand-in"  # a person's pick: keep last year's values for the row
 LAYOUT = 0.9         # an unlabelled row found at its own row number, on a sheet laid out as before
-VERSION = 3          # bump when finding changes: the agents' picks made under another version are dropped and redone
+TRACE_DEPTH = 6      # rows apart, at most, an anchor and the row the trace is for
+TRACE_ANCHORS = 6    # the nearest anchors each way
+TRACE_SCAN = 300     # rows looked at for anchors each way, at most
+VERSION = 4          # bump when finding changes: the agents' picks made under another version are dropped and redone
+                     # (4: the trace)
                      # (3: a pasted copy of last year's figures is no candidate)
                      # (2: unlabelled rows followed by the layout, blank rows settled by code)
 
@@ -354,7 +365,134 @@ class RowFinder:
         return sorted(out.values(), key=lambda x: (-x[1], x[0]))
 
     # ---- deciding ----------------------------------------------------------------------------------------------
-    WEIGHTS = {"label": 0.3, "history": 0.35, "words": 0.2, "neighbours": 0.15, "banner": 0.25, "shape": 0.0}
+    # ---- the trace -------------------------------------------------------------------------------------------
+    def _checked(self, a: tuple, c: tuple) -> bool:
+        memo = self._index().setdefault("checked", {})
+        if (a, c) not in memo:
+            memo[(a, c)] = self.check(*a, c)["ok"]
+        return memo[(a, c)]
+
+    def _anchor(self, k: tuple) -> tuple | None:
+        """This year's row for last year's row k by its label and its numbers alone, the trace's anchors: the same
+        label where it was (or on the sheet it became), and last year's numbers within CHECK_GAP. None otherwise."""
+        memo = self._index().setdefault("anchors", {})
+        if k not in memo:
+            memo[k] = None
+            if self.prior.labels().get(k):
+                hits = [x for x in self._by_label(*k) if x[1] >= 0.9]
+                if len(hits) == 1 and self._checked(k, hits[0][0]) and not self.is_copy(*k, hits[0][0]):
+                    memo[k] = hits[0][0]
+        return memo[k]
+
+    def _pair(self, a: tuple, c: tuple) -> float:
+        """How surely this year's row c is last year's row a, by what they are: the same label 1, last year's
+        numbers 0.8, most of the label's words 0.6; another kind of row, 0."""
+        if self.other_shape(*a, c) or self.is_copy(*a, c):
+            return 0.0
+        la, lc = _norm(self.prior.labels().get(a, "")), _norm(self._index()["labels"].get(c, ""))
+        if la and la == lc:
+            return 1.0
+        if self._checked(a, c):
+            return 0.8
+        return 0.6 if la and lc and _jaccard(_words(la), _words(lc)) >= 0.5 else 0.0
+
+    def _step(self, x: tuple, sibs: set, cands: set) -> tuple | None:
+        """This year's row for last year's x among cands, the rows next to the path's previous row this year (the
+        rows it reads, or is read by), sibs the same rows last year: the best paired, else the one left once each
+        of the others is paired. -> (row, quality, how) or None."""
+        scored = sorted(((self._pair(x, c), c) for c in cands), key=lambda t: (-t[0], t[1]))
+        if scored and scored[0][0] >= 0.6 and (len(scored) == 1 or scored[1][0] < scored[0][0]):
+            q, c = scored[0]
+            return c, q, "label" if q == 1.0 else "numbers" if q == 0.8 else "words"
+        taken = set()
+        for o in sorted(sibs - {x}):
+            best = max(((self._pair(o, c), c) for c in cands - taken), default=(0.0, None))
+            if best[0] < 0.8:
+                return None
+            taken.add(best[1])
+        left = sorted(cands - taken)
+        if len(left) == 1 and len(cands) == len(sibs):
+            return left[0], 0.6, "the one left"
+        return None
+
+    def _by_trace(self, s, r) -> list[tuple]:
+        """Last year's row reached from the anchors both models share, down from the rows that read it and up from
+        the rows it reads, step by step through this year's model (_step). -> [(row, score, text)]."""
+        (p_reads, p_by), (c_reads, c_by) = self._index()["edges"]
+        key, plab = (s, r), self.prior.labels()
+        found = defaultdict(list)
+        for down, grow, sib_of, cand_of in ((True, p_by, p_reads, c_reads), (False, p_reads, p_by, c_by)):
+            parent, frontier, anchors = {key: None}, [key], []
+            for _ in range(TRACE_DEPTH):
+                nxt = []
+                for k in frontier:
+                    for a in sorted(grow.get(k, ())):
+                        if a in parent or len(parent) > TRACE_SCAN:
+                            continue
+                        parent[a] = k
+                        nxt.append(a)
+                        b = self._anchor(a)
+                        if b and len(anchors) < TRACE_ANCHORS:
+                            anchors.append((a, b))
+                frontier = nxt
+            for a, b in anchors:
+                x, y, q, via = a, b, 1.0, []
+                while x != key:
+                    nx = parent[x]
+                    st = self._step(nx, set(sib_of.get(x, ())), set(cand_of.get(y, ())))
+                    if not st:
+                        break
+                    y, qq, how = st
+                    q *= qq
+                    via.append(f"'{plab.get(nx) or f'{nx[0]}!r{nx[1]}'}' ({how})")
+                    x = nx
+                else:
+                    found[y].append((down, q, f"traced {'down' if down else 'up'} from '{plab.get(a)}' "
+                                              f"({a[0]}!r{a[1]}; {b[0]}!r{b[1]} this year): " + " → ".join(via)))
+        out = []
+        for k, ways in found.items():
+            if self.is_copy(s, r, k):
+                continue
+            best = {}
+            for d, q, t in ways:  # the surest way each direction
+                if d not in best or q > best[d][0]:
+                    best[d] = (q, t)
+            q = max(x[0] for x in best.values()) + 0.2 * (len(best) - 1) + 0.1 * (len(ways) - len(best))
+            nums = self._checked(key, k)
+            out.append((k, round(min(1.0, q + (0.2 if nums else 0.0)), 3),
+                        "; ".join(t for _q, t in best.values()) + (f" (and {len(ways) - len(best)} more way(s))"
+                                                                   if len(ways) > len(best) else "")
+                        + ("; last year's numbers" if nums else "")))
+        return sorted(out, key=lambda x: (-x[1], x[0]))[:3]
+
+    def terms(self, s: str, r: int) -> list[tuple] | None:
+        """The rows this year's row for last year's row (s, r) reads that last year's didn't: each row last year's
+        read paired with one of this year's (where it's found, sure or not: a row in doubt is the gate's to ask
+        about, not a new one), else by the trace's step, and this year's left over. None where this year's row
+        isn't settled, or where fewer than half of last year's terms pair (another make-up: an annual total of a
+        quarterly row, a model rebuilt, not a term added). -> [this year's rows]."""
+        (p_reads, _), (c_reads, _) = self._index()["edges"]
+        here = self.locate(s, r) if self.confident(s, r) else self._anchor((s, r))
+        if not here:
+            return None
+        mine, theirs = set(p_reads.get((s, r), ())), set(c_reads.get(here, ()))
+        taken, left = set(), set()
+        for x in sorted(mine):
+            k = self.locate(*x)
+            if k in theirs and k not in taken:
+                taken.add(k)
+            else:
+                left.add(x)
+        for x in sorted(left):
+            st = self._step(x, left, theirs - taken)
+            if st:
+                taken.add(st[0])
+        if not mine or 2 * len(taken) < len(mine):
+            return None
+        return sorted(theirs - taken)
+
+    WEIGHTS = {"label": 0.3, "history": 0.35, "words": 0.2, "neighbours": 0.15, "banner": 0.25, "trace": 0.5,
+               "shape": 0.0}
 
     def explain(self, s: str, r: int) -> dict:
         """{found: (sheet, row) or None, how, evidence: [(strategy, text)], confidence, alternatives}."""
@@ -372,7 +510,7 @@ class RowFinder:
             return res
         found = defaultdict(dict)
         for name, fn in (("label", self._by_label), ("history", self._by_history), ("words", self._by_words),
-                         ("neighbours", self._by_neighbours), ("banner", self._by_banner)):
+                         ("neighbours", self._by_neighbours), ("banner", self._by_banner), ("trace", self._by_trace)):
             try:
                 for k, score, text in fn(s, r):
                     if k and (k not in found or name not in found[k] or found[k][name][0] < score):
@@ -393,10 +531,11 @@ class RowFinder:
         odd = set()
         for k, ev in found.items():
             total = sum(self.WEIGHTS[n] * sc for n, (sc, _) in ev.items())
-            if home:  # on the sheet last year's sheet became, or not
-                total += 0.1 if k[0] == home else -0.1
+            if home:  # on the sheet last year's sheet became, or not (the trace follows formulas onto a new sheet)
+                total += 0.1 if k[0] == home else 0.0 if "trace" in ev else -0.1
             strong = any((n == "label" and sc >= 1.0) or (n == "history" and sc >= 0.5) or (n == "banner" and sc >= 0.7)
-                         or (n == "neighbours" and sc >= 0.6) or (n == "label" and sc >= 0.8) for n, (sc, _) in ev.items())
+                         or (n == "neighbours" and sc >= 0.6) or (n == "label" and sc >= 0.8) or (n == "trace" and sc >= 0.7)
+                         for n, (sc, _) in ev.items())
             # the same label where it was, and last year's numbers in the periods both have: nothing beats that
             sure = "label" in ev and ev["label"][0] >= 1.0 and "history" in ev
             why = self.other_shape(s, r, k)
@@ -439,6 +578,14 @@ class RowFinder:
                     res["confidence"] = CONFIDENT
                     res["evidence"].append(("history", f"the other {len(others)} candidate(s) are the same series in every "
                                                        "period: whichever is meant, the figures are these"))
+        # the trace, surely, to another row: the label or the numbers alone don't settle it (last year's numbers in
+        # periods both have, under the same label, do)
+        led = max(((ev["trace"][0], kk) for _s, _t, kk, ev in ranked if "trace" in ev), default=None)
+        if res["found"] and led and led[0] >= 0.7 and led[1] != res["found"] and "trace" not in found[res["found"]] \
+                and not ("label" in found[res["found"]] and "history" in found[res["found"]]):
+            res["confidence"] = min(res["confidence"], round(CONFIDENT - 0.01, 2))
+            res["in_place"] = False
+            res["evidence"].append(("trace", f"but the trace leads to {led[1][0]}!r{led[1][1]}"))
         if not (res["found"] and (res["confidence"] >= CONFIDENT or res["in_place"])) and self.blank(s, r):
             res.update(found=None, how="nothing to find", confidence=1.0, in_place=False, stand_in=True, blank=True,
                        by="code", evidence=[("code", "last year's row has no label, no numbers and no formulas: nothing "
@@ -470,7 +617,8 @@ class RowFinder:
     def why(self, s: str, r: int, labels: dict) -> str:
         if self.picks.get((s, r)) == STAND_IN:
             return "last year's values kept on purpose (your pick)"
-        return self.rowmap.why(s, r, labels) + " (and no other way found it: not by its history, words, neighbours or banner)"
+        return self.rowmap.why(s, r, labels) + (" (and no other way found it: not by its history, words, neighbours, "
+                                                 "banner or a trace from the rows both models share)")
 
     def confident(self, s: str, r: int) -> bool:
         """Settled well enough to roll on without a person looking: picked (a row, or last year's values kept; a

@@ -1194,6 +1194,36 @@ def set_this_year_rate(eid: int, low, high=None) -> dict:
     return got
 
 
+def terms_file(eid: int) -> Path:
+    return OUT / "overlays" / f"e{eid}" / "terms.json"
+
+
+def terms_confirmed(eid: int) -> dict:
+    """The new terms of this year's model a person confirmed belong in this year's value (result._new_terms):
+    {this year's row: {"label", "by", "at"}}."""
+    try:
+        return json.loads(terms_file(eid).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def confirm_term(eid: int, row: str, ok: bool, label: str | None = None) -> dict:
+    """Confirm a new term of this year's model belongs in this year's value (ok), or take that back. The gate then
+    works out whether the value can be shown again."""
+    got = terms_confirmed(eid)
+    if ok:
+        got[row] = {"label": label or "", "by": "you", "at": time.time()}
+    else:
+        got.pop(row, None)
+    f = terms_file(eid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(got), encoding="utf-8")
+    if eid in _SESSIONS:
+        _SESSIONS[eid][1]["terms_confirmed"] = sorted(got)
+    _touch(eid)
+    return {"row": row, "confirmed": ok, "label": label or ""}
+
+
 def method_file(eid: int) -> Path:
     return OUT / "overlays" / f"e{eid}" / "method.json"
 
@@ -1236,6 +1266,7 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
     summary["held_values"] = held_values(eid)  # this year's figures a person set, on this year's feed
     summary["this_year_rate"] = this_year_rate(eid)  # and this year's discount rate (result.this_year_rate)
     summary["method"] = preferred_method(eid)  # and the method this year's value is worked out by (methods.py)
+    summary["terms_confirmed"] = sorted(terms_confirmed(eid))  # and the new terms a person confirmed (result._new_terms)
     roll = summary.get("roll")
     if not roll or not summary["wiring"].get("current"):
         return

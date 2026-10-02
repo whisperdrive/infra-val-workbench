@@ -250,7 +250,7 @@ class Session:
         self.formula_set = set(self.formula_cells)
         B.cached = lambda s, r, c: self.ov.value(s, r, c)
         self.rowmap = None
-        if self.current:  # last year's rows in this year's model: by label, history, words, neighbours, banner
+        if self.current:  # last year's rows in this year's model: by label, history, words, neighbours, banner, trace
             import rowfind
             base = self.prior or self.ov
             self.rowmap = rowfind.RowFinder(RowMap(base, self.current), base, self.current)

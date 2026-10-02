@@ -54,7 +54,7 @@ def _vocabulary() -> set[str]:
               "SUMPRODUCT", "NPV", "XNPV", "SUM", "other", "dcf_missing", "blank_rows", "weak_rows", "timing_open",
               "prior_report", "prior_model", "prior_overlay", "current_model", "document", "workbook", "pdf", "pptx",
               "prior_model_vs_current_model", "overlay_vs_prior_model", "found", "picked", "stand_in", "m", "k", "bn",
-              "end", "start", "rebuilt_rows", "label", "history", "words", "neighbours", "banner", "agents", "your",
+              "end", "start", "rebuilt_rows", "label", "history", "words", "neighbours", "banner", "trace", "agents", "your",
               "same", "differs", "unmatched", "gone", "cell", "file"}
     return words
 
@@ -256,7 +256,11 @@ def _result(eid: int, res: dict) -> dict:
                      "date_by_label": bool((g.get("date_cells") or {}).get("by_label")),
                      "new_lines": len(g.get("new_lines") or []),
                      "new_line_periods": sum(x["periods"] for x in g.get("new_lines") or []),
-                     "new_lines_error": bool(g.get("new_lines_error"))}
+                     "new_lines_error": bool(g.get("new_lines_error")),
+                     "new_terms": len(g.get("new_terms") or []),
+                     "new_terms_in_value": sum(1 for x in g.get("new_terms") or [] if x["in_value"]),
+                     "new_terms_held": len(g.get("terms_held") or []),
+                     "new_terms_error": bool(g.get("new_terms_error"))}
         # the cells' names aren't the client's words, but keep them out anyway: the ends, in order
         r["gate"]["zero_roll"] = list(r["gate"]["zero_roll"].values())
         tc = (res.get("figures") or {}).get("time") or {}
@@ -280,7 +284,7 @@ def _result(eid: int, res: dict) -> dict:
                 c, f = info.get("context") or {}, (info.get("context") or {}).get("formula") or {}
                 how = str(info.get("how") or "").lower()
                 shapes.append({"kind": kind, "found": bool(info.get("found")), "confidence": info.get("confidence"),
-                               "how": next((w for w in ("label", "history", "words", "neighbours", "banner", "agents", "your")
+                               "how": next((w for w in ("label", "history", "words", "neighbours", "banner", "trace", "agents", "your")
                                             if w in how), "none" if not how else "other"),
                                "copies_passed_over": len(info.get("copies") or []),
                                "has_formula": bool(f), "adds_up": bool(f.get("adds_up")), "reads_rows": f.get("n", 0),
@@ -359,7 +363,7 @@ _KEYS = {"app", "generated", "files", "reports", "workbooks", "roles", "placed",
          "feeds_dcf", "values", "candidates", "candidates_with_figures", "redacted", "rebuilt", "rebuilt_rows", "how",
          "copies_passed_over", "low", "high", "mid", "rate_this_year", "set", "applied", "cut_off",
          "methods", "preferred", "ties", "flags", "each", "key", "vs_default", "new_lines", "new_line_periods",
-         "new_lines_error", "scenario", "selectors", "saved", "last_year", "from",
+         "new_lines_error", "new_terms", "new_terms_in_value", "new_terms_held", "new_terms_error", "scenario", "selectors", "saved", "last_year", "from",
          "monthly", "quarterly", "semi-annual", "annual", "irregular"}
 
 

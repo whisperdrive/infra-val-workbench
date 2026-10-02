@@ -1530,13 +1530,14 @@ function viewResult() {
       <div><h2>Last year to this year</h2><p class="sub" style="margin:0">${esc(u)} · equity value, ${R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution"} · ${rateNow(R)?.applied ? `at this year's discount rate, ${esc(rateRange(rateNow(R).low, rateNow(R).high))}` : "at last year's discount rate"}${B.valuation_date ? ` · to ${esc(B.valuation_date)}` : ""}${heldNote(R)}</p></div>
       <div class="row">${state.hl?.step ? hlNote(STEP_SHORT[state.hl.step] || state.hl.step) : ""}<a class="btn small" href="${workpaperUrl()}" download title="The result, the bridge, the cash flows, the inputs and their checks, the facts, the review and the run log, as an Excel file">Export workpaper</a><div class="seg" role="group" aria-label="Which end">${["low", "mid", "high"].map(k => `<button type="button" data-end="${k}" class="${end === k ? "on" : ""}" aria-pressed="${end === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div></div></div>
     ${from != null && to != null && !B.held ? `<div class="move"><span class="from">${vN(from)}</span><span class="muted">→</span><span class="to">${vN(to)}</span><span class="${to - from >= 0 ? "okt" : "warnt"}">${signed(to - from)}</span><span class="small muted">the ${end}${end === "mid" ? ", the midpoint of the low and the high" : ""}</span></div>` : ""}
-    ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until the rows below are found: the bridge stops at last year's rebuilt value.</div>` : ""}
+    ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until what's below is settled (rows to find, new terms to confirm): the bridge stops at last year's rebuilt value.</div>` : ""}
     <div class="grid2" style="margin-top:10px"><div id="brChart"></div><div class="scroll"><table class="bridge"><thead><tr><th>Step</th><th class="num">Change</th><th class="num">Value</th></tr></thead><tbody>${rows}</tbody></table>
     ${(B.notes || []).length ? `<p class="small muted">${esc(B.notes.join("; "))}</p>` : ""}</div></div></div>
   ${rateCard(R)}
   ${methodsCard(R)}
   ${heldCard(R)}
   ${rowsCard(R)}
+  ${termsCard(R)}
   ${linesCard(R)}
   ${scenarioCard(R)}
   <div class="card" id="cfCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">The forecast cash flows</h2>${state.hl?.years?.length ? hlNote(yearsText(state.hl.years)) : ""}</div><p class="sub">Undiscounted, by financial year, the terminal value left out${R.chart?.left_out?.length ? ` (${esc(R.chart.left_out.join(", "))})` : ""}: last year's model against this year's.</p>
@@ -1658,6 +1659,28 @@ function linesCard(R) {
     <p class="sub">This year's model has these lines on the sheets the overlay reads, with figures after this year's valuation date, and last year's model had nothing like them (or nothing in them) to discount. The overlay doesn't read them, so this year's value leaves them out: check whether it should take them in.</p>
     <div class="scroll"><table class="stack-sm"><thead><tr><th>Line</th><th class="num">Periods</th><th>When</th><th class="num">Total, undiscounted</th><th>Its present value in the model</th></tr></thead><tbody>${L.map(row).join("")}</tbody></table></div></div>`;
 }
+// Terms this year's model adds to the sums the overlay's rows sit in, found by setting each sum's terms against last
+// year's: one the value takes in holds it until you confirm it belongs; one beside the rows the overlay reads is left
+// out of the value, a point to check. Figures in this year's model's units.
+function termsCard(R) {
+  const T = R.figures?.gaps?.new_terms; if (!T?.length) return "";
+  const held = T.filter(x => x.hold).length;
+  const row = x => `<tr class="${x.hold ? "held" : ""}"><td><b>${esc(x.label || "(no label)")}</b> <span class="mono small muted">${esc(x.row)}</span>
+        <div class="small muted">a new term of ${esc(x.under_label || x.under || "a sum")}${x.under ? ` <span class="mono">${esc(x.under)}</span>` : ""}; last year's was <span class="mono">${esc(x.last_year)}</span>${x.last_year_label ? ` (${esc(x.last_year_label)})` : ""}</div></td>
+      <td class="small">${x.in_value ? (x.confirmed ? `<span class="pill ok">in the value · confirmed by you</span>` : `<span class="pill warn">in the value · to confirm</span>`) : `<span class="pill">left out of the value</span>`}</td>
+      <td class="num">${x.periods}</td><td class="small">${esc(x.from === x.to ? (x.from || "") : `${x.from} to ${x.to}`)}</td><td class="num">${vN(x.total)}${x.units ? ` <span class="small muted">${esc(x.units)}</span>` : ""}</td>
+      <td>${x.in_value ? (x.confirmed ? `<button class="linkbtn" type="button" data-term-undo="${esc(x.row)}" data-label="${esc(x.label || "")}">Take back</button>` : `<button class="btn small primary" type="button" data-term-ok="${esc(x.row)}" data-label="${esc(x.label || "")}">It belongs</button>`) : ""}</td></tr>`;
+  return `<div class="card" id="termsCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">New terms in this year's model</h2>${held ? `<span class="pill warn">${held} to confirm</span>` : `<span class="pill ok">none holding the value</span>`}</div>
+    <p class="sub">Each sum the overlay's rows sit in (the rows it reads, what they add up, and what adds them up) is set against last year's, term by term. These are terms this year's model has and last year's didn't, with figures after this year's valuation date. One that feeds a row the overlay reads moves the value, so the value waits until you confirm it belongs. One beside the rows the overlay reads is left out of the value: check whether it should take it in.</p>
+    <div class="scroll"><table class="stack-sm"><thead><tr><th>Term</th><th>In the value?</th><th class="num">Periods</th><th>When</th><th class="num">Total, undiscounted</th><th></th></tr></thead><tbody>${T.map(row).join("")}</tbody></table></div></div>`;
+}
+function bindTerms() {
+  const post = (row, confirmed, label) => act(async () => {
+    await api(`/api/engagements/${E.id}/term`, {method: "POST", body: {row, confirmed, label}});
+    toast(confirmed ? `${label || row}: confirmed in this year's value, the gate runs again` : `${label || row}: taken back, the value waits on it again`); });
+  document.querySelectorAll("[data-term-ok]").forEach(b => b.onclick = () => post(b.dataset.termOk, true, b.dataset.label));
+  document.querySelectorAll("[data-term-undo]").forEach(b => b.onclick = () => post(b.dataset.termUndo, false, b.dataset.label));
+}
 // The scenario or case each client model is saved on (a typed selector its formulas read), this year's next to last
 // year's, and when each was saved: the overlay reads the saved values, so the value takes the saved scenario.
 function scenarioCard(R) {
@@ -1736,6 +1759,7 @@ async function rowPicker(row) {
 }
 function bindResult() {
   bindHeld();
+  bindTerms();
   bindRate();
   bindMethods();
   document.querySelectorAll("[data-end]").forEach(b => b.onclick = () => { state.bridgeEnd = b.dataset.end; render(); });

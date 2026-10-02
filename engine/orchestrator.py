@@ -150,7 +150,8 @@ def inputs(eid: int, name: str, snap: dict, holds: bool = True) -> str:
            sorted([f["key"], f.get("value_text"), f.get("status")] for f in snap["facts"]),
            _file_state(wb.held_file(eid)),  # this year's figures a person set for held inputs
            _file_state(wb.rate_file(eid)),  # and this year's discount rate
-           _file_state(wb.method_file(eid))]  # and the method this year's value is worked out by
+           _file_state(wb.method_file(eid)),  # and the method this year's value is worked out by
+           _file_state(wb.terms_file(eid))]  # and the new terms a person confirmed belong in it
     return _h(res) if name == "result" else _h(["review", result_digest(eid)])
 
 
@@ -776,6 +777,17 @@ def _result_job(eid: int, key: str):
                                     "its discount periods don't move together (one counted from the valuation date's input, "
                                     "the other from a copy of it, say), or its date isn't one the roll moves",
                           "go": {"step": "workbench", "anchor": "datesCard"}})
+        held = [x for x in g.get("new_terms") or [] if x["hold"]]
+        if held:
+            needs.append({"id": "new-terms", "stage": "result", "severity": "block",
+                          "title": "This year's value is held back: this year's model adds terms to the sums the value "
+                                   "reads",
+                          "detail": "; ".join(f"{x['row']} ({x['label']}) in {x['under_label'] or x['under']}: "
+                                              f"{x['periods']} period(s), {x['total']:,.1f} in total" for x in held[:4])
+                                    + (f"; {len(held) - 4} more" if len(held) > 4 else "") +
+                                    ". Last year's model had no such term, and the value takes it in: confirm each "
+                                    "belongs in this year's value",
+                          "go": {"step": "result", "anchor": "termsCard"}, "rows": [x["row"] for x in held]})
         rows = [x["row"] + (f" ({x['label']})" if x.get("label") else "") for x in
                 g["dcf_missing"] + g["blank_rows"] + g["weak_rows"] + g["timing_open"]]
         zero = [c for c, x in g["by_cell"].items() if not x["zero_roll"]["ok"]]
@@ -811,7 +823,8 @@ def _result_job(eid: int, key: str):
                       "title": f"This year's model looks rebuilt: {100 * g['family']:.0f}% of its line items are last year's",
                       "detail": (f"{len(rr)} row(s) the value reads were found by their numbers or words, not their labels: "
                                  "check they're the right ones" if rr else "the rows the value reads were found by their labels")
-                                + ("" if g["reliable"] else "; this year's value waits on the rows listed"),
+                                + ("" if g["reliable"] else "; this year's value waits on the rows listed"
+                                   + (" and the new terms to confirm" if g.get("terms_held") else "")),
                       "go": {"step": "result", "anchor": "rowsCard"}})
     if g and dc.get("by_label"):
         needs.append({"id": "dates-label", "stage": "result", "severity": "check",
@@ -827,6 +840,16 @@ def _result_job(eid: int, key: str):
                       "detail": "; ".join(f"{c}: {r:.2f}×" for c, r in moved) + ": a move of that size is usually the new "
                                 "forecast, but a row matched wrongly looks the same. Check the new forecast's step",
                       "go": {"step": "result", "anchor": "bridgeCard"}})
+    out_terms = [x for x in (g or {}).get("new_terms") or [] if not x["in_value"]]
+    if out_terms:
+        needs.append({"id": "new-terms-out", "stage": "result", "severity": "check",
+                      "title": "This year's model adds terms to sums beside the rows the overlay reads",
+                      "detail": "; ".join(f"{x['row']} ({x['label']}) in {x['under_label'] or x['under']}: "
+                                          f"{x['periods']} period(s), {x['total']:,.1f} in total" for x in out_terms[:4])
+                                + (f"; {len(out_terms) - 4} more" if len(out_terms) > 4 else "") +
+                                ". The overlay reads the sum's other terms, not the sum, so this year's value leaves "
+                                "them out: check whether it should take them in",
+                      "go": {"step": "result", "anchor": "termsCard"}, "rows": [x["row"] for x in out_terms]})
     lines = (g or {}).get("new_lines") or []
     if lines:
         needs.append({"id": "new-lines", "stage": "result", "severity": "check",

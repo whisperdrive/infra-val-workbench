@@ -24,6 +24,7 @@ import overlay as ov
 import valuation
 
 FRANKING = re.compile(r"frank|imputation|gamma|utili[sz]", re.I)
+GROWTH_WORDS = re.compile(r"growth|\btgr\b|terminal|perpetu", re.I)
 _LIT = re.compile(r"(?<![\w.$])(\d*\.\d+|\d+)(%?)(?![\w.])")
 
 
@@ -148,11 +149,12 @@ def rate(asm: dict, facts: list[dict]) -> dict:
 
 # ---- the terminal growth rate --------------------------------------------------------------------------------------
 
-def _fit(db, ref: str, tv: float) -> dict | None:
+def _fit(db, ref: str, tv: float, term: str | None = None) -> dict | None:
     """A terminal value's formula as X x (1 + g) / (r - g) (or X / (r - g)): g, r and X among the cells it reads,
-    or figures typed into it (then not sourced)."""
-    f = re.sub(r'"[^"]*"', "", _formula(db, ref) or "")
-    w = valuation.reads(db, cells=[_key(ref)], depth=1)
+    or figures typed into it (then not sourced). term: one term of the cell's formula, where the terminal value is
+    added to the last cash flow in it (=W8 + W8 * (1 + g) / (r - g)), tv that term's value."""
+    f = re.sub(r'"[^"]*"', "", term or _formula(db, ref) or "")
+    w = valuation.reads(db, expr=f, here=_key(ref)[0], depth=1) if term else valuation.reads(db, cells=[_key(ref)], depth=1)
     cells = [(k, dcf._num(n["value"])) for k, n in w.items() if dcf._num(n["value"]) is not None]
     typed = [(None, float(m[1]) / (100 if m[2] else 1)) for m in _LIT.finditer(dcf._FREF.sub(" ", f))]
     small = [(k, v) for k, v in cells + typed if 0 <= v < 0.3]
@@ -204,18 +206,40 @@ def _gordon(db, core: dict) -> dict | None:
     return _terminal(db, core, _fit)
 
 
-def growth(db, traced: dict, rates: dict, facts: list[dict]) -> dict:
-    """Each end's terminal growth rate: the cell its terminal value's formula reads as g, checked."""
+def _steps(fw: dict) -> str:
+    return " → ".join(f"{s['label'] or s['cell']} ({s['cell']})" for s in fw["path"][1:])
+
+
+def growth(db, traced: dict, rates: dict, facts: list[dict], where: dict | None = None,
+           sheets: set | None = None) -> dict:
+    """Each end's terminal growth rate: the cell its terminal value's formula reads as g, checked. Found down from the
+    discounting's cash flows, and up from the report's figure to the equity value (forward.py), which also finds a
+    terminal value in the last cash flow itself or added after the discounting."""
+    import forward
     import result
     stated = _stated(facts, "terminal_growth_rate")
     want = {"low": stated[0] if stated else None, "high": stated[-1] if stated else None}  # the low value: the lower growth
+    starts = forward.holding(db, [p for p, _ in stated], GROWTH_WORDS, sheets) if stated and where else []
     ends = {}
     for end in ("low", "high"):
         rep = want[end]
-        main, _, _ = result._streams(traced.get(end) or [])
+        cs = traced.get(end) or []
+        main, _, _ = result._streams(cs)
         fit = _gordon(db, main) if main else None
+        fw = forward.growth(db, starts, where[end], cs) if starts and where.get(end) else None
+        up = None
+        if fw and fit:
+            same = fw["tv_cell"] == fit["tv_cell"]
+            up = (same, f"Traced up from {fw['cell']} to the equity value, through the same terminal value: {_steps(fw)}"
+                  if same else f"Traced up from {fw['cell']}, the equity value is reached through {fw['tv_cell']}, not "
+                               f"{fit['tv_cell']}: {_steps(fw)}")
+        elif fw:
+            fit = fw["fit"]
+            up = (True, f"Found by tracing up from the report's figure ({fw['cell']}) to the equity value: the terminal "
+                        f"value {fw['tv_cell']} is {fw['where']} ({_steps(fw)})")
         if not fit:
-            ends[end] = {"ok": None, "why": "no terminal value built as X × (1 + g) / (r − g) found in its cash flows"}
+            ends[end] = {"ok": None, "why": "no terminal value built as X × (1 + g) / (r − g) found in its cash flows"
+                         + (", nor on the way up from the report's figure to the equity value" if starts else "")}
             continue
         (gk, g), (rk, r), (xk, x, xl) = fit["g"], fit["r"], fit["x"]
         s = follow(db, gk, g) if gk else None
@@ -239,8 +263,9 @@ def growth(db, traced: dict, rates: dict, facts: list[dict]) -> dict:
              f"rate ({own.get('cell') or 'not sourced'}), matched by value only: one of them isn't a cell" if at_rate else
              f"The terminal value uses {r_in or 'a rate typed in'} ({_pct(r)}), not the rate the discount factors read "
              f"({own.get('cell') or '?'}, {_pct(own['value']) if own.get('value') is not None else '?'})"),
+            *([up] if up else []),
             _vs_report(stated, rep, ties, "terminal growth rate")], rep[1] if rep else None, ties,
-            terminal_value=fit["tv_cell"])
+            terminal_value=fit["tv_cell"], traced_up={k: fw[k] for k in ("cell", "tv_cell", "where", "path")} if fw else None)
     return _wrap(ends, stated)
 
 
@@ -362,20 +387,42 @@ def _utilisation(db, cores: list[dict]) -> tuple[dict | None, str | None]:
 def franking(sess, summary: dict, db, traced: dict, where: dict, facts: list[dict], unit) -> dict:
     """Each end's franking credit utilisation: the fraction the franking credits read, checked by rerunning the
     Python overlay with it at nil (runs in overlay.deep; the session is left on the workbook feed)."""
+    import forward
     import result
     stated = _stated(facts, "franking_utilisation")
     want = {"low": stated[0] if stated else None, "high": stated[-1] if stated else None}  # the low value: the lower utilisation
+    starts = forward.holding(db, [p for p, _ in stated], FRANKING, set(summary.get("sheets") or []) or None) \
+        if stated else []
     ends = {}
     for end in ("low", "high"):
         rep = want[end]
         cs = traced.get(end) or []
         _, fr, _ = result._streams(cs)
-        if not fr:
-            ends[end] = {"ok": None, "why": "no franking credits discounting found under it"}
+        fw = forward.franking(db, starts, where[end], cs) if starts else None
+        up = None
+        if fr:
+            s, why = _utilisation(db, fr)
+            fr_pv = result._end_split(db, cs).get("franking")
+            if fw and s:
+                same = follow(db, fw["cell"], dcf._num(dcf._cell(db, *_key(fw["cell"]))) or 0.0)["cell"] == s["cell"]
+                up = (same, f"Traced up from {fw['cell']} to the equity value: {_steps(fw)}" if same else
+                      f"Traced up from the report's figure, {fw['cell']} reaches the equity value, not {s['cell']}")
+        elif fw and fw.get("pv") is not None:
+            v0 = dcf._num(dcf._cell(db, *_key(fw["cell"])))
+            s, why, fr_pv = follow(db, fw["cell"], v0 or 0.0), None, fw["pv"]
+            what = (f"added into {fw['core']}'s cash flows and discounted with them" if fw["where"] == "part" else
+                    f"discounted by {fw['core']}" if fw["where"] == "own" else
+                    "applied to a present value of the gross credits")
+            up = (True, f"Found by tracing up from the report's figure ({fw['cell']}) to the equity value: the franking "
+                        f"credits used, {fw['used_label'] or fw['used_row']} ({fw['used_row']}), are "
+                        + (f"{fw['gross_label'] or fw['gross_row']} ({fw['gross_row']}) × the utilisation, " if fw["gross"]
+                           else "") + f"{what} ({_steps(fw)})")
+        else:
+            ends[end] = {"ok": None, "why": "no franking credits discounting found under it" + (
+                ", and the report's figure, traced up, doesn't reach the equity value through franking credits it can "
+                "value" if starts else "")}
             continue
-        s, why = _utilisation(db, fr)
         value = dcf._num(dcf._cell(db, *_key(s["cell"]))) if s else None
-        fr_pv = result._end_split(db, cs).get("franking")
         rerun = None
         if s and fr_pv is not None:
             eq = ov.parse_a1(where[end])
@@ -392,14 +439,20 @@ def franking(sess, summary: dict, db, traced: dict, where: dict, facts: list[dic
                 rerun = {"drop": unit(drop), "franking": unit(fr_pv), "restored": abs(after - base) < 1e-9,
                          "ok": abs(drop - fr_pv) <= 1e-6 * max(1.0, abs(fr_pv))}
         ties = _tie(100 * value, rep) if rep and value is not None else None
-        checks = [(bool(s), "Sourced: every period's franking credits read this cell, the first and the last period's "
-                            "alike" + (f"; {s['why']}" if s and s.get("why") else "") if s else f"Not sourced: {why}")]
+        checks = [(bool(s), ("Sourced: every period's franking credits read this cell, the first and the last period's "
+                             "alike" if fr else "Sourced: the franking credits used read this cell, and through them the "
+                                                "equity value") + (f"; {s['why']}" if s and s.get("why") else "")
+                   if s else f"Not sourced: {why}")]
+        if up:
+            checks.append(up)
         if rerun:
             checks.append((rerun["ok"], f"Rerun with it at nil, Python's equity value at this end falls by "
                                         f"{rerun['drop']:,.1f}" + (", the value of franking credits" if rerun["ok"] else
                                                                    f", not the value of franking credits ({rerun['franking']:,.1f})")))
         checks.append(_vs_report(stated, rep, ties, "utilisation"))
-        ends[end] = _end(value, s, bool(s), why, checks, rep[1] if rep else None, ties, rerun=rerun)
+        ends[end] = _end(value, s, bool(s), why, checks, rep[1] if rep else None, ties, rerun=rerun,
+                         traced_up={k: fw[k] for k in ("cell", "used", "used_row", "used_label", "gross_row",
+                                                       "gross_label", "where", "core", "path")} if fw else None)
     return _wrap(ends, stated)
 
 
@@ -427,7 +480,8 @@ def check(sess, summary: dict, where: dict, facts: list[dict], asm: dict, traced
     out = {"rate": rate(asm, facts)}
     na = growth_applies(terminal)
     jobs = [("growth", lambda: {"ends": {e: {"ok": None, "why": na} for e in ("low", "high")}, "report": [],
-                                "ok": None, "na": na} if na else growth(db, traced, out["rate"], facts))]
+                                "ok": None, "na": na} if na else growth(db, traced, out["rate"], facts, where,
+                                                                        set(summary.get("sheets") or []) or None))]
     if (terminal or {}).get("kind") in EXITS:  # the report's terminal value is an exit multiple: source it
         jobs.append(("multiple", lambda: multiple(db, traced, facts, terminal)))
     for key, fn in jobs + [("franking", lambda: franking(sess, summary, db, traced, where, facts, unit))]:

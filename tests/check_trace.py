@@ -832,6 +832,90 @@ def multiple_check() -> None:
           "metric is what the report says; typed into the formula, it isn't sourced)")
 
 
+def forward_check() -> None:
+    """The terminal growth rate and the franking credit utilisation found by tracing up from the report's figure to
+    the equity value, where the tracer down from it can't see them: a terminal value inside the last cash flow
+    (=W8 + W10 + W8 x (1 + g) / (r - g)) and franking credits added into the cash flows (tax paid x utilisation), on
+    one sheet; a terminal value added after the discounting (=SUMPRODUCT(...) + TV x the last factor) on another.
+    Each is sourced to its cell and recomputed; with the utilisation at nil the equity value falls by exactly the
+    franking credits' part, discounted with the cash flows."""
+    import forward
+    import overlay as ov
+    import result
+    import sourced
+    import xlcompile
+    out = Path(tempfile.mkdtemp(prefix="trace_fwd_"))
+    vd, rate, g, util, years = date(2025, 6, 30), 0.08, 0.025, 0.6, list(range(2026, 2031))
+    fcf = [100.0 + 5 * k for k in range(len(years))]
+    tax = [-30.0 - k for k in range(len(years))]
+    df = [1 / (1 + rate) ** ((date(y, 6, 30) - vd).days / 365) for y in years]
+    tv = fcf[-1] * (1 + g) / (rate - g)
+    wb = xlsxwriter.Workbook(out / "fwd.xlsx")
+    dt = wb.add_format({"num_format": "dd-mmm-yy"})
+    inp = wb.add_worksheet("Inputs")
+    inp.write(3, 0, "Valuation date")
+    inp.write_datetime(3, 2, vd, dt)
+    for r, label, v in ((4, "Discount rate", rate), (5, "Terminal growth rate", g),
+                        (6, "Franking credit utilisation", util)):
+        inp.write(r, 0, label)
+        inp.write_number(r, 2, v)
+    last = COL(3 + len(years) - 1)
+    for name in ("Last", "After"):
+        sh = wb.add_worksheet(name)
+        for r, label in ((2, "Period ending"), (7, "Free cash flow"), (8, "Tax paid"), (9, "Franking credits used"),
+                         (10, "Valuation cash flow"), (12, "Discount factor"), (15, "Equity value"), (17, "Terminal value")):
+            sh.write(r, 1, label)
+        for k, y in enumerate(years):
+            c = COL(3 + k)
+            fr = -tax[k] * util
+            sh.write_datetime(2, 3 + k, date(y, 6, 30), dt)
+            sh.write_number(7, 3 + k, fcf[k])
+            sh.write_number(8, 3 + k, tax[k])
+            sh.write_formula(f"{c}10", f"=-{c}9*Inputs!$C$7", None, fr)
+            flow = fcf[k] + fr if name == "Last" else fcf[k]
+            if name == "Last" and k == len(years) - 1:
+                sh.write_formula(f"{c}11", f"={c}8+{c}10+{c}8*(1+Inputs!$C$6)/(Inputs!$C$5-Inputs!$C$6)", None, flow + tv)
+            else:
+                sh.write_formula(f"{c}11", f"={c}8+{c}10" if name == "Last" else f"={c}8", None, flow)
+            sh.write_formula(f"{c}13", f"=1/(1+Inputs!$C$5)^(({c}3-Inputs!$C$4)/365)", None, df[k])
+        flows = [fcf[k] + (-tax[k] * util if name == "Last" else 0.0) for k in range(len(years))]
+        pv = sum(f * x for f, x in zip(flows, df)) + tv * df[-1]
+        if name == "Last":
+            sh.write_formula("C16", f"=SUMPRODUCT(D11:{last}11,D13:{last}13)", None, pv)
+        else:
+            sh.write_formula("C18", f"={last}8*(1+Inputs!$C$6)/(Inputs!$C$5-Inputs!$C$6)", None, tv)
+            sh.write_formula("C16", f"=SUMPRODUCT(D11:{last}11,D13:{last}13)+C18*{last}13", None, pv)
+    wb.close()
+    db_path = build_map.main(str(out / "fwd.xlsx"), str(out / "db"))["db"]
+    db = sqlite3.connect(db_path)
+    facts = [{"key": "terminal_growth_rate", "value_text": "2.50%", "status": "approved"},
+             {"key": "franking_utilisation", "value_text": "60%", "status": "approved"}]
+    rates = {"ends": {e: {"cell": "Inputs!C5", "value": rate} for e in ("low", "high")}}
+    for name, where in (("Last", "the last cash flow itself"), ("After", "added after the discounting")):
+        cs = [c for c in dcftrace.cores(dcftrace.trace(db, f"{name}!C16")) if c.get("inputs")]
+        e = sourced.growth(db, {"low": cs, "high": cs}, rates, facts, {"low": f"{name}!C16", "high": f"{name}!C16"})["ends"]["low"]
+        assert e["sourced"] and e["cell"] == "Inputs!C6" and e["ok"] and e["ties"], (name, e)
+        assert e["traced_up"]["where"] == where and abs(e["value"] - g) < 1e-12, (name, e["traced_up"])
+        assert sourced.growth(db, {"low": cs, "high": cs}, rates, facts)["ends"]["low"]["ok"] is None, name  # not down
+    cs = [c for c in dcftrace.cores(dcftrace.trace(db, "Last!C16")) if c.get("inputs")]
+    want = sum(-t * util * x for t, x in zip(tax, df))
+    fw = forward.franking(db, ["Inputs!C7"], "Last!C16", cs)
+    assert (fw["where"], fw["used_row"], fw["gross_row"]) == ("part", "Last!r10", "Last!r9") and abs(fw["pv"] - want) < 1e-9, fw
+    summary = {"sheets": ["Inputs", "Last"]}
+    split = result._end_split(db, cs, result._franking_part(db, summary, facts, "Last!C16", cs))
+    assert abs(split["franking"] - want) < 1e-9, split
+    src, _ = xlcompile.compile_overlay(db_path, ["Inputs", "Last"])
+    (out / "overlay.py").write_text(src)
+    sess = ov.Session(str(out / "overlay.py"), db_path, ["Inputs", "Last"])
+    got = sourced.franking(sess, summary, db, {"low": cs, "high": cs}, {"low": "Last!C16", "high": "Last!C16"}, facts,
+                           lambda v: v)["ends"]["low"]
+    assert got["sourced"] and got["cell"] == "Inputs!C7" and got["ties"] and got["rerun"]["ok"], got
+    assert abs(got["rerun"]["drop"] - want) < 1e-6 and got["ok"], got
+    print(f"forward: ok (traced up from the report's figures: a terminal value inside the last cash flow and one added "
+          f"after the discounting, each sourced to Inputs!C6; franking credits added into the cash flows, worth "
+          f"{want:,.2f}, the drop with the utilisation at nil)")
+
+
 if __name__ == "__main__":
     main()
     mid_year_check()
@@ -845,3 +929,4 @@ if __name__ == "__main__":
     sum_rows_check()
     sumif_check()
     multiple_check()
+    forward_check()

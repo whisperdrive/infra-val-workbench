@@ -77,6 +77,14 @@ takes it from there:
      X × (1 + g) / (r − g) at that end's own discount rate;
    - franking credit utilisation: the fraction every period's franking credits read; rerun at nil in Python, the
      equity value must fall by exactly the value of franking credits;
+
+   the growth rate and the utilisation are also traced the other way (`forward.py`): from the cell holding the
+   report's figure on a row labelled like it, up through every formula that reads it, to the equity value. That finds
+   them wherever they sit, not only in the shapes the tracer down knows: a terminal value inside the last cash flow
+   (=W8 + W8 × (1 + g) / (r − g)) or added after the discounting (=XNPV(…) + TV × the last factor), and franking
+   credits added into the main cash flows (the first formula reading the utilisation is the franking used, its other
+   operand the gross credits, discounted with the cash flows: their value is that part discounted on its own, and
+   the nil rerun must fall by it). Where both ways find it, they must agree;
    - an exit multiple, where the report's terminal value is one: the cell the terminal value's formula reads as the
      multiple in multiple × metric, the terminal value recomputed from it, the metric what the report says it's a
      multiple of (EBITDA, the RAB), and the report's multiple for that end (the low value at the lower multiple). There's
@@ -88,8 +96,13 @@ takes it from there:
    terminal value discounted on its own (one period, labelled so) is the terminal value, and the split is in the
    units most of the report's figures tie in (discountings in thousands under an equity value in millions, at 100%
    under a share of it).
-6. **Rolls forward onto this year's client model.** Rows are found by label, history and numbers, with row agents for
-   the ones in doubt. A row still in doubt comes to you with what it is: the heading it sits under and its neighbours,
+6. **Rolls forward onto this year's client model.** Rows are found by label, history, numbers and a trace, with row
+   agents for the ones in doubt. The trace starts from the rows both models clearly share (the same label, last year's
+   numbers: an output like the distributions or the cash flow available, an input like a volume or a tariff) and
+   follows the dependency graph to the row, down from the outputs and up from the inputs, pairing each step with last
+   year's by its label, its numbers or its words, else as the one row left once the others are paired. It follows
+   formulas, not sheets, so a row moved to a new tab or with rows put in between is still reached; two ways agreeing
+   count for more, and a trace that leads elsewhere than the label leaves the row in doubt. A row still in doubt comes to you with what it is: the heading it sits under and its neighbours,
    what its formula adds up or works out from, last year's figures, which overlay row reads it and whether that's a
    cash flow the value discounts; and the rows of this year's model that might be it, each with its figures for the
    same periods and a button to use it. Candidates that are the same series from last year's valuation date on are
@@ -120,6 +133,7 @@ takes it from there:
    - the rows its cash flows come from weren't found (or were found blank, or not surely);
    - a discounting still reads another date than this year's valuation date;
    - the overlay reads nothing of this year's client model (last year's figures, rolled by date alone);
+   - this year's model adds a term the value takes in, not yet confirmed (the new terms, below);
    - the zero-roll check fails: at last year's valuation date, this year's model is far from last year's value;
    - the time check fails: the roll doesn't move a discounting on by its own rate. This year's model at last year's
      date (the periods to the new date cut off) against the roll at last year's rate, each discounting's present
@@ -131,6 +145,15 @@ takes it from there:
 
    A move of more than about 15% at last year's date (`overlay.ZERO_ROLL_CHECK`, a judgment call) doesn't hold the
    value but asks you to confirm it's the new forecast and not a row matched wrongly.
+
+   **New terms** in the sums the overlay's rows sit in (the rows it reads, what they add up, and what adds them up):
+   each this year is set against last year's, term by term, its terms paired by the row finder. A term this year's
+   model has and last year's didn't, with figures after this year's valuation date, either feeds a row the overlay
+   reads (a new cost under the cash flow it reads): the value takes it in and moves by it, so it's **held** until you
+   confirm the term belongs; or it's beside them (the overlay reads the sum's other terms, not the sum): the value
+   leaves it out, a point to check, not a hold (`result._new_terms`). A sum whose make-up changed (fewer than half of
+   last year's terms pair: an annual total of a quarterly row, a model rebuilt) isn't compared: that's a restructure,
+   not a term added, and the rows to check say so.
 
    Two changes the rows the overlay reads can't show are points to check too, and don't hold the value either:
    - **cash-flow lines the overlay doesn't read**: on the client sheets it reads, a row of this year's model labelled
@@ -221,7 +244,8 @@ the Run page.
 - **Rebuild**: the tie to the report and the model inputs sourced and checked; the reconciliation, the assumptions
   and the Python module folded, each with its result on the fold.
 - **Result**: the value bridge (low, mid, high), this year's discount rate (last year's until you set it), the
-  methods (and the one you prefer), the inputs held at last year's, the cash-flow lines the overlay doesn't read, the
+  methods (and the one you prefer), the inputs held at last year's, the new terms in this year's model (each to
+  confirm where the value takes it in), the cash-flow lines the overlay doesn't read, the
   client model's scenario next to last year's (and when each model was saved), the cash-flow chart, the review, and
   how the files link up (the map) folded. A review point names the years and the bridge step it's about (checked
   against the run), and a click marks them on the chart and the bridge. **Export workpaper** downloads it all as an Excel file: the summary (the
@@ -241,7 +265,8 @@ flows. Differences aren't worked out between engagements in different units.
 counts, yes / no, ratios, dates and the app's own words. Each model's shape (its timelines by frequency: monthly,
 quarterly, semi-annual, annual; its periods, first and last), how alike the two client models are, the profile, each
 stage's outcome, the facts by status, the result's checks, the discountings traced, the roll, the reliability gate
-(with how many cash-flow lines the overlay doesn't read), each row to find by its shape, and the client models'
+(with how many cash-flow lines the overlay doesn't read, and how many new terms, in the value and held), each row to
+find by its shape, and the client models'
 scenario selectors by how this year's compares with last year's, with when each was saved. Every string is checked
 against the app's own vocabulary before it leaves; anything else is redacted and counted. It's for pasting from a machine with real files into a session that can't see them.
 
@@ -269,7 +294,8 @@ Your firm's logo goes in the git-ignored `brand/` folder, and the mascot shows w
 ```
 uv run python tests/make_pack.py        # a synthetic pack: fictional names and numbers, both overlay layouts
 uv run python tests/check_workbench.py  # the whole run on it, every model call stubbed; the orchestrator's rules
-uv run python tests/check_trace.py      # reading a DCF back from its factors (flags, loose conventions); the roll
+uv run python tests/check_trace.py      # reading a DCF back from its factors (flags, loose conventions); the roll;
+                                        # the growth rate and the utilisation traced up to the equity value
 uv run python tests/check_xlruntime.py  # Excel functions in the Python runtime
 ```
 
@@ -284,6 +310,7 @@ uv run python tests/check_xlruntime.py  # Excel functions in the Python runtime
   - `context.py`: what the report says around a figure (the page, the letter, the scope, definitions).
   - `result.py`: the tie, the bridge and the cash flows.
   - `sourced.py`: the discount rate, terminal growth and franking credit utilisation, sourced and checked.
+  - `forward.py`: an assumption traced up to the equity value, through the formulas that read it.
   - `methods.py`: this year's value worked out other ways, against the default; the preferred one.
   - `scenarios.py`: the scenario each client model was saved on, this year's next to last year's, and when each was
     saved.
