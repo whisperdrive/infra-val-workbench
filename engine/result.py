@@ -465,30 +465,18 @@ def _label_left(db, s: str, r: int, c: int) -> str:
                                               "ORDER BY col", (s, r, c)) if isinstance(v, str) and not dcf._as_date(v))
 
 
-_WINDOW = re.compile(r"""^"(<=?)"\s*&\s*((?:(?:'[^']+'|[A-Za-z_][\w.]*)!)?\$?[A-Z]{1,3}\$?\d+)\s*(\+\s*1)?$""")
-
-
 def _windows(db, trees: list[dict]) -> list[dict]:
     """The sums in these trees of a row up to a date typed in a cell (SUMIF(dates, "<"&end+1, present values), or
-    SUMIFS with that criterion): an overlay's own horizon, the periods after it left to its terminal value.
-    -> [{"sum": (sheet, row, c1, c2), "dates": (sheet, row, c1, c2), "end": (sheet, row, col)}]."""
+    SUMIFS with that criterion: dcftrace.windows): an overlay's own horizon, the periods after it left to its terminal
+    value. -> [{"sum": (sheet, row, c1, c2), "dates": (sheet, row, c1, c2), "end": (sheet, row, col)}]."""
     out, names = [], dcftrace._names(db)
 
     def walk(n):
         f = n.get("formula") or ""
         if "SUMIF" in f.upper() and n.get("cell"):
             here = dcf._ref(n["cell"], "")[0]
-            for fn, args, _ in dcftrace._calls(dcftrace._expand(db, f, names)):
-                pairs = ([(args[0], args[1], args[2] if len(args) > 2 else args[0])] if fn == "SUMIF" and len(args) in (2, 3)
-                         else [(args[i], args[i + 1], args[0]) for i in range(1, len(args) - 1, 2)] if fn == "SUMIFS" else [])
-                for rng, crit, total in pairs:
-                    m = _WINDOW.match(crit.strip())
-                    # up to and including the end's own period: "<"&end+1 or "<="&end
-                    if not m or (m[1] == "<=") != (not m[3]):
-                        continue
-                    d, sm, e = dcftrace._row(db, rng, here), dcftrace._row(db, total, here), dcf._ref(m[2], here)
-                    if d and sm and e and d[3] - d[2] == sm[3] - sm[2]:
-                        out.append({"sum": sm, "dates": d, "end": e[:3]})
+            for call in dcftrace._calls(dcftrace._expand(db, f, names)):
+                out.extend({"sum": sm, "dates": d, "end": e} for sm, d, e in dcftrace.windows(db, call, here))
         for ch in n.get("children") or []:
             walk(ch)
     for t in trees:

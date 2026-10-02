@@ -400,13 +400,15 @@ def loose_factors(db, cols: list[int], theirs: dict, sheet: str, dates: str | No
 
 
 def read_factors(db, df_ref, cols: list[int], theirs: dict | None = None, sheet: str | None = None,
-                 dates: str | None = None, starts: dict | None = None) -> dict | None:
+                 dates: str | None = None, starts: dict | None = None, flows: dict | None = None) -> dict | None:
     """Rate, valuation date, convention and cut-off that reproduce the workbook's factor row exactly; or, with
     theirs, factors given by column (e.g. computed inside a formula), timed by sheet's period dates. Only the
     factors there are count: a period with no cash flow shows no factor (pv / cash flow can't be taken), and isn't
     a factor of 0. starts: where the factors' formulas are, to source the rate and the date from: {"cells": {col:
     (sheet, row, col)}} (a factor row, or a present-value row), or {"expr": text, "here": sheet} (factors computed
-    in one formula); a factor row's own cells without it."""
+    in one formula); a factor row's own cells without it. flows: the cash flows by column; the period ending on the
+    valuation date may then have a factor of exactly 1 (no time to discount over) where its cash flow is nil, the
+    same present value as dcf's 0 there."""
     sheet, row = (df_ref[0], df_ref[1]) if df_ref else (sheet, None)
     if theirs is None:
         theirs = {c: dcf._num(v) or 0.0 for c, v in db.execute(
@@ -441,7 +443,8 @@ def read_factors(db, df_ref, cols: list[int], theirs: dict | None = None, sheet:
                 t = math.log(probe[first]) / math.log(1 / 1.1)
                 rate = theirs[first] ** (-1 / t) - 1
                 ours = dcf.factors(ends, vd, rate, timing, dc, td)
-                if all(abs(ours[c] - theirs[c]) < 1e-9 for c in ends if c in theirs):
+                on_date = lambda c: ends[c] == vd and theirs[c] == 1.0 and flows is not None and not flows.get(c)
+                if all(abs(ours[c] - theirs[c]) < 1e-9 or on_date(c) for c in ends if c in theirs):
                     src = source_rate(db, walks, rate) if walks else None
                     if len(live) < 2 and not src:
                         # one factor fits any date with a rate solved to match it (a terminal value's one period):
@@ -549,7 +552,9 @@ def build(db, v: dict) -> dict:
     sheet, row, col = dcf._ref(v["cell"], "")[:3]
     cf, dfr = v["cf"], v["df"]
     cols = list(range(cf[2], cf[4] + 1))
-    fx = read_factors(db, dfr, cols)
+    flows = {c: dcf._num(x) or 0.0 for c, x in db.execute("SELECT col, value FROM cells WHERE sheet=? AND row=? AND col "
+                                                          "BETWEEN ? AND ?", (cf[0], cf[1], cf[2], cf[4]))}
+    fx = read_factors(db, dfr, cols, flows=flows)
     if not fx:
         return {**_public(v), "ok": False, "reason": "couldn't read a rate and valuation date back from the discount factors"}
     vd = dcf._as_date(dcf.resolve(db, fx["valuation_date"])[0])

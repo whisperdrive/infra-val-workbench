@@ -7,6 +7,7 @@ points. From one, trace() follows the cells each formula reads, level by level, 
   XNPV(rate, cash flows, dates)     actual/365 from the first date, whose cash flow isn't discounted
   NPV(rate, cash flows)             one period per column, end of period
   SUM(a row of present values)      each column a cash flow times a factor
+  SUMIF(dates, "<"&end+1, the same) the present values up to a date typed in a cell: its cut-off
 Each discounting found (a "core") is recomputed here from its own cash flows and factors, and where its rate,
 valuation date and convention can be read back from the factors, it gets the inputs dcf.compute() takes, so the
 Valuation tab can validate it and rerun it under another method. Its cash-flow row is traced one step further
@@ -186,11 +187,11 @@ def _range(sheet, row, c1, c2) -> str:
 
 
 def _method(db, factors: dict[int, float], sheet: str, cols: list[int], dates: str | None = None,
-            starts: dict | None = None) -> dict | None:
+            starts: dict | None = None, flows: dict | None = None) -> dict | None:
     """Rate, valuation date, convention and cut-off that reproduce these factors (valuation.read_factors), the rate
-    and the date sourced from the cells the factors' formulas read (starts)."""
+    and the date sourced from the cells the factors' formulas read (starts); flows: the cash flows they discount."""
     try:
-        return valuation.read_factors(db, None, cols, theirs=factors, sheet=sheet, dates=dates, starts=starts)
+        return valuation.read_factors(db, None, cols, theirs=factors, sheet=sheet, dates=dates, starts=starts, flows=flows)
     except (ValueError, ZeroDivisionError):
         return None
 
@@ -226,6 +227,34 @@ def _pv_flows(db, pr) -> tuple | None:
     return None
 
 
+_WINDOW = re.compile(r"""^"(<=?)"\s*&\s*((?:(?:'[^']+'|[A-Za-z_][\w.]*)!)?\$?[A-Z]{1,3}\$?\d+)\s*(\+\s*1)?$""")
+
+
+def windows(db, call: tuple, here: str) -> list[tuple]:
+    """A SUMIF's or a SUMIFS's sums of a row up to a date typed in a cell, the end's own period in ("<"&end+1 or
+    "<="&end): [(the row summed (sheet, row, c1, c2), its dates (sheet, row, c1, c2), the end (sheet, row, col))]."""
+    fn, args, _ = call
+    pairs = ([(args[0], args[1], args[2] if len(args) > 2 else args[0])] if fn == "SUMIF" and len(args) in (2, 3)
+             else [(args[i], args[i + 1], args[0]) for i in range(1, len(args) - 1, 2)] if fn == "SUMIFS" else [])
+    out = []
+    for rng, crit, total in pairs:
+        m = _WINDOW.match(crit.strip())
+        if not m or (m[1] == "<=") != (not m[3]):
+            continue
+        d, sm, e = _row(db, rng, here), _row(db, total, here), dcf._ref(m[2], here)
+        if d and sm and e and d[3] - d[2] == sm[3] - sm[2]:
+            out.append((sm, d, e[:3]))
+    return out
+
+
+def _day(v) -> date | None:
+    """A date as model.db holds it: ISO text, or an Excel serial number."""
+    if isinstance(v, str):
+        return dcf._as_date(v)
+    n = dcf._num(v)
+    return EXCEL_EPOCH + timedelta(days=int(n)) if n is not None and 0 < n < 2958466 else None
+
+
 def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict | None:
     """One discounting call in a formula -> its core, or None if the call isn't one."""
     fn, args, text = call
@@ -251,7 +280,7 @@ def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict 
             fac = {c: f * on[c] for c, f in seen.items()}  # what the cash flows are discounted at, the flags in
             flows = _values(db, *cf)
             starts = {"cells": {c: (fac_row[0], fac_row[1], fac_row[2] + i) for i, c in enumerate(cols)}}
-            m = _method(db, seen, cf[0], cols, starts=starts)
+            m = _method(db, seen, cf[0], cols, starts=starts, flows={c: v * on.get(c, 0.0) for c, v in flows.items()})
             core.update(kind="sumproduct", what=f"SUMPRODUCT of a cash-flow row, a discount-factor row and {len(masks)} "
                         "flag row(s) (0 or 1 by period)", factor_row=_range(*fac_row), mask=[_range(*x) for x in masks],
                         cashflow=_range(*cf), pv=sum(flows.get(c, 0.0) * f for c, f in fac.items()), factors=fac, method=m)
@@ -292,7 +321,7 @@ def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict 
             flows = _values(db, *cf)
             pv = sum(flows.get(c, 0.0) * f for c, f in fac.items())
             cols = list(range(cf[2], cf[3] + 1))
-            m = _method(db, fac, cf[0], cols, starts=starts)
+            m = _method(db, fac, cf[0], cols, starts=starts, flows=flows)
             core.update(cashflow=_range(*cf), pv=pv, factors=fac, method=m)
             if not m:
                 core["loose"] = valuation.loose_factors(db, cols, fac, cf[0], starts=starts)
@@ -368,7 +397,7 @@ def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict 
             cf_rows, flows, _, fac = got
             cols = list(range(pr[2], pr[3] + 1))
             starts = {"cells": {c: (at[0], at[1], c) for c in cols}}
-            m = _method(db, fac, pr[0], cols, starts=starts)  # the factors seen: a period with no cash flow shows none
+            m = _method(db, fac, pr[0], cols, starts=starts, flows=flows)  # the factors seen: a period with no cash flow shows none
             core.update(kind="pv row", what="SUM of a present-value row (each column a cash flow times a factor)"
                         if len(cf_rows) == 1 else f"SUM of {len(cf_rows)} present-value rows added up (cash flows times "
                         "one factor row)", cashflow=_range(*cf_rows[0]), pv_row=_range(*pr), pv=sum(pvv.values()),
@@ -382,6 +411,38 @@ def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict 
                                   "valuation_date": m["valuation_date"], "timing": m["timing"], "day_count": m["day_count"],
                                   "terminal_date": m["terminal_date"], "adjustments": [],
                                   "compare_to": core["cell"] if whole else None}
+            return core
+        if fn == "SUMIF" and len(args) == 3:
+            # a present-value row summed up to a date typed in a cell: the periods after it left out (to a terminal
+            # value), so the date is the discounting's cut-off, read from its cell on every feed
+            win = windows(db, call, here)
+            got = _pv_flows(db, win[0][0]) if win else None
+            if not got:
+                return None
+            (pr, dr, end), (cf_rows, flows, _, fac) = win[0], got
+            cols = list(range(pr[2], pr[3] + 1))
+            when = dict(db.execute("SELECT col, value FROM cells WHERE sheet=? AND row=? AND col BETWEEN ? AND ?",
+                                   (dr[0], dr[1], dr[2], dr[3])))
+            last, pvv = _day(_cell(db, *end)[1]), _values(db, *pr)
+            day = {c: _day(when.get(dr[2] + c - pr[2])) for c in cols}
+            if not last or any(pvv.get(c) and not day[c] for c in cols):
+                return None
+            kept = [c for c in cols if day[c] and day[c] <= last]
+            fac = {c: f for c, f in fac.items() if c in kept}
+            ends, _ = dcf.period_ends(db, pr[0], cols)
+            # the dates it sums by are the periods' ends, where there's a cash flow: a cut-off at the date is the same
+            same = all((c in kept) == (c in ends and ends[c] <= last) for c in cols if flows.get(c))
+            starts = {"cells": {c: (pr[0], pr[1], c) for c in cols}}
+            m = _method(db, fac, pr[0], cols, starts=starts, flows=flows) if same else None
+            core.update(kind="pv row", what="SUMIF of a present-value row up to a date (each column a cash flow times a "
+                        "factor)", cashflow=_range(*cf_rows[0]), pv_row=_range(*pr), pv=sum(pvv.get(c, 0.0) for c in kept),
+                        factors=fac, method=m, window={"dates": _range(*dr), "end": _a1(*end)})
+            if not m:
+                core["loose"] = valuation.loose_factors(db, cols, fac, pr[0], starts=starts)
+            if m:
+                core["inputs"] = {"cashflow": [_range(*cf_rows[0])], "rate": m["rate"], "valuation_date": m["valuation_date"],
+                                  "timing": m["timing"], "day_count": m["day_count"], "terminal_date": _a1(*end),
+                                  "adjustments": [], "compare_to": core["cell"] if whole else None}
             return core
     except (ValueError, ZeroDivisionError, OverflowError, TypeError, FloatingPointError):
         return None
@@ -488,8 +549,9 @@ def trace(db, cell: str) -> dict:
             return node
         body = _expand(db, _STR.sub('""', f), names)
         node["words"] = words(db, body, sheet)
-        whole = body.strip().lstrip("=").lstrip("+").strip()
-        for call in _calls(body):
+        raw = _expand(db, f, names)  # its strings kept for the calls: a SUMIF's criterion is one
+        whole = raw.strip().lstrip("=").lstrip("+").strip()
+        for call in _calls(raw):
             c = _core(db, sheet, row, col, call, whole == call[2])
             if c:
                 _describe(db, c)

@@ -114,7 +114,7 @@ def alike(a_path: str, b_path: str) -> dict:
 
 def _call_kind(call: str | None) -> str:
     m = re.match(r"\s*=?\s*([A-Z]+)\s*\(", call or "")
-    return m[1] if m and m[1] in ("SUMPRODUCT", "NPV", "XNPV", "SUM") else "other"
+    return m[1] if m and m[1] in ("SUMPRODUCT", "NPV", "XNPV", "SUM", "SUMIF") else "other"
 
 
 def _roll_basis(text: str | None) -> str | None:

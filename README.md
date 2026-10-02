@@ -66,7 +66,10 @@ takes it from there:
      on both. A discounting is a SUMPRODUCT of cash flows and factors (with 0 / 1 flag rows, a window of years, where
      it has them), an XNPV or NPV, or the SUM of a present-value row (or of present-value rows added up column by
      column, blocks of cash flows at one factor row: one discounting of them together, sourced from the parts'
-     factors). A terminal value discounted on its own has one factor, which fits any date: its rate must be one a cell
+     factors), or a present-value row summed up to a date typed in a cell (SUMIF(dates, "<"&end+1, present values)):
+     that date is its cut-off, read from its cell on each feed, so a forecast end moved this year applies. A factor
+     of exactly 1 on the valuation date's own period (no time to discount over) reads as nil there where no cash flow
+     sits against it. A terminal value discounted on its own has one factor, which fits any date: its rate must be one a cell
      its factors read holds; where its factors follow a convention the app
      doesn't recompute (mid-year with a part-year stub at its midpoint, then whole-year steps, say), its rate and its
      valuation date are still the cells their formulas read, and the card says the factors aren't recomputed;

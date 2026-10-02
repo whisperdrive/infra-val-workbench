@@ -680,6 +680,101 @@ def sum_rows_check() -> None:
           f"through IF and /thousand; the units constant not held)")
 
 
+def sumif_check() -> None:
+    """A value made, at each end, of a terminal value discounted by a factor row (SUMPRODUCT), whose factor on the
+    valuation date's own period is 1 (IF(date < valuation date, 0, 1/(1+r)^YEARFRAC(valuation date, date, 3))), and
+    the present values summed up to the terminal value date (SUMIF(dates, "<"&end+1, present values) at the low,
+    "<="&end at the high), the cash flows going on past it. Both are read exactly: the factor of 1 has no cash flow
+    against it (where it has, the fit doesn't take it), and the sum's cut-off is the end date's cell, read on every
+    feed. So the formulas above them recompute, and the bridge splits into time value, cash flows and forecast."""
+    import dcf
+    import result
+    import rodb
+    import valuation
+    vd, end, rates, n = date(2025, 6, 30), date(2028, 6, 30), {"low": 0.105, "high": 0.095}, 17
+    ends, y, m = [vd], 2025, 9
+    for _ in range(n - 1):
+        ends.append(date(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1))
+        y, m = (y + 1, 3) if m == 12 else (y, m + 3)
+    flows = [0.0] + [100.0 + 5 * k for k in range(1, n)]
+    tv = [8 * x if e == end else 0.0 for x, e in zip(flows, ends)]
+    ser = lambda d: (d - date(1899, 12, 30)).days
+    out = Path(tempfile.mkdtemp(prefix="trace_sumif_"))
+    wb = xlsxwriter.Workbook(out / "sumif.xlsx")
+    dt = wb.add_format({"num_format": "dd-mmm-yy"})
+    inp = wb.add_worksheet("Inputs")
+    for r, label, v in ((3, "Valuation date", vd), (4, "Discount rate (low value)", rates["low"]),
+                        (5, "Discount rate (high value)", rates["high"]), (6, "Terminal value date", end)):
+        inp.write(r, 1, label)
+        if isinstance(v, date):
+            inp.write_datetime(r, 2, v, dt)
+        else:
+            inp.write_number(r, 2, v)
+    va = wb.add_worksheet("Val")
+    va.write(2, 1, "Period ending")
+    va.write(4, 1, "Cash flow")
+    va.write(6, 1, "Terminal value date")
+    va.write_formula("C7", "=Inputs!$C$7", dt, ser(end))
+    last, figure = COL(3 + n - 1), {}
+    for k, e in enumerate(ends):
+        va.write_datetime(2, 3 + k, e, dt)
+        va.write_number(4, 3 + k, flows[k])
+    for (end_, crit), top in ((("low", '"<"&$C$7+1'), 8), (("high", '"<="&$C$7'), 14)):
+        rate, rc = rates[end_], "$C$5" if end_ == "low" else "$C$6"
+        f = [0.0 if e < vd else 1 / (1 + rate) ** ((e - vd).days / 365) for e in ends]
+        for r, label in ((top, "Discount factor"), (top + 1, "Terminal value"), (top + 2, "Equity DCF"),
+                         (top + 3, "Total NPV"), (top + 4, "Equity value")):
+            va.write(r - 1, 1, f"{label} ({end_})")
+        for k in range(n):
+            c = COL(3 + k)
+            va.write_formula(f"{c}{top}", f"=IF({c}$3<Inputs!$C$4,0,1/(1+Inputs!{rc})^YEARFRAC(Inputs!$C$4,{c}$3,3))", None, f[k])
+            va.write_number(top, 3 + k, tv[k])
+            va.write_formula(f"{c}{top + 2}", f"={c}{top}*{c}5", None, f[k] * flows[k])
+        sp = sum(a * b for a, b in zip(f, tv))
+        si = sum(f[k] * flows[k] for k in range(n) if ends[k] <= end)
+        va.write_formula(f"C{top + 1}", f"=SUMPRODUCT(D{top}:{last}{top},D{top + 1}:{last}{top + 1})", None, sp)
+        va.write_formula(f"C{top + 2}", f"=SUMIF($D$3:${last}$3,{crit},$D${top + 2}:${last}${top + 2})", None, si)
+        va.write_formula(f"C{top + 3}", f"=SUM(C{top + 1}:C{top + 2})", None, sp + si)
+        va.write_formula(f"C{top + 4}", f"=C{top + 3}/1000", None, (sp + si) / 1000)
+        figure[end_] = (f"Val!C{top + 4}", (sp + si) / 1000, f)
+    wb.close()
+    path = build_map.main(str(out / "sumif.xlsx"), str(out / "db"))["db"]
+    db = sqlite3.connect(path)
+    later = date(2029, 3, 31)  # the end date moved, as on this year's feed
+    moved = rodb.patched(path, {("Val", 7, 3): later.isoformat()})
+    for end_, (cell, v0, f) in figure.items():
+        t = dcftrace.trace(db, cell)
+        every = dcftrace.cores(t)
+        cs = {c["kind"]: c for c in every if c.get("inputs")}
+        assert len(every) == 2 and set(cs) == {"sumproduct", "pv row"}, [(c["cell"], c["kind"], c.get("inputs")) for c in every]
+        for c in cs.values():
+            i = c["inputs"]
+            assert (i["rate"], i["valuation_date"], i["timing"], i["day_count"]) == (
+                f"Inputs!C{5 if end_ == 'low' else 6}", "Inputs!C4", "end", "actual/365"), (end_, c["cell"], i)
+            r = dcf.compute(db, **i, fix=False)
+            assert dcf._close(r["total"], r["compare_to"]), (end_, c["cell"], r["total"], r["compare_to"])
+        assert cs["sumproduct"]["inputs"]["terminal_date"] is None
+        assert cs["pv row"]["inputs"]["terminal_date"] == "Val!C7" and cs["pv row"]["last_period"] == end.isoformat()
+        got = dcf.compute(moved, **{**cs["pv row"]["inputs"], "compare_to": None}, fix=False)["total"]
+        want = sum(f[k] * flows[k] for k in range(n) if ends[k] <= later)
+        assert abs(got - want) < 1e-9, (end_, got, want)
+        totals = {c["cell"]: dcf.compute(db, **{**c["inputs"], "compare_to": None}, fix=False)["total"] for c in every}
+        assert abs(dcftrace.recompute(db, t, totals) - v0) < 1e-9
+        steps, note = result._steps(db, (t, list(cs.values())), v0, 1.05 * v0, "2026-06-30")
+        assert note is None and [s["key"] for s in steps] == ["time", "cash", "forecast"], (steps, note)
+        paid = -sum(x * (1 + rates[end_]) ** ((date(2026, 6, 30) - e).days / 365) for x, e in zip(flows, ends)
+                    if vd < e <= date(2026, 6, 30)) / 1000
+        assert abs(steps[1]["value"] - paid) < 1e-9, (steps[1], paid)
+    # a factor of 1 on the valuation date's own period with a cash flow against it: dcf leaves that out, so no fit
+    cols = list(range(4, 4 + n))
+    assert valuation.read_factors(db, ("Val", 8), cols, flows={c: 0.0 for c in cols})
+    assert valuation.read_factors(db, ("Val", 8), cols, flows={4: 5.0}) is None
+    assert valuation.read_factors(db, ("Val", 8), cols) is None
+    print(f"sumif: ok (a terminal value discounted by factors of 1 on the valuation date, and present values summed to "
+          f"{end:%d %b %Y} by SUMIF (\"<\"&end+1 and \"<=\"&end): both read exactly, the cut-off read from Val!C7 "
+          f"(moved to {later:%d %b %Y}, it moves), the bridge split into time value, cash flows and forecast)")
+
+
 def multiple_check() -> None:
     """Where the report's terminal value is an exit multiple: the multiple is the cell the terminal value's formula
     reads in M x X, the terminal value recomputed from it, the metric X what the report says it's a multiple of, the
@@ -748,4 +843,5 @@ if __name__ == "__main__":
     horizon_check()
     window_check()
     sum_rows_check()
+    sumif_check()
     multiple_check()
