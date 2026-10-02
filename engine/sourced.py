@@ -276,11 +276,12 @@ METRIC = {"exit_ebitda": ("EBITDA", re.compile(r"ebitda", re.I)),
           "exit_rab": ("the RAB", re.compile(r"\brab\b|regulat\w* asset|asset base", re.I))}
 
 
-def _fit_multiple(db, ref: str, tv: float) -> dict | None:
+def _fit_multiple(db, ref: str, tv: float, term: str | None = None) -> dict | None:
     """A terminal value's formula as M x X: the multiple M among the cells it reads (or typed into it: then not
-    sourced) and the metric X (a cell), M the one labelled like a multiple, else the smaller."""
-    f = re.sub(r'"[^"]*"', "", _formula(db, ref) or "")
-    w = valuation.reads(db, cells=[_key(ref)], depth=1)
+    sourced) and the metric X (a cell), M the one labelled like a multiple, else the smaller. term: one term of the
+    cell's formula (a terminal value added to the last cash flow in it), tv that term's value."""
+    f = re.sub(r'"[^"]*"', "", term or _formula(db, ref) or "")
+    w = valuation.reads(db, expr=f, here=_key(ref)[0], depth=1) if term else valuation.reads(db, cells=[_key(ref)], depth=1)
     cells = [(k, dcf._num(n["value"])) for k, n in w.items() if dcf._num(n["value"])]
     typed = [(None, float(m[1])) for m in _LIT.finditer(dcf._FREF.sub(" ", f)) if not m[2] and float(m[1])]
     label = lambda k: dcf._row_label(db, *_key(k)[:2]) if k else ""
@@ -315,22 +316,41 @@ def _tie_x(m: float | None, rep) -> bool | None:
     return abs(m - rep[0]) <= 0.5 * 10 ** -d + 1e-9
 
 
-def multiple(db, traced: dict, facts: list[dict], terminal: dict) -> dict:
+def multiple(db, traced: dict, facts: list[dict], terminal: dict, where: dict | None = None,
+             sheets: set | None = None) -> dict:
     """Each end's exit multiple, where the report's terminal value is one: the cell the terminal value's formula
     reads as the multiple in M x X, the terminal value recomputed from it, the metric X what the report says it's a
-    multiple of (EBITDA, the RAB), and the report's multiple for that end (the low value at the lower multiple)."""
+    multiple of (EBITDA, the RAB), and the report's multiple for that end (the low value at the lower multiple).
+    Found down from the discounting's cash flows, and up from the report's figure to the equity value (forward.py)."""
+    import forward
     import result
     stated = _stated_x(facts)
     want = {"low": stated[0] if stated else None, "high": stated[-1] if stated else None}
     of, like = METRIC.get(terminal.get("kind"), (None, None))
+    starts = forward.holding(db, [m for m, _ in stated], MULTIPLE_WORDS, sheets, percent=False) \
+        if stated and where else []
     ends = {}
     for end in ("low", "high"):
         rep = want[end]
-        main, _, _ = result._streams(traced.get(end) or [])
+        cs = traced.get(end) or []
+        main, _, _ = result._streams(cs)
         fit = _terminal(db, main, _fit_multiple) if main else None
+        fw = forward.multiple(db, starts, where[end], cs) if starts and where.get(end) else None
+        up = None
+        if fw and fit:
+            same = fw["tv_cell"] == fit["tv_cell"]
+            up = (same, f"Traced up from {fw['cell']} to the equity value, through the same terminal value: {_steps(fw)}"
+                  if same else f"Traced up from {fw['cell']}, the equity value is reached through {fw['tv_cell']}, not "
+                               f"{fit['tv_cell']}: {_steps(fw)}")
+        elif fw:
+            fit = fw["fit"]
+            up = (True, f"Found by tracing up from the report's figure ({fw['cell']}) to the equity value: the terminal "
+                        f"value {fw['tv_cell']} is {fw['where']} ({_steps(fw)})")
         if not fit:
-            ends[end] = {"ok": None, "why": f"no terminal value built as a multiple × a metric found in its cash flows; the "
-                                           f"report's is {terminal['label'][0].lower() + terminal['label'][1:]}"}
+            ends[end] = {"ok": None, "why": f"no terminal value built as a multiple × a metric found in its cash flows"
+                                           + (", nor on the way up from the report's figure to the equity value"
+                                              if starts else "") + f"; the report's is "
+                                           f"{terminal['label'][0].lower() + terminal['label'][1:]}"}
             continue
         (mk, m), (xk, x, xl) = fit["m"], fit["x"]
         s = follow(db, mk, m) if mk else None
@@ -343,13 +363,16 @@ def multiple(db, traced: dict, facts: list[dict], terminal: dict) -> dict:
             checks.append((bool(like.search(xl or "")), f"A multiple of {of}, as the report says: the metric is {xl or xk}"
                            if like.search(xl or "") else f"The report says a multiple of {of}; the metric here is "
                                                          f"{xl or xk}"))
+        if up:
+            checks.append(up)
         checks.append((ties, f"The report's {rep[1]}" + (f" (the {'lower' if end == 'low' else 'higher'} of "
                                                          f"{' and '.join(t for _, t in stated)})" if len(stated) > 1 else "")
                        + (": doesn't match" if ties is False else "")) if rep else
                       (None, "The report's exit multiple: not among the key facts"))
         ends[end] = _end(m, s, bool(mk), None if mk else f"typed into the terminal value's formula ({fit['tv_cell']})",
                          checks, rep[1] if rep else None, ties, terminal_value=fit["tv_cell"],
-                         metric={"cell": xk, "label": xl, "value": x})
+                         metric={"cell": xk, "label": xl, "value": x},
+                         traced_up={k: fw[k] for k in ("cell", "tv_cell", "where", "path")} if fw else None)
     return _wrap(ends, stated)
 
 
@@ -483,7 +506,8 @@ def check(sess, summary: dict, where: dict, facts: list[dict], asm: dict, traced
                                 "ok": None, "na": na} if na else growth(db, traced, out["rate"], facts, where,
                                                                         set(summary.get("sheets") or []) or None))]
     if (terminal or {}).get("kind") in EXITS:  # the report's terminal value is an exit multiple: source it
-        jobs.append(("multiple", lambda: multiple(db, traced, facts, terminal)))
+        jobs.append(("multiple", lambda: multiple(db, traced, facts, terminal, where,
+                                                  set(summary.get("sheets") or []) or None)))
     for key, fn in jobs + [("franking", lambda: franking(sess, summary, db, traced, where, facts, unit))]:
         try:
             out[key] = fn()

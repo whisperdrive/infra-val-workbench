@@ -838,7 +838,9 @@ def forward_check() -> None:
     (=W8 + W10 + W8 x (1 + g) / (r - g)) and franking credits added into the cash flows (tax paid x utilisation), on
     one sheet; a terminal value added after the discounting (=SUMPRODUCT(...) + TV x the last factor) on another.
     Each is sourced to its cell and recomputed; with the utilisation at nil the equity value falls by exactly the
-    franking credits' part, discounted with the cash flows."""
+    franking credits' part, discounted with the cash flows. The reconciliation splits each terminal value out (its
+    term of the last cash flow at that period's factor; the term that adds it after the discounting), and franking
+    from the forecast. An exit multiple inside the last cash flow (=W8 + W6 x multiple) is found the same way."""
     import forward
     import overlay as ov
     import result
@@ -855,8 +857,10 @@ def forward_check() -> None:
     inp = wb.add_worksheet("Inputs")
     inp.write(3, 0, "Valuation date")
     inp.write_datetime(3, 2, vd, dt)
+    mult = 9.5
+    ebitda = [150.0 + 5 * k for k in range(len(years))]
     for r, label, v in ((4, "Discount rate", rate), (5, "Terminal growth rate", g),
-                        (6, "Franking credit utilisation", util)):
+                        (6, "Franking credit utilisation", util), (7, "Exit multiple (EV/EBITDA)", mult)):
         inp.write(r, 0, label)
         inp.write_number(r, 2, v)
     last = COL(3 + len(years) - 1)
@@ -885,11 +889,28 @@ def forward_check() -> None:
         else:
             sh.write_formula("C18", f"={last}8*(1+Inputs!$C$6)/(Inputs!$C$5-Inputs!$C$6)", None, tv)
             sh.write_formula("C16", f"=SUMPRODUCT(D11:{last}11,D13:{last}13)+C18*{last}13", None, pv)
+    sh = wb.add_worksheet("Exit")
+    for r, label in ((2, "Period ending"), (5, "EBITDA"), (7, "Free cash flow"), (10, "Valuation cash flow"),
+                     (12, "Discount factor"), (15, "Equity value")):
+        sh.write(r, 1, label)
+    for k, y in enumerate(years):
+        c = COL(3 + k)
+        sh.write_datetime(2, 3 + k, date(y, 6, 30), dt)
+        sh.write_number(5, 3 + k, ebitda[k])
+        sh.write_number(7, 3 + k, fcf[k])
+        exit_tv = ebitda[k] * mult if k == len(years) - 1 else 0.0
+        sh.write_formula(f"{c}11", f"={c}8+{c}6*Inputs!$C$8" if exit_tv else f"={c}8", None, fcf[k] + exit_tv)
+        sh.write_formula(f"{c}13", f"=1/(1+Inputs!$C$5)^(({c}3-Inputs!$C$4)/365)", None, df[k])
+    sh.write_formula("C16", f"=SUMPRODUCT(D11:{last}11,D13:{last}13)", None,
+                     sum(f * x for f, x in zip(fcf, df)) + ebitda[-1] * mult * df[-1])
     wb.close()
     db_path = build_map.main(str(out / "fwd.xlsx"), str(out / "db"))["db"]
     db = sqlite3.connect(db_path)
     facts = [{"key": "terminal_growth_rate", "value_text": "2.50%", "status": "approved"},
-             {"key": "franking_utilisation", "value_text": "60%", "status": "approved"}]
+             {"key": "franking_utilisation", "value_text": "60%", "status": "approved"},
+             {"key": "terminal_multiple", "value_text": "9.5x", "status": "approved"}]
+    summary = {"sheets": ["Inputs", "Last", "After", "Exit"]}
+    pv_fcf = sum(f * x for f, x in zip(fcf, df))
     rates = {"ends": {e: {"cell": "Inputs!C5", "value": rate} for e in ("low", "high")}}
     for name, where in (("Last", "the last cash flow itself"), ("After", "added after the discounting")):
         cs = [c for c in dcftrace.cores(dcftrace.trace(db, f"{name}!C16")) if c.get("inputs")]
@@ -897,11 +918,22 @@ def forward_check() -> None:
         assert e["sourced"] and e["cell"] == "Inputs!C6" and e["ok"] and e["ties"], (name, e)
         assert e["traced_up"]["where"] == where and abs(e["value"] - g) < 1e-12, (name, e["traced_up"])
         assert sourced.growth(db, {"low": cs, "high": cs}, rates, facts)["ends"]["low"]["ok"] is None, name  # not down
+        place = result._tv_place(db, summary, facts, f"{name}!C16", cs)
+        split = result._end_split(db, cs, result._franking_part(db, summary, facts, f"{name}!C16", cs), place)
+        assert place["where"] == where and abs(split["tv"] - tv) < 1e-6 and abs(split["pv_tv"] - tv * df[-1]) < 1e-6 \
+            and abs(split["pv_forecast"] - pv_fcf) < 1e-6, (name, place, split)
+    cs = [c for c in dcftrace.cores(dcftrace.trace(db, "Exit!C16")) if c.get("inputs")]
+    exit_at = {"low": "Exit!C16", "high": "Exit!C16"}
+    e = sourced.multiple(db, {"low": cs, "high": cs}, facts, {"kind": "exit_ebitda", "label": "An EV/EBITDA multiple"},
+                         exit_at, set(summary["sheets"]))["ends"]["low"]
+    assert e["sourced"] and e["cell"] == "Inputs!C8" and e["ok"] and e["ties"] and e["metric"]["label"] == "EBITDA" \
+        and e["traced_up"]["where"] == "the last cash flow itself", e
+    split = result._end_split(db, cs, None, result._tv_place(db, summary, facts, "Exit!C16", cs))
+    assert abs(split["pv_tv"] - ebitda[-1] * mult * df[-1]) < 1e-6 and abs(split["pv_forecast"] - pv_fcf) < 1e-6, split
     cs = [c for c in dcftrace.cores(dcftrace.trace(db, "Last!C16")) if c.get("inputs")]
     want = sum(-t * util * x for t, x in zip(tax, df))
     fw = forward.franking(db, ["Inputs!C7"], "Last!C16", cs)
     assert (fw["where"], fw["used_row"], fw["gross_row"]) == ("part", "Last!r10", "Last!r9") and abs(fw["pv"] - want) < 1e-9, fw
-    summary = {"sheets": ["Inputs", "Last"]}
     split = result._end_split(db, cs, result._franking_part(db, summary, facts, "Last!C16", cs))
     assert abs(split["franking"] - want) < 1e-9, split
     src, _ = xlcompile.compile_overlay(db_path, ["Inputs", "Last"])
@@ -912,8 +944,9 @@ def forward_check() -> None:
     assert got["sourced"] and got["cell"] == "Inputs!C7" and got["ties"] and got["rerun"]["ok"], got
     assert abs(got["rerun"]["drop"] - want) < 1e-6 and got["ok"], got
     print(f"forward: ok (traced up from the report's figures: a terminal value inside the last cash flow and one added "
-          f"after the discounting, each sourced to Inputs!C6; franking credits added into the cash flows, worth "
-          f"{want:,.2f}, the drop with the utilisation at nil)")
+          f"after the discounting, each sourced to Inputs!C6 and split out of the value; an exit multiple inside the "
+          f"last cash flow, sourced to Inputs!C8; franking credits added into the cash flows, worth {want:,.2f}, the "
+          f"drop with the utilisation at nil)")
 
 
 if __name__ == "__main__":

@@ -299,6 +299,7 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     assert [(x["row"], x["label"], x["under"], x["in_value"], x["confirmed"], x["hold"]) for x in
             res["figures"]["gaps"]["new_terms"]] == [("Operations!r10", "Insurance", "Operations!r11", True, True, False)], \
         res["figures"]["gaps"]["new_terms"]
+    assert not res["figures"]["gaps"]["gone_terms"], res["figures"]["gaps"]["gone_terms"]
     assert res["terminal"]["kind"] == "growth_final_year" and res["terminal"]["from"] == "the fact", res["terminal"]
     assert e["terminal"]["kind"] == "growth_final_year" and e["terminal"]["passages"], e["terminal"]
     assert not res["inputs"]["growth"].get("na") and res["inputs"]["growth"]["ok"], res["inputs"]["growth"]
@@ -857,8 +858,13 @@ def diagnostics_check(eid: int) -> None:
     r = d["result"]
     assert r["worked_out"] and r["tied"] == {"low": True, "high": True} and r["terminal"] == "growth_final_year", r
     assert r["discountings"]["low"]["readable"] == 2 and r["gate"]["reliable"] and not r["gate"]["rebuilt"], r
+    t = r["gate"]["trace"]  # how the trace did on the rows the value reads, to weigh it on a real model
+    assert t["rows"] >= 2 and not t["not_found"] and not t["elsewhere"] and t["confident"] == t["rows"] and \
+        t["none"] + t["alone"] + t["agrees"] == t["rows"] and sum(t["scores"].values()) == t["alone"] + t["agrees"], t
+    assert (r["gate"]["new_terms"], r["gate"]["new_terms_in_value"], r["gate"]["new_terms_held"],
+            r["gate"]["gone_terms"]) == (1, 1, 0, 0), r["gate"]
     print("diagnostics: ok (the run in the app's own words, counts, ratios and dates: no sheet, label or file name; "
-          "the models' shapes and how alike they are)")
+          "the models' shapes and how alike they are; how the trace did on the rows the value reads)")
 
 
 def rebuilt_check() -> None:
@@ -1374,9 +1380,10 @@ def terms_check() -> None:
     """The row finder's trace and the new terms, on two small models. This year's tax is on a new sheet under a label
     with no word of last year's, and at another rate (its numbers aren't last year's): the trace up from EBITDA and
     capital expenditure (anchors: the same label, last year's numbers) reaches it as the one row left once the
-    others are paired, so it's found. This year's cash flow available adds lease payments: a new term. Read through
-    the distributions the overlay reads, it's in the value and holds it until confirmed; with the overlay reading
-    the cash flow's terms instead, it's left out of the value, a point to check."""
+    others are paired, so it's found. This year's cash flow available adds lease payments and drops last year's working
+    capital movement. Read through the distributions the overlay reads, both move the value and hold it until
+    confirmed (the new one belongs, the old one's gone); with the overlay reading the cash flow's terms instead,
+    neither does, each a point to check."""
     from datetime import date
     from types import SimpleNamespace
 
@@ -1404,6 +1411,8 @@ def terms_check() -> None:
         cf = sheets[0]
         rows = [(5, "Revenue"), (6, "Operating costs"), (7, "EBITDA"), (8, "Capital expenditure"),
                 (9, "Lease payments" if moved else "Tax paid"), (10, "Cash flow available"), (12, "Distributions to equity")]
+        if not moved:
+            rows.append((11, "Working capital movement"))
         for r, label in rows:
             cf.write(r - 1, 0, label)
         if moved:
@@ -1423,8 +1432,10 @@ def terms_check() -> None:
                 cf.write_formula(f"{c}10", f"={c}7+{c}8+Taxation!{c}6+{c}9", None, rev + opex + capex + tax + lease)
             else:
                 cf.write_formula(f"{c}9", f"=-({c}7+{c}8)*Inputs!$B$3", None, tax)
-                cf.write_formula(f"{c}10", f"={c}7+{c}8+{c}9", None, rev + opex + capex + tax)
-            cf.write_formula(f"{c}12", f"={c}10*0.9", None, 0.9 * (rev + opex + capex + tax + lease))
+                cf.write_number(f"{c}11", -5.0)
+                cf.write_formula(f"{c}10", f"={c}7+{c}8+{c}9+{c}11", None, rev + opex + capex + tax - 5.0)
+            wc = 0.0 if moved else -5.0
+            cf.write_formula(f"{c}12", f"={c}10*0.9", None, 0.9 * (rev + opex + capex + tax + lease + wc))
         w.close()
         return ovmod.Workbook(build_map.main(str(path), str(out / name))["db"])
 
@@ -1435,22 +1446,27 @@ def terms_check() -> None:
     plain = rowfind.RowFinder(ovmod.RowMap(prior, cur), prior, cur)
     plain._by_trace = lambda s, r: []
     assert not plain.confident("CF", 9), plain.explain("CF", 9)  # without the trace it isn't settled
-    assert rm.terms("CF", 10) == [("CF", 9)] and rm.terms("CF", 9) == [] and rm.terms("CF", 12) == [], \
-        (rm.terms("CF", 10), rm.terms("CF", 9), rm.terms("CF", 12))
+    assert rm.terms("CF", 10) == ([("CF", 9)], [("CF", 11)]) and rm.terms("CF", 9) == ([], []) and \
+        rm.terms("CF", 12) == ([], []), (rm.terms("CF", 10), rm.terms("CF", 9), rm.terms("CF", 12))
     sess = SimpleNamespace(current=cur, prior=prior, ov=prior, rowmap=rm)
-    got = result._new_terms(sess, [("CF", 12)], "2026-06-30", set(), set())
-    assert [(x["row"], x["under"], x["in_value"], x["hold"], x["periods"], round(x["total"], 6)) for x in got] == \
-        [("CF!r9", "CF!r10", True, True, 10, -120.0)], got
-    assert not result._new_terms(sess, [("CF", 12)], "2026-06-30", {"CF!r9"}, set())[0]["hold"]
-    beside = result._new_terms(sess, [("CF", 7), ("CF", 8), ("CF", 9)], "2026-06-30", set(), set())
-    assert [(x["row"], x["in_value"], x["hold"]) for x in beside] == [("CF!r9", False, False)], beside
-    assert not result._new_terms(sess, [("CF", 7), ("CF", 8), ("CF", 9)], "2026-06-30", set(), {"CF!r9"})
+    vds = ("2026-06-30", "2025-06-30")
+    new, gone = result._term_changes(sess, [("CF", 12)], *vds, set(), set())
+    assert [(x["row"], x["under"], x["in_value"], x["hold"], x["periods"], round(x["total"], 6)) for x in new] == \
+        [("CF!r9", "CF!r10", True, True, 10, -120.0)], new
+    assert [(x["key"], x["last_year"], x["in_value"], x["hold"], x["periods"], x["total"], x["now"]) for x in gone] == \
+        [("was:CF!r11", "CF!r10", True, True, 10, -50.0, None)], gone
+    new, gone = result._term_changes(sess, [("CF", 12)], *vds, {"CF!r9", "was:CF!r11"}, set())
+    assert not new[0]["hold"] and not gone[0]["hold"] and gone[0]["confirmed"], (new, gone)
+    new, gone = result._term_changes(sess, [("CF", 7), ("CF", 8), ("CF", 9)], *vds, set(), set())
+    assert [(x["key"], x["in_value"], x["hold"]) for x in new + gone] == \
+        [("CF!r9", False, False), ("was:CF!r11", False, False)], (new, gone)
+    assert not result._term_changes(sess, [("CF", 7), ("CF", 8), ("CF", 9)], *vds, set(), {"CF!r9"})[0]
     for w in (prior, cur):
         w.close()
     print("terms: ok (tax moved to a new sheet under another label and at another rate, found by the trace up from "
-          "EBITDA and capex, and not without it; lease payments, a new term in the cash flow available: in the value "
-          "through the distributions, holding it until confirmed; beside the terms the overlay reads, left out and "
-          "flagged)")
+          "EBITDA and capex, and not without it; lease payments new in the cash flow available, its working capital "
+          "gone: through the distributions both move the value, holding it until confirmed; beside the terms the "
+          "overlay reads, flagged)")
 
 
 def upgrade_check() -> None:

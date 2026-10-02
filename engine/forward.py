@@ -12,7 +12,9 @@ figure: the path between them says how the assumption is used.
                                 utilisation applied to a present value of the gross credits)
   terminal growth rate          the first formula on the way built as X x (1 + g) / (r - g) is the terminal value,
                                 and where it sits: a row of its own added into the cash flows, the last cash flow
-                                itself, or added after the discounting (=XNPV(...) + TV x factor)
+                                itself, or added after the discounting (=XNPV(...) + TV x factor; the term of the
+                                formula after it that reads it is its present value)
+  exit multiple                 the same, the terminal value built as M x X
 Plain code on the overlay's saved formulas and values, like the tracer: no model reads anything here.
 """
 import os
@@ -96,10 +98,10 @@ def _num(db, k: tuple):
     return dcf._num(dcf._cell(db, *k))
 
 
-def holding(db, stated: list[float], words: re.Pattern, sheets: set | None = None) -> list[str]:
-    """The cells holding one of the report's figures (in percent: 2.5 is held as 0.025 or as 2.5) on a row
-    labelled like the assumption, typed inputs first."""
-    want = {round(p / 100, 12) for p in stated} | {round(p, 12) for p in stated}
+def holding(db, stated: list[float], words: re.Pattern, sheets: set | None = None, percent: bool = True) -> list[str]:
+    """The cells holding one of the report's figures (percent: 2.5 is held as 0.025 or as 2.5; else as printed, a
+    multiple of 10.0x as 10) on a row labelled like the assumption, typed inputs first."""
+    want = {round(p, 12) for p in stated} | ({round(p / 100, 12) for p in stated} if percent else set())
     out = []
     for s, r, c, v, f in db.execute("SELECT sheet, row, col, value, formula FROM cells "
                                     "WHERE typeof(value) IN ('real', 'integer')"):
@@ -219,24 +221,55 @@ def _tv_fit(db, k: tuple, fit) -> dict | None:
     return None
 
 
-def growth(db, starts: list[str], to: str, cores: list[dict]) -> dict | None:
-    """From a terminal growth cell up to the figure at to: the terminal value (the first formula on the way built as
-    X x (1 + g) / (r - g)), its fit and where it sits. The first start that reaches the figure through one."""
-    import sourced
+LAST, PART, AFTER = "the last cash flow itself", "a row of its own added into the cash flows", "added after the discounting"
+
+
+def _pv_term(db, k: tuple, tv: tuple) -> str | None:
+    """The term of k's formula that reads the terminal value at tv (its present value: TV x the last factor)."""
+    import valuation
+    f = db.execute("SELECT formula FROM cells WHERE sheet=? AND row=? AND col=?", k).fetchone()
+    body = dcftrace._STR.sub('""', (f[0] if f else "") or "").lstrip("=").lstrip("+")
+    for _op, term in valuation._split(body, "+-"):
+        refs = [dcf._ref(m[0], k[0]) for m in dcf._FREF.finditer(term) if term[m.end():m.end() + 1] != "("]
+        if any(x and x[:3] == tv for x in refs):
+            return term.strip()
+    return None
+
+
+def terminal(db, starts: list[str], to: str, cores: list[dict], fit, key: str) -> dict | None:
+    """From an assumption's cell (a growth rate, an exit multiple) up to the figure at to: the terminal value, the
+    first formula on the way that fit(db, ref, value[, term]) fits with fit[key] (the cell it reads as the
+    assumption) on the way, and where it sits. The first start that reaches the figure through one. -> {"cell",
+    "tv_cell", "tv_label", "fit", "core", "where", "term" (the terminal value's term of the last cash flow),
+    "pv_cell" and "pv_term" (where it's added after the discounting), "path"}."""
     goal = dcf._ref(to, "")[:3]
-    for g in starts:
-        gk = dcf._ref(g, "")[:3]
-        p = path(db, gk, {goal})
+    for a in starts:
+        ak = dcf._ref(a, "")[:3]
+        p = path(db, ak, {goal})
         if not p:
             continue
         on = {_a1(k) for k in p}
-        for k in p[1:]:
-            fit = _tv_fit(db, k, sourced._fit)
-            if not fit or (fit["g"][0] and fit["g"][0] not in on):
+        for i, k in enumerate(p[1:], 1):
+            got = _tv_fit(db, k, fit)
+            if not got or (got[key][0] and got[key][0] not in on):
                 continue
             core, how, _ = _where(db, k[:2], cores)
-            where = ("the last cash flow itself" if how == "own" else "a row of its own added into the cash flows"
-                     if how == "part" else "added after the discounting")
-            return {"cell": g, "tv_cell": _a1(k), "tv_label": _label(db, k), "fit": fit, "core": core["cell"] if core
-                    else None, "where": where, "path": _steps(db, p)}
+            where = LAST if how == "own" else PART if how == "part" else AFTER
+            nxt = p[i + 1] if i + 1 < len(p) else None
+            return {"cell": a, "tv_cell": _a1(k), "tv_label": _label(db, k), "fit": got,
+                    "core": core["cell"] if core else None, "where": where, "term": got.get("term"),
+                    "pv_cell": _a1(nxt) if where == AFTER and nxt else None,
+                    "pv_term": _pv_term(db, nxt, k) if where == AFTER and nxt else None, "path": _steps(db, p)}
     return None
+
+
+def growth(db, starts: list[str], to: str, cores: list[dict]) -> dict | None:
+    """From a terminal growth cell up to the figure: the terminal value built as X x (1 + g) / (r - g)."""
+    import sourced
+    return terminal(db, starts, to, cores, sourced._fit, "g")
+
+
+def multiple(db, starts: list[str], to: str, cores: list[dict]) -> dict | None:
+    """From an exit multiple's cell up to the figure: the terminal value built as M x X."""
+    import sourced
+    return terminal(db, starts, to, cores, sourced._fit_multiple, "m")

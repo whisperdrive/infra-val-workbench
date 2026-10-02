@@ -59,6 +59,31 @@ def _vocabulary() -> set[str]:
     return words
 
 
+BANDS = ((0.6, "under_60"), (0.7, "from_60"), (0.9, "from_70"), (2.0, "from_90"))  # the trace's scores, in bands
+
+
+def _trace_stats(rm, rows: list[str]) -> dict:
+    """How the row finder's trace did on the rows the value reads, to weigh it against a real model without a word
+    of it: of the rows found, those whose evidence has no trace, the trace alone, the trace agreeing with other
+    evidence, and the trace leading to another row; how many are confident; the trace's scores in bands."""
+    out = {"rows": len(rows), "not_found": 0, "none": 0, "alone": 0, "agrees": 0, "elsewhere": 0, "confident": 0,
+           "scores": {b: 0 for _x, b in BANDS}}
+    for ref in rows:
+        sh, r = ref.rsplit("!r", 1)
+        ex = rm.explain(sh, int(r))
+        if not ex["found"]:
+            out["not_found"] += 1
+            continue
+        names = {n for n, _t in ex.get("evidence") or []}
+        sc = (ex.get("scores") or {}).get("trace")
+        led = any(n == "trace" and t.startswith("but the trace") for n, t in ex.get("evidence") or [])
+        out["elsewhere" if led else "none" if sc is None else "alone" if names == {"trace"} else "agrees"] += 1
+        out["confident"] += bool(rm.confident(sh, int(r)))
+        if sc is not None:
+            out["scores"][next(b for x, b in BANDS if sc < x)] += 1
+    return out
+
+
 def _freq(serials: list[float]) -> str:
     """A timeline's frequency, from the median gap between its periods."""
     if len(serials) < 2:
@@ -259,6 +284,8 @@ def _result(eid: int, res: dict) -> dict:
                      "new_lines_error": bool(g.get("new_lines_error")),
                      "new_terms": len(g.get("new_terms") or []),
                      "new_terms_in_value": sum(1 for x in g.get("new_terms") or [] if x["in_value"]),
+                     "gone_terms": len(g.get("gone_terms") or []),
+                     "gone_terms_in_value": sum(1 for x in g.get("gone_terms") or [] if x["in_value"]),
                      "new_terms_held": len(g.get("terms_held") or []),
                      "new_terms_error": bool(g.get("new_terms_error"))}
         # the cells' names aren't the client's words, but keep them out anyway: the ends, in order
@@ -273,6 +300,11 @@ def _result(eid: int, res: dict) -> dict:
             rows = [(k, x) for k in ("dcf_missing", "blank_rows", "weak_rows", "timing_open", "rebuilt_rows")
                     for x in g.get(k) or []][:15]
             r["family"] = sess.rowmap.family()
+            import overlay as ovmod
+            try:
+                r["gate"]["trace"] = ovmod.deep(_trace_stats, sess.rowmap, g.get("read_rows") or [])
+            except Exception as ex:
+                r["gate"]["trace"] = {"error": type(ex).__name__}
             shapes = []
             for kind, x in rows:
                 try:
@@ -363,7 +395,9 @@ _KEYS = {"app", "generated", "files", "reports", "workbooks", "roles", "placed",
          "feeds_dcf", "values", "candidates", "candidates_with_figures", "redacted", "rebuilt", "rebuilt_rows", "how",
          "copies_passed_over", "low", "high", "mid", "rate_this_year", "set", "applied", "cut_off",
          "methods", "preferred", "ties", "flags", "each", "key", "vs_default", "new_lines", "new_line_periods",
-         "new_lines_error", "new_terms", "new_terms_in_value", "new_terms_held", "new_terms_error", "scenario", "selectors", "saved", "last_year", "from",
+         "new_lines_error", "new_terms", "new_terms_in_value", "new_terms_held", "new_terms_error",
+         "gone_terms", "gone_terms_in_value", "trace", "not_found", "none", "alone", "agrees", "elsewhere", "confident",
+         "scores", "under_60", "from_60", "from_70", "from_90", "scenario", "selectors", "saved", "last_year", "from",
          "monthly", "quarterly", "semi-annual", "annual", "irregular"}
 
 

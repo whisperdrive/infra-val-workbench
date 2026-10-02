@@ -88,12 +88,16 @@ takes it from there:
    - an exit multiple, where the report's terminal value is one: the cell the terminal value's formula reads as the
      multiple in multiple × metric, the terminal value recomputed from it, the metric what the report says it's a
      multiple of (EBITDA, the RAB), and the report's multiple for that end (the low value at the lower multiple). There's
-     then no growth rate to source, and the card says so.
+     then no growth rate to source, and the card says so. It's traced up from the report's figure too, so a multiple
+     inside the last cash flow (=W8 + W6 × multiple) or added after the discounting is found the same way.
 
    One that isn't sourced to a cell (typed into a formula, say), or doesn't check out, comes to you. What the
    report discloses of the value (the terminal value, the PV of the forecast and of the terminal value,
    the value of franking credits and its share) is reconciled to the same split of the overlay's discountings: a
-   terminal value discounted on its own (one period, labelled so) is the terminal value, and the split is in the
+   terminal value discounted on its own (one period, labelled so) is the terminal value; one inside the last cash
+   flow is its term of that cell, discounted at that period's factor; one added after the discounting is the term
+   that adds it (its present value); franking credits added into the cash flows are their part, discounted with
+   them, and come off the forecast's present value. The split is in the
    units most of the report's figures tie in (discountings in thousands under an equity value in millions, at 100%
    under a share of it).
 6. **Rolls forward onto this year's client model.** Rows are found by label, history, numbers and a trace, with row
@@ -133,7 +137,8 @@ takes it from there:
    - the rows its cash flows come from weren't found (or were found blank, or not surely);
    - a discounting still reads another date than this year's valuation date;
    - the overlay reads nothing of this year's client model (last year's figures, rolled by date alone);
-   - this year's model adds a term the value takes in, not yet confirmed (the new terms, below);
+   - this year's model adds a term the value takes in, or drops one last year's value took in, not yet confirmed
+     (the terms, below);
    - the zero-roll check fails: at last year's valuation date, this year's model is far from last year's value;
    - the time check fails: the roll doesn't move a discounting on by its own rate. This year's model at last year's
      date (the periods to the new date cut off) against the roll at last year's rate, each discounting's present
@@ -146,14 +151,18 @@ takes it from there:
    A move of more than about 15% at last year's date (`overlay.ZERO_ROLL_CHECK`, a judgment call) doesn't hold the
    value but asks you to confirm it's the new forecast and not a row matched wrongly.
 
-   **New terms** in the sums the overlay's rows sit in (the rows it reads, what they add up, and what adds them up):
-   each this year is set against last year's, term by term, its terms paired by the row finder. A term this year's
-   model has and last year's didn't, with figures after this year's valuation date, either feeds a row the overlay
-   reads (a new cost under the cash flow it reads): the value takes it in and moves by it, so it's **held** until you
-   confirm the term belongs; or it's beside them (the overlay reads the sum's other terms, not the sum): the value
-   leaves it out, a point to check, not a hold (`result._new_terms`). A sum whose make-up changed (fewer than half of
-   last year's terms pair: an annual total of a quarterly row, a model rebuilt) isn't compared: that's a restructure,
-   not a term added, and the rows to check say so.
+   **Terms added or gone** in the sums the overlay's rows sit in (the rows it reads, what they add up, and what adds
+   them up): each this year is set against last year's, term by term, its terms paired where the row finder is sure
+   of them, else by their label, numbers or words (a term swapped for another is one gone and one new; a term
+   regrouped under a subtotal of the same sum is neither). A term this year's model has and last year's didn't, with
+   figures after this year's valuation date, either feeds a row the overlay reads (a new cost under the cash flow it
+   reads): the value takes it in and moves by it, so it's **held** until you confirm the term belongs; or it's beside
+   them (the overlay reads the sum's other terms, not the sum): the value leaves it out, a point to check, not a hold.
+   Likewise a term last year's model had and this year's doesn't, with figures after last year's valuation date: where
+   last year's value took it in, this year's has lost it, **held** until you confirm it's gone; beside, a point to
+   check. One the overlay read itself is a row to find, not a term gone (`result._term_changes`). A sum whose make-up
+   changed (fewer than half of last year's terms pair: an annual total of a quarterly row, a model rebuilt) isn't
+   compared: that's a restructure, and the rows to check say so.
 
    Two changes the rows the overlay reads can't show are points to check too, and don't hold the value either:
    - **cash-flow lines the overlay doesn't read**: on the client sheets it reads, a row of this year's model labelled
@@ -244,8 +253,8 @@ the Run page.
 - **Rebuild**: the tie to the report and the model inputs sourced and checked; the reconciliation, the assumptions
   and the Python module folded, each with its result on the fold.
 - **Result**: the value bridge (low, mid, high), this year's discount rate (last year's until you set it), the
-  methods (and the one you prefer), the inputs held at last year's, the new terms in this year's model (each to
-  confirm where the value takes it in), the cash-flow lines the overlay doesn't read, the
+  methods (and the one you prefer), the inputs held at last year's, the terms added or gone in this year's model
+  (each to confirm where it moves the value), the cash-flow lines the overlay doesn't read, the
   client model's scenario next to last year's (and when each model was saved), the cash-flow chart, the review, and
   how the files link up (the map) folded. A review point names the years and the bridge step it's about (checked
   against the run), and a click marks them on the chart and the bridge. **Export workpaper** downloads it all as an Excel file: the summary (the
@@ -265,10 +274,16 @@ flows. Differences aren't worked out between engagements in different units.
 counts, yes / no, ratios, dates and the app's own words. Each model's shape (its timelines by frequency: monthly,
 quarterly, semi-annual, annual; its periods, first and last), how alike the two client models are, the profile, each
 stage's outcome, the facts by status, the result's checks, the discountings traced, the roll, the reliability gate
-(with how many cash-flow lines the overlay doesn't read, and how many new terms, in the value and held), each row to
-find by its shape, and the client models'
+(with how many cash-flow lines the overlay doesn't read, how many terms added and gone, in the value and held, and how
+the row finder's trace did on the rows the value reads), each row to find by its shape, and the client models'
 scenario selectors by how this year's compares with last year's, with when each was saved. Every string is checked
 against the app's own vocabulary before it leaves; anything else is redacted and counted. It's for pasting from a machine with real files into a session that can't see them.
+
+The trace's weights and thresholds (`rowfind.WEIGHTS`, `TRACE_*`, the 0.7 a trace needs to count on its own) were set on
+synthetic models. The gate's `trace` counts in the export are how to check them on a real one: of the rows the value
+reads, those found with no trace, by the trace alone, with the trace agreeing, and with the trace leading elsewhere,
+how many are confident, and the trace's scores in bands. Many rows led elsewhere, or found by the trace alone and then
+picked otherwise by a person, say its weight is too high; rows the trace agrees on still in doubt, too low.
 
 Evidence is folded away, never removed. All engagements, New engagement, Models, the call log, the workpaper and
 Delete are in the ⋯ menu; Delete asks for the engagement's name.

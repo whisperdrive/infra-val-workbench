@@ -396,14 +396,16 @@ class RowFinder:
             return 0.8
         return 0.6 if la and lc and _jaccard(_words(la), _words(lc)) >= 0.5 else 0.0
 
-    def _step(self, x: tuple, sibs: set, cands: set) -> tuple | None:
+    def _step(self, x: tuple, sibs: set, cands: set, last: bool = True) -> tuple | None:
         """This year's row for last year's x among cands, the rows next to the path's previous row this year (the
-        rows it reads, or is read by), sibs the same rows last year: the best paired, else the one left once each
-        of the others is paired. -> (row, quality, how) or None."""
+        rows it reads, or is read by), sibs the same rows last year: the best paired, else (last) the one left once
+        each of the others is paired. -> (row, quality, how) or None."""
         scored = sorted(((self._pair(x, c), c) for c in cands), key=lambda t: (-t[0], t[1]))
         if scored and scored[0][0] >= 0.6 and (len(scored) == 1 or scored[1][0] < scored[0][0]):
             q, c = scored[0]
             return c, q, "label" if q == 1.0 else "numbers" if q == 0.8 else "words"
+        if not last:
+            return None
         taken = set()
         for o in sorted(sibs - {x}):
             best = max(((self._pair(o, c), c) for c in cands - taken), default=(0.0, None))
@@ -465,31 +467,47 @@ class RowFinder:
                         + ("; last year's numbers" if nums else "")))
         return sorted(out, key=lambda x: (-x[1], x[0]))[:3]
 
-    def terms(self, s: str, r: int) -> list[tuple] | None:
-        """The rows this year's row for last year's row (s, r) reads that last year's didn't: each row last year's
-        read paired with one of this year's (where it's found, sure or not: a row in doubt is the gate's to ask
-        about, not a new one), else by the trace's step, and this year's left over. None where this year's row
-        isn't settled, or where fewer than half of last year's terms pair (another make-up: an annual total of a
-        quarterly row, a model rebuilt, not a term added). -> [this year's rows]."""
+    def _below(self, k: tuple, depth: int = 3) -> set:
+        """The rows of this year's model a row reads, and the rows they read, depth deep."""
+        c_reads = self._index()["edges"][1][0]
+        seen, frontier = set(), [k]
+        for _ in range(depth):
+            frontier = [x for y in frontier for x in c_reads.get(y, ()) if x not in seen]
+            seen |= set(frontier)
+        return seen
+
+    def terms(self, s: str, r: int) -> tuple[list, list] | None:
+        """How this year's row for last year's row (s, r) is made up against last year's: each row last year's read
+        paired with one of this year's where it's found surely, else by its label, its numbers or its words (not as
+        the one left: a term swapped for another is one gone and one new). -> (this year's rows it reads that last year's didn't, last year's rows
+        it read that this year's doesn't), a term regrouped under another of the sum's (a subtotal of two of them)
+        in neither. None where this year's row isn't settled, or where fewer than half of last year's terms pair
+        (another make-up: an annual total of a quarterly row, a model rebuilt, not a term added or dropped)."""
         (p_reads, _), (c_reads, _) = self._index()["edges"]
         here = self.locate(s, r) if self.confident(s, r) else self._anchor((s, r))
         if not here:
             return None
         mine, theirs = set(p_reads.get((s, r), ())), set(c_reads.get(here, ()))
+        sure = lambda x: self.locate(*x) if self.confident(*x) else None
         taken, left = set(), set()
         for x in sorted(mine):
-            k = self.locate(*x)
+            k = sure(x)
             if k in theirs and k not in taken:
                 taken.add(k)
             else:
                 left.add(x)
         for x in sorted(left):
-            st = self._step(x, left, theirs - taken)
+            st = self._step(x, left, theirs - taken, last=False)
             if st:
                 taken.add(st[0])
-        if not mine or 2 * len(taken) < len(mine):
+                left.discard(x)
+        if not mine or 2 * (len(mine) - len(left)) < len(mine):
             return None
-        return sorted(theirs - taken)
+        under = self._below(here)
+        moved = {sure(x) for x in left} - {None}
+        new = [k for k in sorted(theirs - taken) if not (self._below(k) & moved)]
+        gone = [x for x in sorted(left) if sure(x) not in under]
+        return new, gone
 
     WEIGHTS = {"label": 0.3, "history": 0.35, "words": 0.2, "neighbours": 0.15, "banner": 0.25, "trace": 0.5,
                "shape": 0.0}
@@ -567,6 +585,7 @@ class RowFinder:
                 res["in_place"] = k[0] == s and "label" in ev and k not in odd and (
                     ev["label"][0] >= 1.0 or (ev["label"][0] >= LAYOUT and k[1] == r))
                 res.update(found=k, confidence=round(max(0.0, min(1.0, total)), 2),
+                           scores={n: round(sc, 3) for n, (sc, _t) in ev.items()},
                            how=max(ev.items(), key=lambda kv: self.WEIGHTS[kv[0]] * kv[1][0])[0],
                            evidence=[(n, tx) for n, (_, tx) in sorted(ev.items(), key=lambda kv: -self.WEIGHTS[kv[0]] * kv[1][0])])
                 res["alternatives"] = [a for a in res["alternatives"] if a["row"] != f"{k[0]}!r{k[1]}"]

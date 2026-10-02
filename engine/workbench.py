@@ -1199,8 +1199,8 @@ def terms_file(eid: int) -> Path:
 
 
 def terms_confirmed(eid: int) -> dict:
-    """The new terms of this year's model a person confirmed belong in this year's value (result._new_terms):
-    {this year's row: {"label", "by", "at"}}."""
+    """The terms a person confirmed (result._term_changes): this year's new ones as belonging in this year's value,
+    by this year's row, and last year's gone ones as gone, by "was:" and last year's row: {key: {"label", "by", "at"}}."""
     try:
         return json.loads(terms_file(eid).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -1208,8 +1208,8 @@ def terms_confirmed(eid: int) -> dict:
 
 
 def confirm_term(eid: int, row: str, ok: bool, label: str | None = None) -> dict:
-    """Confirm a new term of this year's model belongs in this year's value (ok), or take that back. The gate then
-    works out whether the value can be shown again."""
+    """Confirm a term this year's model adds belongs in this year's value, or one it drops is gone (ok), or take that
+    back. The gate then works out whether the value can be shown again."""
     got = terms_confirmed(eid)
     if ok:
         got[row] = {"label": label or "", "by": "you", "at": time.time()}
@@ -1266,7 +1266,7 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
     summary["held_values"] = held_values(eid)  # this year's figures a person set, on this year's feed
     summary["this_year_rate"] = this_year_rate(eid)  # and this year's discount rate (result.this_year_rate)
     summary["method"] = preferred_method(eid)  # and the method this year's value is worked out by (methods.py)
-    summary["terms_confirmed"] = sorted(terms_confirmed(eid))  # and the new terms a person confirmed (result._new_terms)
+    summary["terms_confirmed"] = sorted(terms_confirmed(eid))  # and the terms a person confirmed (result._term_changes)
     roll = summary.get("roll")
     if not roll or not summary["wiring"].get("current"):
         return

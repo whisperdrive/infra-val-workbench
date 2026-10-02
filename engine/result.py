@@ -30,6 +30,7 @@ import rodb
 import rowfind
 import scenarios
 import sourced
+import valuation
 
 TV_WORDS = re.compile(r"terminal|continuing value|residual|perpetuity|gordon|exit value", re.I)
 FRANKING = re.compile(r"frank|imputation|gamma", re.I)
@@ -381,22 +382,39 @@ def _new_lines(sess, read_rows: list[tuple], vd: str | None, prior_vd: str | Non
     return sorted(out, key=lambda x: -abs(x["total"]))[:NEW_LINES]
 
 
-TERM_UP, TERM_DOWN = 2, 3  # the sums looked at for new terms: rows this far above and below the rows the overlay reads
+TERM_UP, TERM_DOWN = 2, 3  # the sums looked at for terms: rows this far above and below the rows the overlay reads
+GONE = "was:"  # a confirmation's key for one of last year's terms gone this year, before last year's row
 
 
-def _new_terms(sess, read_rows: list[tuple], vd: str | None, confirmed: set, lines: set) -> list[dict]:
-    """The terms this year's model adds to the sums the overlay's rows sit in: for last year's rows the overlay reads,
-    the rows they add up or work out from (TERM_DOWN deep) and the rows that add them up (TERM_UP), each found this
-    year and its terms set against last year's (rowfind.terms: paired by the row finder, else by the trace's step).
-    A term this year's model has and last year's didn't, with figures after this year's valuation date, is:
+def _figures_after(wb, k: tuple, when: float) -> list[tuple]:
+    """A row's figures in the periods ending after a date, other than nil: [(col, value)]; none for a row of flags,
+    factors or dates."""
+    vals = wb.sheet(k[0])
+    xs = [(c, vals.get((k[1], c))) for c in _after(wb, k[0], when)]
+    xs = [(c, v) for c, v in xs if isinstance(v, float) and abs(v) > 1e-9]
+    if not xs or all(0 < v <= 1 for _c, v in xs) or all(v.is_integer() and 30000 <= v <= 80000 for _c, v in xs):
+        return []
+    return xs
+
+
+def _term_changes(sess, read_rows: list[tuple], vd: str | None, prior_vd: str | None, confirmed: set,
+                  lines: set) -> tuple[list[dict], list[dict]]:
+    """The terms this year's model adds to, or drops from, the sums the overlay's rows sit in: for last year's rows
+    the overlay reads, the rows they add up or work out from (TERM_DOWN deep) and the rows that add them up
+    (TERM_UP), each found this year and its terms set against last year's (rowfind.terms: paired by the row finder,
+    else by the trace's step; a term regrouped under a subtotal of the sum is neither).
+    A term this year's model has and last year's didn't, with figures after this year's valuation date:
       in the value   it feeds a row the overlay reads (a new cost under the cash flow it reads): the value moves by
-                     it, and it holds the value back until a person confirms it (confirmed: this year's rows)
+                     it, so it holds the value back until a person confirms it belongs (confirmed: this year's row)
       left out      it feeds none of them (a new line beside the ones the overlay reads): the value doesn't take it
                      in, a point to check, not a hold; one the cash-flow lines list has (lines) isn't listed again
-    Figures in this year's model's units."""
-    cur, rm = sess.current, sess.rowmap
+    A term last year's model had and this year's doesn't, with figures after last year's valuation date: in the
+    value where last year's rows the overlay reads took it in (the value no longer has it: held until a person
+    confirms it's gone, GONE + last year's row), else beside them, a point to check. One the overlay read itself
+    isn't listed: that's a row to find. -> (added, dropped), each figures in its own model's units."""
+    cur, rm, src = sess.current, sess.rowmap, sess.prior or sess.ov
     if not read_rows or not cur or not rm or not vd:
-        return []
+        return [], []
     (p_reads, p_by), (c_reads, _) = rm._index()["edges"]
 
     def reach(starts, graph, depth):
@@ -408,31 +426,46 @@ def _new_terms(sess, read_rows: list[tuple], vd: str | None, confirmed: set, lin
     sums = reach(read_rows, p_reads, TERM_DOWN) | reach(read_rows, p_by, TERM_UP)
     here = {rm.locate(*k) for k in read_rows} - {None}
     inside = reach(here, c_reads, 12)  # what the rows the overlay reads take in, this year
+    took_then = reach(read_rows, p_reads, 12)  # and last year
     new_vd = ov.serial(date.fromisoformat(vd[:10]))
-    plab, labels, out = (sess.prior or sess.ov).labels(), cur.labels(), {}
+    then = ov.serial(date.fromisoformat(prior_vd[:10])) if prior_vd else None
+    plab, labels, added, dropped = src.labels(), cur.labels(), {}, {}
+    span = lambda wb, k, xs: (ov.to_date(wb.timeline(k[0])[xs[0][0]]).isoformat() if xs[0][0] in wb.timeline(k[0]) else None,
+                              ov.to_date(wb.timeline(k[0])[xs[-1][0]]).isoformat() if xs[-1][0] in wb.timeline(k[0]) else None)
     for p in sorted(sums):
-        for k in rm.terms(*p) or []:
-            if k in out or k in here:
+        got = rm.terms(*p)
+        if not got:
+            continue
+        under = rm.locate(*p) if rm.confident(*p) else rm._anchor(p)
+        sums_at = {"under": f"{under[0]}!r{under[1]}" if under else None, "under_label": labels.get(under, "") if under
+                   else "", "last_year": f"{p[0]}!r{p[1]}", "last_year_label": plab.get(p, "")}
+        for k in got[0]:
+            if k in added or k in here:
                 continue
-            vals, tl = cur.sheet(k[0]), cur.timeline(k[0])
-            xs = [(c, vals.get((k[1], c))) for c in _after(cur, k[0], new_vd)]
-            xs = [(c, v) for c, v in xs if isinstance(v, float) and abs(v) > 1e-9]
-            if not xs or all(0 < v <= 1 for _c, v in xs) or all(v.is_integer() and 30000 <= v <= 80000 for _c, v in xs):
-                continue  # nothing after the new date, a flag or a factor, dates
-            row = f"{k[0]}!r{k[1]}"
-            took = k in inside
-            if not took and row in lines:
+            xs = _figures_after(cur, k, new_vd)
+            row, took = f"{k[0]}!r{k[1]}", k in inside
+            if not xs or (not took and row in lines):
                 continue
-            under = rm.locate(*p) if rm.confident(*p) else rm._anchor(p)
-            out[k] = {"row": row, "label": labels.get(k, ""), "periods": len(xs), "total": sum(v for _c, v in xs),
-                      "from": ov.to_date(tl[xs[0][0]]).isoformat() if xs[0][0] in tl else None,
-                      "to": ov.to_date(tl[xs[-1][0]]).isoformat() if xs[-1][0] in tl else None,
-                      "under": f"{under[0]}!r{under[1]}" if under else None, "under_label": labels.get(under, "") if under
-                      else "", "last_year": f"{p[0]}!r{p[1]}", "last_year_label": plab.get(p, ""),
-                      "in_value": took, "confirmed": row in confirmed, "hold": took and row not in confirmed}
-    unit = lambda k: (cur.db.execute("SELECT units FROM rows WHERE sheet=? AND row=?", k).fetchone() or ("",))[0] or ""
-    rows = [{**x, "units": unit(k)} for k, x in out.items()]
-    return sorted(rows, key=lambda x: (not x["in_value"], -abs(x["total"])))[:NEW_LINES]
+            a, b = span(cur, k, xs)
+            added[k] = {"row": row, "key": row, "label": labels.get(k, ""), "periods": len(xs),
+                        "total": sum(v for _c, v in xs), "from": a, "to": b, **sums_at, "in_value": took,
+                        "confirmed": row in confirmed, "hold": took and row not in confirmed}
+        for x in got[1]:
+            if x in dropped or x in read_rows or then is None:
+                continue
+            xs = _figures_after(src, x, then)
+            if not xs:
+                continue
+            row, took, now = f"{x[0]}!r{x[1]}", x in took_then, rm.locate(*x) if rm.confident(*x) else None
+            a, b = span(src, x, xs)
+            dropped[x] = {"row": row, "key": GONE + row, "label": plab.get(x, ""), "periods": len(xs),
+                          "total": sum(v for _c, v in xs), "from": a, "to": b, **sums_at, "in_value": took,
+                          "now": f"{now[0]}!r{now[1]}" if now else None, "confirmed": GONE + row in confirmed,
+                          "hold": took and GONE + row not in confirmed}
+    unit = lambda wb, k: (wb.db.execute("SELECT units FROM rows WHERE sheet=? AND row=?", k).fetchone() or ("",))[0] or ""
+    order = lambda xs: sorted(xs, key=lambda x: (not x["in_value"], -abs(x["total"])))[:NEW_LINES]
+    return (order([{**x, "units": unit(cur, k)} for k, x in added.items()]),
+            order([{**x, "units": unit(src, k)} for k, x in dropped.items()]))
 
 
 def _gaps(sess, summary: dict, cells: list[str]) -> dict:
@@ -549,15 +582,16 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
     except Exception as ex_:
         lines, lines_error = [], f"{type(ex_).__name__}: {ex_}"
     try:  # a term the value takes in that last year's model didn't have holds it until a person confirms it
-        terms = _new_terms(sess, sorted(read_by_row), None if date_hold else (info or {}).get("valuation_date"),
-                           set(summary.get("terms_confirmed") or []), {x["row"] for x in lines})
+        terms, gone = _term_changes(sess, sorted(read_by_row), None if date_hold else (info or {}).get("valuation_date"),
+                                    pvd, set(summary.get("terms_confirmed") or []), {x["row"] for x in lines})
         terms_error = None
     except Exception as ex_:
-        terms, terms_error = [], f"{type(ex_).__name__}: {ex_}"
-    terms_held = [x for x in terms if x["hold"]]
+        terms, gone, terms_error = [], [], f"{type(ex_).__name__}: {ex_}"
+    terms_held = [x for x in terms + gone if x["hold"]]
     return {"reliable": all(x["reliable"] for x in by_cell.values()) and not terms_held, "by_cell": by_cell,
             "date_check": date_hold, "new_lines": lines, "new_lines_error": lines_error,
-            "new_terms": terms, "new_terms_error": terms_error, "terms_held": [x["row"] for x in terms_held],
+            "new_terms": terms, "gone_terms": gone, "new_terms_error": terms_error,
+            "terms_held": [x["key"] for x in terms_held],
             "no_reads": reads == 0, "family": fam, "rebuilt": fam < ov.REBUILT, "rebuilt_rows": rebuilt_rows,
             "date_cells": {"moved": roll.get("valuation_date_cells") or [], "read": vd_reads, "off": vd_off,
                            "by_label": bool(roll.get("valuation_date_by_label")), "to": (info or {}).get("valuation_date")},
@@ -1001,17 +1035,87 @@ def _franking_part(db, summary: dict, facts: list[dict], cell: str, cs: list[dic
     if _streams(cs)[1]:
         return None
     stated = sourced._stated(facts, "franking_utilisation")
-    starts = forward.holding(db, [p for p, _ in stated], sourced.FRANKING, set(summary.get("sheets") or []) or None)         if stated else []
+    sheets = set(summary.get("sheets") or []) or None
+    starts = forward.holding(db, [p for p, _ in stated], sourced.FRANKING, sheets) if stated else []
     fw = forward.franking(db, starts, cell, cs) if starts else None
-    return {"core": fw["core"], "range": fw["range"], "sign": fw["sign"]}         if fw and fw["where"] == "part" and fw["range"] else None
+    if not fw or fw["where"] != "part" or not fw["range"]:
+        return None
+    return {"core": fw["core"], "range": fw["range"], "sign": fw["sign"]}
 
 
-def _end_split(db, cs: list[dict], part: dict | None = None) -> dict:
+def _tv_place(db, summary: dict, facts: list[dict], cell: str, cs: list[dict]) -> dict | None:
+    """A terminal value the split can't see in the discounting's cash-flow rows, found by tracing up from the
+    report's growth rate (else its exit multiple) to the figure (forward.py): inside the last cash flow, or added after
+    the discounting. None where the cash-flow rows have it, or it isn't found."""
+    main = _streams(cs)[0]
+    if not main or _tv_parts(main):
+        return None
+    sheets = set(summary.get("sheets") or []) or None
+    g, x = sourced._stated(facts, "terminal_growth_rate"), sourced._stated_x(facts)
+    tries = [(forward.growth, forward.holding(db, [p for p, _ in g], sourced.GROWTH_WORDS, sheets) if g else []),
+             (forward.multiple, forward.holding(db, [m for m, _ in x], sourced.MULTIPLE_WORDS, sheets, percent=False)
+              if x else [])]
+    for fn, starts in tries:
+        fw = fn(db, starts, cell, cs) if starts else None
+        if fw and ((fw["where"] == forward.LAST and fw["core"] == main["cell"] and fw["term"]) or
+                   (fw["where"] == forward.AFTER and fw["pv_term"])):
+            return {k: fw[k] for k in ("where", "core", "tv_cell", "term", "pv_cell", "pv_term")}
+    return None
+
+
+def _tv_cells(db, tv: dict) -> set:
+    """The cells a terminal value placed by _tv_place is worked out from, to read on another feed."""
+    out = set()
+    for ref, term in ((tv["tv_cell"], tv["term"]), (tv["pv_cell"], tv["pv_term"])):
+        if not ref:
+            continue
+        k = dcf._ref(ref, "")[:3]
+        out.add(k)
+        if term:
+            out |= {(n["sheet"], n["row"], n["col"]) for n in valuation.reads(db, expr=term, here=k[0], depth=1).values()}
+    return out
+
+
+def _factor_at(db, core: dict, col: int) -> float:
+    """A discounting's factor for one column of its cash flows: dcf.factors at its rate, date and convention, its
+    flags in."""
+    i = core["inputs"]
+    sheet, _, cols = dcf._row_range(db, i["cashflow"][0])
+    ends, _ = dcf.period_ends(db, sheet, cols, i.get("dates"))
+    rate = dcf._num(dcf.resolve(db, i["rate"])[0])
+    rate = rate / 100 if rate >= 1 else rate
+    vd = dcf._as_date(dcf.resolve(db, i["valuation_date"])[0])
+    td = dcf._as_date(dcf.resolve(db, i["terminal_date"])[0]) if i.get("terminal_date") else None
+    f = dcf.factors(ends, vd, rate, i.get("timing") or "end", i.get("day_count") or "actual/actual", td).get(col, 0.0)
+    for m in i.get("mask") or []:
+        ms, mr, _ = dcf._row_range(db, m)
+        f *= dcf._num(dcf._cell(db, ms, mr, col)) or 0.0
+    return f
+
+
+def _tv_split(db, main: dict, tv: dict, out: dict) -> None:
+    """The split for a terminal value placed by _tv_place, into out: inside the last cash flow, its term there
+    (undiscounted) times that column's factor; added after the discounting, the term that adds it (its present
+    value), the discounting's own value then the forecast's."""
+    k = dcf._ref(tv["tv_cell"], "")[:3]
+    if tv["where"] == forward.LAST:
+        t = float(dcftrace.evaluate(db, tv["term"], k[0]))
+        p = t * _factor_at(db, main, k[2])
+        out.update(tv=t, pv_tv=p, pv_forecast=out["pv"] - p)
+    else:
+        here = dcf._ref(tv["pv_cell"], "")[0]
+        p = float(dcftrace.evaluate(db, tv["pv_term"], here))
+        out.update(tv=dcf._num(dcf._cell(db, *k)), pv_tv=p, pv_forecast=out["pv"], pv=out["pv"] + p)
+
+
+def _end_split(db, cs: list[dict], part: dict | None = None, tv: dict | None = None) -> dict:
     main, fr, other = _streams(cs)
     if not main:
         return {}
     pv = lambda c: dcf.compute(db, **{**c["inputs"], "compare_to": None}, fix=False)["pv"]
     out = _split(db, main)
+    if tv and "pv_tv" not in out:  # inside the last cash flow, or added after the discounting (forward.py)
+        _tv_split(db, main, tv, out)
     # a terminal value discounted on its own (its one period, at the forecast's end), its franking credits too: the
     # terminal value is theirs, undiscounted and discounted, and the franking credits the forecast's
     tvs = [c for c in fr + other if c.get("periods") == 1 and TV_WORDS.search(c.get("cashflow_label") or "")]
@@ -1055,11 +1159,12 @@ def reconcile(sess, summary: dict, where: dict, facts: list[dict], figs: dict) -
     unit = lambda v: v / (where["scale"] or 1.0) * (where["sign"] or 1) if isinstance(v, float) else None
     traced = {e: _traced(db, where[e]) for e in ("low", "high")}
     parts = {e: _franking_part(db, summary, facts, where[e], (traced[e] or (None, []))[1]) for e in ("low", "high")}
+    tvs = {e: _tv_place(db, summary, facts, where[e], (traced[e] or (None, []))[1]) for e in ("low", "high")}
     last, this = {}, {}
     for e in ("low", "high"):
         cs = (traced[e] or (None, []))[1]
         try:
-            last[e] = _end_split(db, cs, parts[e])
+            last[e] = _end_split(db, cs, parts[e], tvs[e])
         except (ValueError, ZeroDivisionError) as ex:
             last[e] = {"error": str(ex)}
     if figs.get("this_year") and not (figs.get("gaps") and not figs["gaps"]["reliable"]):
@@ -1072,10 +1177,12 @@ def reconcile(sess, summary: dict, where: dict, facts: list[dict], figs: dict) -
                         need |= ov._dcf_cells(db, {"cashflow": rng})
             if parts[e]:
                 need |= ov._dcf_cells(db, {"cashflow": parts[e]["range"]})
+            if tvs[e]:
+                need |= _tv_cells(db, tvs[e])
         cur = _patched(sess, summary, db, "current", need)
         for e in ("low", "high"):
             try:
-                this[e] = _end_split(cur, (traced[e] or (None, []))[1], parts[e])
+                this[e] = _end_split(cur, (traced[e] or (None, []))[1], parts[e], tvs[e])
             except (ValueError, ZeroDivisionError) as ex:
                 this[e] = {"error": str(ex)}
     saved = {e: figs["saved"].get(where[e]) for e in ("low", "high")}

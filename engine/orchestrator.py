@@ -739,6 +739,12 @@ def _time_text(x: dict, t: float) -> str:
             f"of {x['rate']:.2%}")
 
 
+def _term_text(x: dict, how: str) -> str:
+    return (f"{x['row']} ({x['label']}) {how} {x['under_label'] or x['under'] or x['last_year']}: {x['periods']} "
+            f"period(s), {x['total']:,.1f} in total" + (f" (last year's; now at {x['now']}, outside the sum)"
+                                                        if x.get("now") else " (last year's)" if how != "in" else ""))
+
+
 def _result_job(eid: int, key: str):
     import overlay as ovmod
     import result
@@ -778,16 +784,19 @@ def _result_job(eid: int, key: str):
                                     "the other from a copy of it, say), or its date isn't one the roll moves",
                           "go": {"step": "workbench", "anchor": "datesCard"}})
         held = [x for x in g.get("new_terms") or [] if x["hold"]]
-        if held:
+        gone = [x for x in g.get("gone_terms") or [] if x["hold"]]
+        if held or gone:
             needs.append({"id": "new-terms", "stage": "result", "severity": "block",
-                          "title": "This year's value is held back: this year's model adds terms to the sums the value "
-                                   "reads",
-                          "detail": "; ".join(f"{x['row']} ({x['label']}) in {x['under_label'] or x['under']}: "
-                                              f"{x['periods']} period(s), {x['total']:,.1f} in total" for x in held[:4])
-                                    + (f"; {len(held) - 4} more" if len(held) > 4 else "") +
-                                    ". Last year's model had no such term, and the value takes it in: confirm each "
-                                    "belongs in this year's value",
-                          "go": {"step": "result", "anchor": "termsCard"}, "rows": [x["row"] for x in held]})
+                          "title": "This year's value is held back: this year's model " + (
+                              "adds and drops" if held and gone else "adds" if held else "drops") +
+                                   " terms in the sums the value reads",
+                          "detail": "; ".join([_term_text(x, "in") for x in held[:4]] + [_term_text(x, "gone from")
+                                                                                        for x in gone[:4]])
+                                    + (". Last year's model had no such term, and the value takes it in: confirm each "
+                                       "belongs in this year's value" if held else "")
+                                    + (". Last year's value took these in, and this year's model hasn't them: confirm "
+                                       "each is gone" if gone else ""),
+                          "go": {"step": "result", "anchor": "termsCard"}, "rows": [x["key"] for x in held + gone]})
         rows = [x["row"] + (f" ({x['label']})" if x.get("label") else "") for x in
                 g["dcf_missing"] + g["blank_rows"] + g["weak_rows"] + g["timing_open"]]
         zero = [c for c, x in g["by_cell"].items() if not x["zero_roll"]["ok"]]
@@ -824,7 +833,7 @@ def _result_job(eid: int, key: str):
                       "detail": (f"{len(rr)} row(s) the value reads were found by their numbers or words, not their labels: "
                                  "check they're the right ones" if rr else "the rows the value reads were found by their labels")
                                 + ("" if g["reliable"] else "; this year's value waits on the rows listed"
-                                   + (" and the new terms to confirm" if g.get("terms_held") else "")),
+                                   + (" and the terms to confirm" if g.get("terms_held") else "")),
                       "go": {"step": "result", "anchor": "rowsCard"}})
     if g and dc.get("by_label"):
         needs.append({"id": "dates-label", "stage": "result", "severity": "check",
@@ -841,15 +850,16 @@ def _result_job(eid: int, key: str):
                                 "forecast, but a row matched wrongly looks the same. Check the new forecast's step",
                       "go": {"step": "result", "anchor": "bridgeCard"}})
     out_terms = [x for x in (g or {}).get("new_terms") or [] if not x["in_value"]]
-    if out_terms:
+    out_gone = [x for x in (g or {}).get("gone_terms") or [] if not x["in_value"]]
+    if out_terms or out_gone:
         needs.append({"id": "new-terms-out", "stage": "result", "severity": "check",
-                      "title": "This year's model adds terms to sums beside the rows the overlay reads",
-                      "detail": "; ".join(f"{x['row']} ({x['label']}) in {x['under_label'] or x['under']}: "
-                                          f"{x['periods']} period(s), {x['total']:,.1f} in total" for x in out_terms[:4])
-                                + (f"; {len(out_terms) - 4} more" if len(out_terms) > 4 else "") +
-                                ". The overlay reads the sum's other terms, not the sum, so this year's value leaves "
-                                "them out: check whether it should take them in",
-                      "go": {"step": "result", "anchor": "termsCard"}, "rows": [x["row"] for x in out_terms]})
+                      "title": "This year's model " + ("adds and drops" if out_terms and out_gone else "adds" if out_terms
+                                                       else "drops") + " terms in sums beside the rows the overlay reads",
+                      "detail": "; ".join([_term_text(x, "in") for x in out_terms[:4]] +
+                                          [_term_text(x, "gone from") for x in out_gone[:4]]) +
+                                ". The overlay reads the sum's other terms, not the sum, so this year's value doesn't "
+                                "move with them: check whether it should",
+                      "go": {"step": "result", "anchor": "termsCard"}, "rows": [x["key"] for x in out_terms + out_gone]})
     lines = (g or {}).get("new_lines") or []
     if lines:
         needs.append({"id": "new-lines", "stage": "result", "severity": "check",
