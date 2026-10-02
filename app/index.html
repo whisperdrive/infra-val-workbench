@@ -1537,6 +1537,8 @@ function viewResult() {
   ${methodsCard(R)}
   ${heldCard(R)}
   ${rowsCard(R)}
+  ${linesCard(R)}
+  ${scenarioCard(R)}
   <div class="card" id="cfCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">The forecast cash flows</h2>${state.hl?.years?.length ? hlNote(yearsText(state.hl.years)) : ""}</div><p class="sub">Undiscounted, by financial year, the terminal value left out${R.chart?.left_out?.length ? ` (${esc(R.chart.left_out.join(", "))})` : ""}: last year's model against this year's.</p>
     ${R.chart?.years?.length ? `<div id="cfChart"></div>` : `<p class="muted small">${esc(R.chart?.why || "No cash flows found under the value.")}</p>`}</div>
   ${reviewCard()}
@@ -1644,6 +1646,36 @@ function rowsCard(R) {
   return `<div class="card" id="rowsCard"><h2>Rows to find in this year's model</h2><p class="sub">This year's value reads these rows of last year's client model, and the row finder couldn't settle where each is this year, so the value waits. For each: what it is last year (where it sits, what it adds up, its figures, what reads it), and the rows of this year's model that might be it, with their figures for the same periods. Use one, type another, or keep last year's values on purpose; last year's values are never used silently.</p>
     <div class="stack" style="gap:12px">${rows.map(rowBlock).join("")}</div>
     ${check.length ? `<h3 style="font-size:15px;margin:16px 0 6px">And to check: found by their numbers in a model that looks rebuilt</h3><div class="stack" style="gap:12px">${check.map(rowBlock).join("")}</div>` : ""}</div>`;
+}
+// Cash-flow lines this year's model has and last year's didn't (or had nothing in), on the sheets the overlay reads:
+// the roll leaves them out, so they're a point to check, not a hold. Figures in this year's model's units.
+function linesCard(R) {
+  const L = R.figures?.gaps?.new_lines; if (!L?.length) return "";
+  const row = x => `<tr><td><b>${esc(x.label)}</b> <span class="mono small muted">${esc(x.row)}</span><div class="small muted">${esc(x.why || "")}</div></td>
+      <td class="num">${x.periods}</td><td class="small">${esc(x.from === x.to ? x.from : `${x.from} to ${x.to}`)}</td><td class="num">${vN(x.total)}${x.units ? ` <span class="small muted">${esc(x.units)}</span>` : ""}</td>
+      <td class="small">${x.pv ? `${vN(x.pv.total)} <span class="mono muted">${esc(x.pv.row)}</span>` : `<span class="muted">–</span>`}</td></tr>`;
+  return `<div class="card" id="linesCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Cash-flow lines the overlay doesn't read</h2><span class="pill warn">${L.length} to check</span></div>
+    <p class="sub">This year's model has these lines on the sheets the overlay reads, with figures after this year's valuation date, and last year's model had nothing like them (or nothing in them) to discount. The overlay doesn't read them, so this year's value leaves them out: check whether it should take them in.</p>
+    <div class="scroll"><table class="stack-sm"><thead><tr><th>Line</th><th class="num">Periods</th><th>When</th><th class="num">Total, undiscounted</th><th>Its present value in the model</th></tr></thead><tbody>${L.map(row).join("")}</tbody></table></div></div>`;
+}
+// The scenario or case each client model is saved on (a typed selector its formulas read), this year's next to last
+// year's, and when each was saved: the overlay reads the saved values, so the value takes the saved scenario.
+function scenarioCard(R) {
+  const S = R.scenario; if (!S || (!S.selectors?.length && !S.saved?.this_year && !S.saved?.last_year && !S.error)) return "";
+  const xs = S.selectors || [], odd = xs.filter(x => x.status !== "same").length;
+  const v = x => x == null ? `<span class="muted">–</span>` : esc(typeof x === "number" ? (Number.isInteger(x) ? String(x) : fmt(x, 2)) : x);
+  const said = {same: `<span class="okt">✓ as last year</span>`, differs: `<span class="warnt">not last year's</span>`,
+    unmatched: `<span class="warnt">none like it last year</span>`, gone: `<span class="warnt">not found this year</span>`};
+  const row = x => `<tr class="${x.status === "same" ? "" : "held"}"><td><b>${esc(x.label)}</b></td>
+      <td class="num">${v(x.this_year)} <div class="mono small muted">${esc(x.cell || "")}</div></td>
+      <td class="num">${v(x.last_year)} <div class="mono small muted">${esc(x.last_cell || "")}</div></td>
+      <td class="num">${x.overlay == null ? `<span class="muted">–</span>` : v(x.overlay)}</td><td class="small">${said[x.status] || ""}</td></tr>`;
+  const when = s => s?.date ? `${esc(s.date)} <span class="small muted">(${s.from === "cell" ? `its own <span class="mono">${esc(s.cell)}</span>` : "the file's properties"})</span>` : `<span class="muted">not found</span>`;
+  return `<div class="card" id="scenarioCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">The client model's scenario</h2>${odd ? `<span class="pill warn">${odd} to confirm</span>` : xs.length ? `<span class="pill ok">as last year</span>` : `<span class="pill">no selector found</span>`}</div>
+    <p class="sub">The overlay reads the client model's saved values, so this year's value takes the scenario the model was saved on. Confirm it's the one the valuation should use: these are the selectors found in the models (a scenario, case or switch typed in and read by their formulas), this year's next to last year's.</p>
+    ${S.error ? `<p class="small muted">${esc(S.error)}</p>` : ""}
+    ${xs.length ? `<div class="scroll"><table class="stack-sm"><thead><tr><th>Setting</th><th class="num">This year</th><th class="num">Last year</th><th class="num">The overlay's copy</th><th></th></tr></thead><tbody>${xs.map(row).join("")}</tbody></table></div>` : ""}
+    <dl class="kv" style="margin-top:10px"><dt>This year's model saved</dt><dd>${when(S.saved?.this_year)}</dd><dt>Last year's model saved</dt><dd>${when(S.saved?.last_year)}</dd></dl></div>`;
 }
 // What one of last year's rows is, and what this year's model might have for it (workbench.row_info), loaded once
 const ROWCTX = {};

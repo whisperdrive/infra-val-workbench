@@ -132,6 +132,20 @@ takes it from there:
    A move of more than about 15% at last year's date (`overlay.ZERO_ROLL_CHECK`, a judgment call) doesn't hold the
    value but asks you to confirm it's the new forecast and not a row matched wrongly.
 
+   Two changes the rows the overlay reads can't show are points to check too, and don't hold the value either:
+   - **cash-flow lines the overlay doesn't read**: on the client sheets it reads, a row of this year's model labelled
+     as a cash flow to or from equity (an injection, a contribution, a distribution, a dividend, a capital return)
+     with figures after this year's valuation date, that matches no row of last year's model (rowfind, the other way
+     round) or one with nothing after last year's date, and that no row the overlay reads adds up. Last year's
+     overlay had nothing of it to discount, so the roll leaves it out. Each is listed with its row, its periods and
+     its total (and the model's own present value of it, where it has one);
+   - **the scenario the client model is saved on**: the overlay reads the saved values, so a model saved on another
+     case gives another value. The selectors (a typed scenario, case, sensitivity or switch its formulas read: a
+     small whole number or an option's name) are shown on the Result page, this year's next to last year's (the
+     prior model's, and the overlay's own copy where it has one), with when each model was saved (a cell of its
+     own, else the file's properties), so you confirm the scenario the valuation should use. One that differs, or
+     can't be matched, is a point to check (`scenarios.py`).
+
    A client model rebuilt between valuations is the hard case: a sheet of last year's figures pasted in under last
    year's labels (a reconciliation, say) matches last year's rows by label and by history, and the zero-roll check
    can't tell, since it reproduces last year's numbers exactly. So a pasted copy (typed values where last year's row
@@ -207,10 +221,10 @@ the Run page.
 - **Rebuild**: the tie to the report and the model inputs sourced and checked; the reconciliation, the assumptions
   and the Python module folded, each with its result on the fold.
 - **Result**: the value bridge (low, mid, high), this year's discount rate (last year's until you set it), the
-  methods (and the one you prefer), the inputs held at last year's, the cash-flow chart, the review, and how the files
-  link up (the
-  map) folded. A review point names the years and the bridge step it's about (checked against the run), and a click
-  marks them on the chart and the bridge. **Export workpaper** downloads it all as an Excel file: the summary (the
+  methods (and the one you prefer), the inputs held at last year's, the cash-flow lines the overlay doesn't read, the
+  client model's scenario next to last year's (and when each model was saved), the cash-flow chart, the review, and
+  how the files link up (the map) folded. A review point names the years and the bridge step it's about (checked
+  against the run), and a click marks them on the chart and the bridge. **Export workpaper** downloads it all as an Excel file: the summary (the
   equity value low / mid / high: the report's, rebuilt, this year's and the move; the inputs; the dates; the review),
   the bridge with a waterfall of the mid, the cash flows with their chart, the inputs with the cell each was sourced
   from and every check on it, the reconciliation, the key facts, the files and their roles, the review and the run
@@ -226,9 +240,10 @@ flows. Differences aren't worked out between engagements in different units.
 **Export diagnostics (anonymised)**, in the ⋯ menu, describes a run for diagnosis without a word of the client's:
 counts, yes / no, ratios, dates and the app's own words. Each model's shape (its timelines by frequency: monthly,
 quarterly, semi-annual, annual; its periods, first and last), how alike the two client models are, the profile, each
-stage's outcome, the facts by status, the result's checks, the discountings traced, the roll, the reliability gate,
-and each row to find by its shape. Every string is checked against the app's own vocabulary before it leaves; anything
-else is redacted and counted. It's for pasting from a machine with real files into a session that can't see them.
+stage's outcome, the facts by status, the result's checks, the discountings traced, the roll, the reliability gate
+(with how many cash-flow lines the overlay doesn't read), each row to find by its shape, and the client models'
+scenario selectors by how this year's compares with last year's, with when each was saved. Every string is checked
+against the app's own vocabulary before it leaves; anything else is redacted and counted. It's for pasting from a machine with real files into a session that can't see them.
 
 Evidence is folded away, never removed. All engagements, New engagement, Models, the call log, the workpaper and
 Delete are in the ⋯ menu; Delete asks for the engagement's name.
@@ -270,6 +285,8 @@ uv run python tests/check_xlruntime.py  # Excel functions in the Python runtime
   - `result.py`: the tie, the bridge and the cash flows.
   - `sourced.py`: the discount rate, terminal growth and franking credit utilisation, sourced and checked.
   - `methods.py`: this year's value worked out other ways, against the default; the preferred one.
+  - `scenarios.py`: the scenario each client model was saved on, this year's next to last year's, and when each was
+    saved.
   - `workpaper.py`: the Excel workpaper, built in memory from the engagement's result.
   - The rest came from the Valuation Desk: the workbook library and row map, the roles, the Python overlay
     (`xlcompile.py`, `xlruntime.py`, `overlay.py`), the DCF tracer, row finding and the map.

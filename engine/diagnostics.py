@@ -15,8 +15,10 @@ What it says, per engagement:
   facts       how many, by status; failing checks by kind; image checks by status; which keys were found
   result      located, tied, held; the ratio of this year's value to last year's; the bridge's steps; the terminal
               value's method; each input checked or not; the discountings traced; the roll; the reliability gate's
-              counts and ratios; the rows to find, each described by its shape (has a formula, adds up, how many rows it
-              reads, how many overlay cells read it, a discounted cash flow or not, how many candidates)
+              counts and ratios (with how many cash-flow lines this year's model has that the overlay doesn't read, and
+              their periods); the rows to find, each described by its shape (has a formula, adds up, how many rows it
+              reads, how many overlay cells read it, a discounted cash flow or not, how many candidates); the client
+              models' scenario selectors by how this year's compares with last year's, and when each model was saved
 """
 import json
 import re
@@ -52,7 +54,8 @@ def _vocabulary() -> set[str]:
               "SUMPRODUCT", "NPV", "XNPV", "SUM", "other", "dcf_missing", "blank_rows", "weak_rows", "timing_open",
               "prior_report", "prior_model", "prior_overlay", "current_model", "document", "workbook", "pdf", "pptx",
               "prior_model_vs_current_model", "overlay_vs_prior_model", "found", "picked", "stand_in", "m", "k", "bn",
-              "end", "start", "rebuilt_rows", "label", "history", "words", "neighbours", "banner", "agents", "your"}
+              "end", "start", "rebuilt_rows", "label", "history", "words", "neighbours", "banner", "agents", "your",
+              "same", "differs", "unmatched", "gone", "cell", "file"}
     return words
 
 
@@ -217,7 +220,8 @@ def _result(eid: int, res: dict) -> dict:
                             "applied": bool((((res.get("inputs") or {}).get("rate") or {}).get("this_year") or {}).get("applied"))},
          "cut_off": (res.get("figures") or {}).get("cut_off"),
          "methods": _methods(res.get("methods") or {}),
-         "chart": {"years": len((res.get("chart") or {}).get("years") or []), "found": bool((res.get("chart") or {}).get("years"))}}
+         "chart": {"years": len((res.get("chart") or {}).get("years") or []), "found": bool((res.get("chart") or {}).get("years"))},
+         "scenario": _scenario(res.get("scenario"))}
     # the discountings traced under each end: how many, and how many can be read here
     try:
         import dcftrace
@@ -249,7 +253,10 @@ def _result(eid: int, res: dict) -> dict:
                      "zero_roll": {c: x["zero_roll"].get("ratio") for c, x in (g.get("by_cell") or {}).items()},
                      "date_cells_off": len((g.get("date_cells") or {}).get("off") or []),
                      "family": g.get("family"), "rebuilt": g.get("rebuilt"), "rebuilt_rows": len(g.get("rebuilt_rows") or []),
-                     "date_by_label": bool((g.get("date_cells") or {}).get("by_label"))}
+                     "date_by_label": bool((g.get("date_cells") or {}).get("by_label")),
+                     "new_lines": len(g.get("new_lines") or []),
+                     "new_line_periods": sum(x["periods"] for x in g.get("new_lines") or []),
+                     "new_lines_error": bool(g.get("new_lines_error"))}
         # the cells' names aren't the client's words, but keep them out anyway: the ends, in order
         r["gate"]["zero_roll"] = list(r["gate"]["zero_roll"].values())
         tc = (res.get("figures") or {}).get("time") or {}
@@ -296,6 +303,18 @@ def _methods(inv: dict) -> dict:
                       if m.get("mid") is not None and base else None} for m in inv.get("methods") or []]}
 
 
+def _scenario(sc: dict | None) -> dict:
+    """The client models' selectors by how this year's compares with last year's, and when each model was saved and
+    where that's from (its own cell or the file's properties): no label, no setting."""
+    if not sc:
+        return {"found": False}
+    xs = sc.get("selectors") or []
+    return {"found": bool(xs), "selectors": len(xs), "by_status": _count(x["status"] for x in xs),
+            "error": bool(sc.get("error")),
+            "saved": {k: {"date": (s or {}).get("date"), "from": (s or {}).get("from")}
+                      for k, s in (sc.get("saved") or {}).items()}}
+
+
 def redact(obj, words: set | None = None, n: list | None = None):
     """The export with every string not the app's own word, a date or the app's version replaced (keys too)."""
     words = words if words is not None else _vocabulary()
@@ -339,7 +358,8 @@ _KEYS = {"app", "generated", "files", "reports", "workbooks", "roles", "placed",
          "date_by_label", "family", "rows", "time", "measured", "hold", "off_bp", "flows_matched", "frequency", "units_scale", "timing", "units_from_facts", "kind", "confidence", "has_formula", "adds_up", "reads_rows", "read_by_cells",
          "feeds_dcf", "values", "candidates", "candidates_with_figures", "redacted", "rebuilt", "rebuilt_rows", "how",
          "copies_passed_over", "low", "high", "mid", "rate_this_year", "set", "applied", "cut_off",
-         "methods", "preferred", "ties", "flags", "each", "key", "vs_default",
+         "methods", "preferred", "ties", "flags", "each", "key", "vs_default", "new_lines", "new_line_periods",
+         "new_lines_error", "scenario", "selectors", "saved", "last_year", "from",
          "monthly", "quarterly", "semi-annual", "annual", "irregular"}
 
 

@@ -10,6 +10,8 @@ forward. Two layouts of the same prior valuation, so both ways an overlay is del
     AssetA_BP26_client_model_Jun26.xlsx          AssetA_BP26_client_model_Jun26.xlsx
     AssetA_FY26_plan_rebuilt.xlsx (this year's model rebuilt: other sheets and labels, quarterly, a lookalike
                                    sheet of last year's numbers, the client's own bridge)
+    AssetA_BP26_client_model_Jun26_v2.xlsx (a later version of this year's model: an equity injection line the
+                                   overlay doesn't read, saved on another scenario, its save time in a cell)
 
 The valuation follows the conventions the workbench is built for:
   - the conclusion is the equity value as a low / mid / high range: low at the higher discount rate, high at
@@ -28,7 +30,7 @@ import io
 import re
 import sys
 import zipfile
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import matplotlib
@@ -51,6 +53,8 @@ GROWTH, NET_DEBT, DISTRIBUTION, UTILISATION = 0.025, 850.0, 25.0, 0.50
 # distribution (last year's, held in the roll-forward) would be this year
 NET_DEBT_NEW, DISTRIBUTION_NEW = 880.0, 27.5
 VD, VD_NEW = date(2025, 6, 30), date(2026, 6, 30)
+SAVED_PRIOR, SAVED_CURRENT, SAVED_V2 = datetime(2025, 8, 14), datetime(2026, 8, 12), datetime(2026, 7, 15, 9, 30)
+EQUITY = {"FY30": -225.0, "FY32": -275.0}  # equity injections in the later version of this year's model
 
 
 # ---- the client model ------------------------------------------------------------------------------------
@@ -71,10 +75,13 @@ def client_numbers(fy0: int, volume0: float, growth: float, tariff0: float, cpi:
                 capex=cap, tax=tax, fcf=fcf)
 
 
-def write_client(wb, n: dict, inputs: dict, insurance: bool, balances: tuple[float, float] | None = None) -> dict:
+def write_client(wb, n: dict, inputs: dict, insurance: bool, balances: tuple[float, float] | None = None,
+                 scenario: int = 1, equity: dict | None = None, saved: datetime | None = None) -> dict:
     """Inputs / Operations / CashFlow sheets, and a BalanceSheet whose first column is the opening balance at the
-    model's valuation date (net debt and the distribution payable: balances). Returns {line item: (sheet, row)}
-    (1-based rows)."""
+    model's valuation date (net debt and the distribution payable: balances). The inputs end with the scenario the
+    model is saved on (a typed selector a formula reads). equity: {financial year: amount} for an equity injection
+    line on the cash flow, below the free cash flow (the overlay doesn't read it), with the model's own present value
+    of it; saved: the save time on a Model_Info sheet of its own. Returns {line item: (sheet, row)} (1-based rows)."""
     b = wb.add_format({"bold": True})
     pct, num, dt = wb.add_format({"num_format": "0.00%"}), wb.add_format({"num_format": "#,##0.0"}), \
         wb.add_format({"num_format": "dd-mmm-yy"})
@@ -89,6 +96,11 @@ def write_client(wb, n: dict, inputs: dict, insurance: bool, balances: tuple[flo
             i.write(r, 1, value, pct if unit == "%" else num)
         i.write(r, 2, unit)
         at[label] = f"Inputs!$B${r + 1}"
+    r = len(inputs["rows"]) + 3
+    i.write(r, 0, "Active scenario (1 base, 2 low, 3 high)")
+    i.write(r, 1, scenario)
+    i.write(r + 1, 0, "Scenario description")
+    i.write_formula(r + 1, 1, f'=CHOOSE(B{r + 1},"Base","Low","High")', None, ("Base", "Low", "High")[scenario - 1])
 
     def timeline(ws, title):
         ws.write(0, 0, title, b)
@@ -145,6 +157,19 @@ def write_client(wb, n: dict, inputs: dict, insurance: bool, balances: tuple[flo
         cf.write_formula(f"{c}7", f"=-({at['Maintenance capex']}*(1+{at['CPI']})^{k}{major})", num, n["capex"][k])
         cf.write_formula(f"{c}8", f"=-MAX(0,({c}6+{c}7)*{at['Tax rate']})", num, n["tax"][k])
         cf.write_formula(f"{c}9", f"={c}6+{c}7+{c}8", num, n["fcf"][k])
+    if equity:
+        for r, label in ((10, "Equity injection"), (11, "PV of equity injection")):
+            cf.write(r - 1, 0, label)
+            cf.write(r - 1, 1, "A$m")
+        for k, e in enumerate(n["ends"]):
+            c, v = COL(FIRST_COL + k), equity.get(f"FY{e.year % 100:02d}", 0.0)
+            cf.write_number(f"{c}10", v, num)
+            cf.write_formula(f"{c}11", f"={c}10/1.08^{k + 1}", num, v / 1.08 ** (k + 1))
+    if saved:
+        info = wb.add_worksheet("Model_Info")
+        info.write(0, 0, "Model information", b)
+        info.write(2, 0, "Last saved")
+        info.write_datetime(2, 1, saved, wb.add_format({"num_format": "dd-mmm-yy hh:mm"}))
     if balances:
         bs = wb.add_worksheet("BalanceSheet")
         bs.write(0, 0, "Balance sheet (extract)", b)
@@ -569,14 +594,23 @@ def main() -> dict:
     files = {}
     p = OUT / "AssetA_BP25_client_model_Jun25.xlsx"
     wb = xlsxwriter.Workbook(p)
+    wb.set_properties({"created": SAVED_PRIOR})  # the file's save time (its properties): there's no cell for it
     rows = write_client(wb, prior, inputs_rows(VD, **prior_in), insurance=False, balances=(NET_DEBT, DISTRIBUTION))
     wb.close(); files["prior client model"] = p
 
     p = OUT / "AssetA_BP26_client_model_Jun26.xlsx"
     wb = xlsxwriter.Workbook(p)
+    wb.set_properties({"created": SAVED_CURRENT})
     write_client(wb, current, inputs_rows(VD_NEW, **cur_in, insurance=4.0), insurance=True,
                  balances=(NET_DEBT_NEW, DISTRIBUTION_NEW))
     wb.close(); files["current client model"] = p
+
+    p = OUT / "AssetA_BP26_client_model_Jun26_v2.xlsx"  # a later version: a line the overlay doesn't read, scenario 2
+    wb = xlsxwriter.Workbook(p)
+    wb.set_properties({"created": SAVED_CURRENT})
+    write_client(wb, current, inputs_rows(VD_NEW, **cur_in, insurance=4.0), insurance=True,
+                 balances=(NET_DEBT_NEW, DISTRIBUTION_NEW), scenario=2, equity=EQUITY, saved=SAVED_V2)
+    wb.close(); files["current client model (a later version)"] = p
 
     p = OUT / "AssetA_FY26_plan_rebuilt.xlsx"  # this year's model, rebuilt from the ground up
     wb = xlsxwriter.Workbook(p)

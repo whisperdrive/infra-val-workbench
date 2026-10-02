@@ -54,9 +54,11 @@ def _jaccard(a: set, b: set) -> float:
 
 
 class RowFinder:
-    def __init__(self, rowmap, prior, current, picks: dict | None = None):
-        """rowmap: overlay.RowMap (the label matching); prior, current: overlay.Workbook."""
+    def __init__(self, rowmap, prior, current, picks: dict | None = None, only: set | None = None):
+        """rowmap: overlay.RowMap (the label matching); prior, current: overlay.Workbook; only: the sheets of current
+        to look in (all of them by default)."""
         self.rowmap, self.prior, self.current = rowmap, prior, current
+        self.only = set(only) if only is not None else None
         self.picks = dict(picks or {})   # {(sheet, row): (sheet, row) or STAND_IN}: a person's or the agents' choice
         self.pick_by: dict = {}          # {(sheet, row): "you" | "agent"}: whose choice it is (a person's by default)
         self._cache: dict = {}
@@ -69,8 +71,8 @@ class RowFinder:
         if self._idx is not None:
             return self._idx
         cur = self.current
-        sheets = [s for (s,) in cur.db.execute("SELECT sheet FROM sheets")]
-        labels = cur.labels()
+        sheets = [s for (s,) in cur.db.execute("SELECT sheet FROM sheets") if self.only is None or s in self.only]
+        labels = cur.labels() if self.only is None else {k: v for k, v in cur.labels().items() if k[0] in self.only}
         by_label = defaultdict(list)
         for (s, r), lab in labels.items():
             if lab:

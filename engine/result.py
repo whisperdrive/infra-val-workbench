@@ -11,7 +11,8 @@
   chart    the undiscounted discrete forecast cash flows under the value (the terminal value left out), last year's
            and this year's, totalled by financial year
   gaps     a this-year value only where the rows its cash flows come from were found in this year's model (and the
-           zero-roll check holds): otherwise the rows to find are listed, and there's no this-year value yet
+           zero-roll check holds): otherwise the rows to find are listed, and there's no this-year value yet; and
+           the cash-flow lines this year's model has that the overlay doesn't read, to check (they don't hold it)
 Every figure is shown in the report's units (the match to the report says how the overlay's units compare).
 """
 import re
@@ -25,10 +26,18 @@ import keyfacts
 import linkmap
 import overlay as ov
 import rodb
+import rowfind
+import scenarios
 import sourced
 
 TV_WORDS = re.compile(r"terminal|continuing value|residual|perpetuity|gordon|exit value", re.I)
 FRANKING = re.compile(r"frank|imputation|gamma", re.I)
+# a line of cash flows to or from equity, by its label; not a rate, a ratio or a flag about one
+FLOW_WORDS = re.compile(r"equity|injection|contribution|distribution|dividend|capital return|return of capital|"
+                        r"buy-?back|redemption|subscription|capital rais|shareholder loan", re.I)
+NOT_A_FLOW = re.compile(r"cost of|return on|\birr\b|\brates?\b|ratio|%|gearing|\bbeta\b|premium|multiple|yield|"
+                        r"margin|\bflags?\b|factor", re.I)
+PV_WORDS = re.compile(r"\bn?pv\b|present value|discounted", re.I)
 
 
 # ---- where the report's equity value is in the overlay ------------------------------------------------------------
@@ -158,6 +167,7 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
 FOUND_MIN = 0.9  # a figure not under a discounting: this share of its client reads found in this year's model
 TIME_CHECK = 0.005  # a discounting moving on by a rate this far from its own (a year): a point to check
 TIME_HOLD = 0.015  # and this far: its dates don't move together, and this year's value is held back
+NEW_LINES = 12  # the cash-flow lines the overlay doesn't read: at most this many, the largest first
 
 
 def _rows_read(tree: dict) -> set[tuple]:
@@ -304,6 +314,72 @@ def _moves(sess, summary: dict, keys: list[tuple], base: dict, row: tuple, cols:
     return any(not ov.same(got[k], base.get(k)) for k in keys)
 
 
+def _after(wb, sheet: str, when: float) -> list[int]:
+    """The columns of a sheet's timeline whose periods end after a date (a timeline of period starts, all on the
+    1st, ends the day before the next start)."""
+    tl = wb.timeline(sheet)
+    ds = sorted(set(tl.values()))
+    if len(ds) < 2:
+        return []
+    gaps = sorted(b - a for a, b in zip(ds, ds[1:]))
+    plen = max(1, round(gaps[len(gaps) // 2] / 30.44))
+    starts = all(ov.to_date(d).day == 1 for d in ds)
+    return sorted(c for c, d in tl.items() if (ov.add_months(d, plen) - 1 if starts else d) > when)
+
+
+def _new_lines(sess, read_rows: list[tuple], vd: str | None, prior_vd: str | None) -> list[dict]:
+    """The cash-flow lines of this year's model the overlay doesn't read, on the client sheets it reads: rows
+    labelled as cash flows to or from equity (an injection, a contribution, a distribution, a dividend, a capital
+    return) with figures after this year's valuation date, that match no row of last year's model (rowfind, the
+    other way round) or match one with nothing after last year's date, and that the rows the overlay reads don't
+    read (a line they add up is in the value already).
+    Last year's overlay had nothing of them to discount, so the roll can't take them in: a point to check, not a
+    hold. A present-value row of one of them goes with it, not on its own. Figures in this year's model's units."""
+    cur, src = sess.current, sess.prior or sess.ov
+    if not read_rows or not cur or not sess.rowmap or not vd:
+        return []
+    here = {sess.rowmap.locate(*k) for k in read_rows} - {None}
+    sheets = ({sess.rowmap.sheet_for(s) for s, _r in read_rows} | {s for s, _r in here}) - {None}
+    reads = sess.rowmap._index()["edges"][1][0]
+    fed = {x for k in here for x in reads.get(k, ())}  # what the rows the overlay reads add up or work out from
+    new_vd = ov.serial(date.fromisoformat(vd[:10]))
+    cols = {s: _after(cur, s, new_vd) for s in sheets}
+    found = {}
+    for (s, r), lab in sorted(cur.labels().items()):
+        if not cols.get(s) or (s, r) in here or (s, r) in fed or not FLOW_WORDS.search(lab) or NOT_A_FLOW.search(lab):
+            continue
+        vals, tl = cur.sheet(s), cur.timeline(s)
+        xs = [(c, vals.get((r, c))) for c in cols[s]]
+        xs = [(c, v) for c, v in xs if isinstance(v, float) and abs(v) > 1e-9]
+        if xs and not all(0 < v <= 1 for _c, v in xs):  # not a flag or a factor
+            found[(s, r)] = {"row": f"{s}!r{r}", "label": lab, "periods": len(xs), "total": sum(v for _c, v in xs),
+                             "from": ov.to_date(tl[xs[0][0]]).isoformat(), "to": ov.to_date(tl[xs[-1][0]]).isoformat()}
+    if not found:
+        return []
+    back = rowfind.RowFinder(ov.RowMap(cur, src), cur, src, only={s for s, _r in read_rows})
+    then = ov.serial(date.fromisoformat(prior_vd[:10])) if prior_vd else None
+    for k, x in list(found.items()):
+        was = back.locate(*k) if back.confident(*k) else None
+        if not was:
+            x["why"] = "no row like it in last year's model"
+            continue
+        last = src.sheet(was[0])
+        if then is None or any(isinstance(last.get((was[1], c)), float) and abs(last[(was[1], c)]) > 1e-9
+                               for c in _after(src, was[0], then)):
+            found.pop(k)  # last year's model had it, with figures to discount: the overlay left it out on purpose
+        else:
+            x["why"] = f"last year's {was[0]}!r{was[1]} had nothing after last year's valuation date"
+    for k, x in list(found.items()):  # the model's own present value of a line goes with the line
+        if PV_WORDS.search(x["label"]):
+            of = next((j for j in sorted(reads.get(k, ())) if j in found and not PV_WORDS.search(found[j]["label"])), None)
+            found.pop(k)
+            if of:
+                found[of]["pv"] = {"row": x["row"], "label": x["label"], "total": x["total"]}
+    unit = lambda k: (cur.db.execute("SELECT units FROM rows WHERE sheet=? AND row=?", k).fetchone() or ("",))[0] or ""
+    out = [{**x, "units": unit(k), "pv": x.get("pv")} for k, x in found.items()]
+    return sorted(out, key=lambda x: -abs(x["total"]))[:NEW_LINES]
+
+
 def _gaps(sess, summary: dict, cells: list[str]) -> dict:
     """Whether this year's value can be trusted, for each cell: this year's client model is read at all (an overlay
     that reads nothing of it would give last year's figures, rolled by date alone), the rows its discountings' cash
@@ -412,7 +488,13 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
     rebuilt_rows = [{"row": f"{s_}!r{r_}", "label": labels.get((s_, r_), ""), "found": found((s_, r_)),
                      "how": ex(s_, r_).get("how")} for s_, r_ in sorted(read_by_row)
                     if fam < ov.REBUILT and found((s_, r_)) and not by_label((s_, r_))]
+    try:  # beside the value, not in its way
+        lines = _new_lines(sess, sorted(read_by_row), None if date_hold else (info or {}).get("valuation_date"), pvd)
+        lines_error = None
+    except Exception as ex_:
+        lines, lines_error = [], f"{type(ex_).__name__}: {ex_}"
     return {"reliable": all(x["reliable"] for x in by_cell.values()), "by_cell": by_cell, "date_check": date_hold,
+            "new_lines": lines, "new_lines_error": lines_error,
             "no_reads": reads == 0, "family": fam, "rebuilt": fam < ov.REBUILT, "rebuilt_rows": rebuilt_rows,
             "date_cells": {"moved": roll.get("valuation_date_cells") or [], "read": vd_reads, "off": vd_off,
                            "by_label": bool(roll.get("valuation_date_by_label")), "to": (info or {}).get("valuation_date")},
@@ -1089,6 +1171,10 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
     inputs = ov.deep(sourced.check, sess, summary, where, facts, asm, traced, unit, terminal)
     inputs["rate"]["this_year"] = rate_now  # last year's is sourced and checked; this year's is a person's
     held_inputs = ov.deep(held_list, sess, summary, where, figs)
+    try:  # the scenario each client model was saved on, and when: beside the value, not in its way
+        scenario = ov.deep(scenarios.settings, sess, summary)
+    except Exception as ex:
+        scenario = {"selectors": [], "saved": {}, "error": f"{type(ex).__name__}: {ex}"}
     this_year = ({**this, "mid": (this["low"] + this["high"]) / 2 if this["low"] is not None and this["high"] is not None
                   else None} if this and not br["held"] else None)
     inv = None
@@ -1102,6 +1188,7 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
                    "error": f"{type(ex).__name__}: {ex}"}
     return {"head": head, "where": where, "tie": tie, "figures": figs, "bridges": br, "chart": ch, "reconcile": rec,
             "assumptions": asm, "inputs": inputs, "held": held_inputs, "terminal": terminal, "methods": inv,
+            "scenario": scenario,
             "values": {"report": {e: head[e] for e in ("low", "mid", "high")},
                        "rebuilt": {"low": tie["low"]["rebuilt"], "high": tie["high"]["rebuilt"],
                                    "mid": (tie["low"]["rebuilt"] + tie["high"]["rebuilt"]) / 2

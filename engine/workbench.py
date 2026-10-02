@@ -1029,9 +1029,11 @@ def _wiring(eid: int) -> dict:
                         "source_path": ov.get("source_path"), "sheets_by": by},
             "prior": {"db_path": prior["db_path"], "filename": prior["filename"],
                       "sheets": sorted(prior["sheets"]) if prior["sheets"] else None,
-                      "valuation_date": (library.get(prior["id"]) or {}).get("valuation_date")} if prior else None,
+                      "valuation_date": (library.get(prior["id"]) or {}).get("valuation_date"),
+                      "source_path": prior.get("source_path")} if prior else None,
             "current": {"db_path": cur["db_path"], "filename": cur["filename"], "sheets": None,
-                        "valuation_date": (library.get(cur["id"]) or {}).get("valuation_date")} if cur else None,
+                        "valuation_date": (library.get(cur["id"]) or {}).get("valuation_date"),
+                        "source_path": cur.get("source_path")} if cur else None,
             "client_link": client_link, "prior_valuation_date": prior_vd, "same_file": same_file,
             "client_sheets": copy or None}
 

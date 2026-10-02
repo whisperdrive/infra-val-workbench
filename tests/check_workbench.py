@@ -24,6 +24,12 @@
             over, the rows found by their numbers, the value this year's; a point says the model looks rebuilt
   gate      this year's value held, with the reason, where it can't be trusted: a discounting left on last year's
             date, nothing of this year's model read; a big move at last year's date is a point to check
+  lines     a later version of this year's model: a cash-flow line the overlay doesn't read (equity injections, on a
+            sheet it reads) and the model saved on another scenario, each a point to check that leaves the value as
+            it was; the ordinary run has neither (its scenario is last year's)
+  changes   the finders behind those two, on small models: which lines count (not one a row the overlay reads adds
+            up, one last year's model had figures in, or a rate) and which cells are selectors (not a note nothing
+            reads, a series, or a case named in passing); a save time from the model's own cell, else the file's
   overview  every engagement at a glance: where it is (a finished one, an empty one), its values
   facts     the code checks behind the models, on the reviewers' cases: scale and currency, the label a figure sits
             under, dates and longer numbers, names, ranges, the image's waivers, table rows and headings, a blind read
@@ -234,6 +240,8 @@ PACK_A = ("AssetA_valuation_report_FY25.pdf", "AssetA_BP25_client_model_Jun25.xl
 PACK_R = ("AssetA_valuation_report_FY25.pdf", "AssetA_BP25_client_model_Jun25.xlsx", "Alpha_valuation_overlay_FY25.xlsx",
           "AssetA_FY26_plan_rebuilt.xlsx")  # this year's model rebuilt
 PACK_B = ("AssetA_valuation_report_FY25.pptx", "AssetA_BP25_with_overlay.xlsx", "AssetA_BP26_client_model_Jun26.xlsx")
+PACK_V = ("AssetA_valuation_report_FY25.pdf", "AssetA_BP25_client_model_Jun25.xlsx", "Alpha_valuation_overlay_FY25.xlsx",
+          "AssetA_BP26_client_model_Jun26_v2.xlsx")  # a later version of this year's model
 
 
 def run_check(files=PACK_A, name="Asset A, FY26") -> int:
@@ -264,6 +272,10 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     assert res["tie"]["low"]["ok"] and res["tie"]["high"]["ok"] and res["tie"]["low"]["rebuilt_ok"], res["tie"]
     held = {h["cell"]: h["suggestion"]["status"] for h in res.get("held") or []}  # either layout: found, and checked
     assert held == {"Val_Inputs!C7": "checked", "Val_Inputs!C8": "checked"}, held
+    # this year's model saved on last year's scenario, and no line in it the overlay doesn't read
+    sc = res["scenario"]
+    assert [(x["cell"], x["this_year"], x["last_cell"], x["last_year"], x["status"]) for x in sc["selectors"]] ==         [("Inputs!B14", 1.0, "Inputs!B13", 1.0, "same")] and sc["saved"]["this_year"]["date"] == "2026-08-12", sc
+    assert not res["figures"]["gaps"]["new_lines"], res["figures"]["gaps"]["new_lines"]
     assert res["terminal"]["kind"] == "growth_final_year" and res["terminal"]["from"] == "the fact", res["terminal"]
     assert e["terminal"]["kind"] == "growth_final_year" and e["terminal"]["passages"], e["terminal"]
     assert not res["inputs"]["growth"].get("na") and res["inputs"]["growth"]["ok"], res["inputs"]["growth"]
@@ -319,7 +331,7 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
             dl["This year's client model"]["ok"], dl["The roll-forward runs to"]["date"]) == \
         ("2025-06-30", "2025-06-30", "Val_Inputs!C4", True, True, "2026-06-30", True, "2026-06-30"), dl
     view = orc.view(eid)
-    assert not [n for n in view["needs"] if n["severity"] == "block"]
+    assert not [n for n in view["needs"] if n["severity"] == "block" or n["id"] in ("new-lines", "scenario")], view["needs"]
     # every need says what it asks of a person and lands on a card; a review point names its years and step, checked
     # against the run (a year the chart doesn't have is dropped)
     assert all(n.get("kind") and (n["kind"] == "retry" or n["go"].get("anchor")) for n in view["needs"]), view["needs"]
@@ -869,6 +881,48 @@ def rebuilt_check() -> None:
           "to check; the diagnostics say so without a name)")
 
 
+def lines_check(first: int) -> None:
+    """Two changes in this year's model the roll can't see, each a point to check that leaves the value as it was: a
+    cash-flow line last year's model didn't have, on a sheet the overlay reads (equity injections, with the model's
+    own present value of them), and the model saved on another scenario than last year's, with when each was saved
+    (this year's by a cell of its own, last year's by the file's properties). The diagnostics count them without a
+    name."""
+    import diagnostics
+    want = wb.get(first)["result"]
+    eid = wb.create("Asset A, FY26 (a later model)")["id"]
+    for f in PACK_V:
+        upload(eid, f)
+    v = wait(eid, lambda v: status(v)["result"] in (*orc.SETTLED, "blocked", "failed") and not v["busy"], "the result", 600)
+    res = wb.get(eid)["result"]
+    assert status(v)["result"] == "attention" and         abs(res["values"]["this_year"]["mid"] - want["values"]["this_year"]["mid"]) < 1e-6, (status(v), res["values"])
+    lines = res["figures"]["gaps"]["new_lines"]
+    assert [(x["row"], x["label"], x["periods"], x["total"], x["from"], x["to"], x["units"], (x["pv"] or {}).get("row"))
+            for x in lines] == [("CashFlow!r10", "Equity injection", 2, -500.0, "2030-06-30", "2032-06-30", "A$m",
+                                 "CashFlow!r11")], lines
+    need = next(n for n in v["needs"] if n["id"] == "new-lines")
+    assert (need["severity"], need["kind"], need["go"]["anchor"]) == ("check", "check-lines", "linesCard") and         "CashFlow!r10 (Equity injection): 2 period(s), -500.0 in total" in need["detail"], need
+    sc = res["scenario"]
+    assert [(x["cell"], x["this_year"], x["last_cell"], x["last_year"], x["status"]) for x in sc["selectors"]] ==         [("Inputs!B14", 2.0, "Inputs!B13", 1.0, "differs")], sc["selectors"]
+    assert (sc["saved"]["this_year"]["date"], sc["saved"]["this_year"]["from"], sc["saved"]["this_year"]["cell"],
+            sc["saved"]["last_year"]["date"], sc["saved"]["last_year"]["from"]) ==         ("2026-07-15", "cell", "Model_Info!B3", "2025-08-14", "file"), sc["saved"]
+    need = next(n for n in v["needs"] if n["id"] == "scenario")
+    assert (need["severity"], need["kind"], need["go"]["anchor"]) == ("check", "check-scenario", "scenarioCard") and         "it isn't last year's" in need["title"] and "Inputs!B14 (Active scenario (1 base, 2 low, 3 high)) is 2, last "         "year's 1" in need["detail"] and "this year's model was saved 2026-07-15, last year's 2025-08-14" in need["detail"], need
+    d = diagnostics.export(eid)
+    text = json.dumps(d, default=str).lower()
+    names = NAMES_IN_PACK + ("Equity injection", "Model_Info", "Active scenario", "Last saved")
+    assert not [n for n in names if n.lower() in text] and d["redacted"] == 0, d["redacted"]
+    r = d["result"]
+    assert (r["gate"]["new_lines"], r["gate"]["new_line_periods"], r["gate"]["new_lines_error"]) == (1, 2, False), r["gate"]
+    assert r["scenario"] == {"found": True, "selectors": 1, "by_status": {"differs": 1}, "error": False,
+                             "saved": {"this_year": {"date": "2026-07-15", "from": "cell"},
+                                       "last_year": {"date": "2025-08-14", "from": "file"}}}, r["scenario"]
+    assert d["run"]["needs"].get("check-lines:check") == 1 and d["run"]["needs"].get("check-scenario:check") == 1, d["run"]
+    wb.delete(eid)
+    print("lines: ok (a later model's equity injections, on a sheet the overlay reads and in no row of last year's: "
+          "2 periods, -500.0, its present value with it; the model saved on scenario 2, last year's on 1, with when "
+          "each was saved: two points to check, the value as the ordinary model's; the diagnostics count them)")
+
+
 def gate_check() -> None:
     """This year's value is held, with a need that says why, where it can't be trusted:
     - a discounting left on last year's valuation date (its date cell not among those the roll moves);
@@ -1207,6 +1261,90 @@ def ranges_check() -> None:
           "the scope are found; a date is read and checked whole)")
 
 
+def changes_check() -> None:
+    """The two finders behind the lines and the scenario, on two small models: the cash-flow lines the overlay
+    doesn't read are this year's new equity injections (their present value with them) and a shareholder loan line
+    last year's model had empty, not the contributions the row the overlay reads adds up, the distributions last
+    year's model had too, or a cost of equity; the selectors are a number, an option's name and a switch the
+    formulas read, not a note nothing reads, a series, or a case named in passing ("Base case capex"); this year's
+    save time is the model's own cell, last year's the file's."""
+    from datetime import date, datetime
+    from types import SimpleNamespace
+
+    import xlsxwriter
+    from xlsxwriter.utility import xl_col_to_name as col
+    import build_map
+    import overlay as ovmod
+    import result
+    import rowfind
+    import scenarios
+    out = Path(tempfile.mkdtemp(prefix="changes_"))
+
+    def book(name, fy0, rows, scen, saved=None):
+        path = out / f"{name}.xlsx"
+        w = xlsxwriter.Workbook(path)
+        w.set_properties({"created": datetime(2024, 12, 3)})
+        dt = w.add_format({"num_format": "dd-mmm-yy"})
+        cf = w.add_worksheet("CF")
+        cf.write(2, 0, "Period ending")
+        ends = [date(fy0 + k, 6, 30) for k in range(10)]
+        for k, e in enumerate(ends):
+            cf.write_datetime(2, 2 + k, e, dt)
+        for r, (label, vals) in rows.items():
+            cf.write(r - 1, 0, label)
+            for k, e in enumerate(ends):
+                v = vals(e, k)  # a number, or a formula and the value Excel saved for it
+                if isinstance(v, tuple):
+                    cf.write_formula(r - 1, 2 + k, v[0].replace("#", col(2 + k)), None, v[1])
+                else:
+                    cf.write_number(r - 1, 2 + k, v)
+        sc = w.add_worksheet("Scen")
+        sc.write(2, 0, "Select scenario"); sc.write(2, 1, scen[0])
+        sc.write(3, 0, "Scenario in use"); sc.write_formula(3, 1, '=CHOOSE(B3,"Base","Low","High")')
+        sc.write(5, 0, "Case"); sc.write(5, 2, scen[1])
+        sc.write(6, 0, "Case flag"); sc.write_formula(6, 1, '=IF(C6="Downside",1,0)')
+        sc.write(8, 0, "Sensitivity switch: capex"); sc.write(8, 1, 0)
+        sc.write(9, 0, "Capex with sensitivity"); sc.write_formula(9, 1, "=100*(1+0.1*B9)")
+        sc.write(11, 0, "Scenario notes"); sc.write(11, 1, 1)
+        sc.write(13, 0, "Base case capex"); sc.write(13, 1, 15)
+        sc.write(14, 0, "Capex"); sc.write_formula(14, 1, "=B14*2")
+        sc.write(16, 0, "Scenario volumes")
+        for k in range(5):
+            sc.write(16, 1 + k, k + 1)
+        sc.write(17, 0, "Total volume"); sc.write_formula(17, 1, "=SUM(B17:F17)")
+        if saved:
+            info = w.add_worksheet("Info")
+            info.write(2, 0, "Last saved"); info.write_datetime(2, 1, saved, w.add_format({"num_format": "dd-mmm-yy hh:mm"}))
+        w.close()
+        return path, ovmod.Workbook(build_map.main(str(path), str(out / name))["db"])
+
+    common = {5: ("Revenue", lambda e, k: 100.0 + k), 6: ("Equity contributions", lambda e, k: -10.0),
+              7: ("Distributions paid", lambda e, k: 30.0 + k), 8: ("Net cash flow to equity", lambda e, k: ("=#5+#6", 90.0 + k)),
+              10: ("Cost of equity", lambda e, k: 0.11)}
+    p_path, prior = book("prior", 2026, {**common, 9: ("Shareholder loan drawdowns", lambda e, k: 0.0)}, (3, "Base"))
+    injection = {2030: -225.0, 2032: -275.0}
+    c_path, cur = book("current", 2027, {**common, 9: ("Shareholder loan drawdowns", lambda e, k: -20.0),
+                                         11: ("Equity injection", lambda e, k: injection.get(e.year, 0.0)),
+                                         12: ("PV of equity injection", lambda e, k: (f"=#11/1.1^{k + 1}",
+                                                                                     injection.get(e.year, 0.0) / 1.1 ** (k + 1)))},
+                       (2, "Downside"), saved=datetime(2025, 11, 26, 14, 5))
+    sess = SimpleNamespace(current=cur, prior=prior, ov=prior, sheets=[], client_sheets=set(), client_link=None,
+                           ext_cached={}, rowmap=rowfind.RowFinder(ovmod.RowMap(prior, cur), prior, cur))
+    lines = result._new_lines(sess, [("CF", 8)], "2026-06-30", "2025-06-30")
+    assert [(x["row"], x["periods"], round(x["total"], 6), (x["pv"] or {}).get("row"), x["why"].split(" ")[0])
+            for x in lines] == [("CF!r11", 2, -500.0, "CF!r12", "no"), ("CF!r9", 10, -200.0, None, "last")], lines
+    got = scenarios.settings(sess, {"wiring": {"current": {"source_path": str(c_path)}, "prior": {"source_path": str(p_path)}}})
+    assert [(x["cell"], x["this_year"], x["last_year"], x["status"]) for x in got["selectors"]] == \
+        [("Scen!B3", 2.0, 3.0, "differs"), ("Scen!C6", "Downside", "Base", "differs"), ("Scen!B9", 0.0, 0.0, "same")], got
+    assert (got["saved"]["this_year"]["date"], got["saved"]["this_year"]["cell"], got["saved"]["last_year"]["date"],
+            got["saved"]["last_year"]["from"]) == ("2025-11-26", "Info!B3", "2024-12-03", "file"), got["saved"]
+    for w in (prior, cur):
+        w.close()
+    print("changes: ok (the lines the overlay doesn't read: a new equity injection with its present value, a loan line "
+          "empty last year; not what the read row adds up, last year's distributions or a rate; the selectors a number, "
+          "an option and a switch the formulas read, not a note, a series or a case in passing; when each was saved)")
+
+
 def upgrade_check() -> None:
     """A database from an earlier version gets the columns added since (a Windows install upgrades in place)."""
     import sqlite3
@@ -1226,6 +1364,7 @@ def upgrade_check() -> None:
 def main() -> None:
     ranges_check()
     facts_check()
+    changes_check()
     upgrade_check()
     if not PACK.exists():
         sys.exit("run tests/make_pack.py first")
@@ -1238,6 +1377,7 @@ def main() -> None:
     overview_check(eid)
     diagnostics_check(eid)
     rebuilt_check()
+    lines_check(eid)
     gate_check()
     review_check(eid)
     held_check(eid)

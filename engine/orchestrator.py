@@ -827,6 +827,39 @@ def _result_job(eid: int, key: str):
                       "detail": "; ".join(f"{c}: {r:.2f}×" for c, r in moved) + ": a move of that size is usually the new "
                                 "forecast, but a row matched wrongly looks the same. Check the new forecast's step",
                       "go": {"step": "result", "anchor": "bridgeCard"}})
+    lines = (g or {}).get("new_lines") or []
+    if lines:
+        needs.append({"id": "new-lines", "stage": "result", "severity": "check",
+                      "title": "This year's model has cash-flow lines the overlay doesn't read",
+                      "detail": "; ".join(f"{x['row']} ({x['label']}): {x['periods']} period(s), {x['total']:,.1f} in total"
+                                          for x in lines[:4]) + (f"; {len(lines) - 4} more" if len(lines) > 4 else "") +
+                                ". Last year's overlay had nothing of them to discount, so the roll leaves them out: check "
+                                "whether this year's value should take them in",
+                      "go": {"step": "result", "anchor": "linesCard"}, "rows": [x["row"] for x in lines]})
+    sc = res.get("scenario") or {}
+    odd = [x for x in sc.get("selectors") or [] if x["status"] != "same"]
+    if odd:
+        shown = lambda v: "–" if v is None else f"{v:g}" if isinstance(v, float) else str(v)
+
+        def said(x):
+            if x["status"] == "unmatched":
+                return f"{x['cell']} ({x['label']}) is {shown(x['this_year'])}, with none like it in last year's model"
+            if x["status"] == "gone":
+                return f"last year's {x['last_cell']} ({x['label']}) was {shown(x['last_year'])}, not found this year"
+            return (f"{x['cell']} ({x['label']}) is {shown(x['this_year'])}, last year's {shown(x['last_year'])}"
+                    + (f" ({shown(x['overlay'])} in the overlay's copy)" if x.get("overlay") is not None else ""))
+        now, then = ((sc.get("saved") or {}).get(k) or {} for k in ("this_year", "last_year"))
+        when = ", ".join(x for x in (f"this year's model was saved {now['date']}" if now.get("date") else "",
+                                     f"last year's {'' if now.get('date') else 'model was saved '}{then['date']}"
+                                     if then.get("date") else "") if x)
+        needs.append({"id": "scenario", "stage": "result", "severity": "check",
+                      "title": "Confirm the scenario this year's client model is saved on: " + (
+                          "it isn't last year's" if any(x["status"] == "differs" for x in odd) else
+                          "it can't be matched to last year's"),
+                      "detail": "; ".join(said(x) for x in odd[:4]) + (f"; {len(odd) - 4} more" if len(odd) > 4 else "") +
+                                (f"; {when}" if when else "") + ". The overlay reads the model's saved values, so this "
+                                "year's value takes the scenario the model was saved on",
+                      "go": {"step": "result", "anchor": "scenarioCard"}})
     for r in (res.get("reconcile") or {}).get("rows") or []:
         if r.get("ok") is False:
             bad = [f"{e}: report {r['report'][e]}, Python {r['python'][e]:,.1f}" for e, ok in r["ties"].items()
@@ -1008,6 +1041,7 @@ KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact"
          ("roles", "confirm-roles", "The roles to confirm"), ("no-reads", "check-roles", "The roles to check"),
          ("dates-", "check-date", "A date to check"), ("zero-roll", "check-forecast", "A move to check"),
          ("held-", "check-held", "An input held at last year's"), ("rebuilt", "confirm-rows", "Rows to confirm"),
+         ("new-lines", "check-lines", "Cash-flow lines to check"), ("scenario", "check-scenario", "A scenario to confirm"),
          ("date-overlay", "check-date", "A date to check"),
          ("date", "confirm-date", "A date to confirm"), ("equity", "pick-cells", "Cells to pick"),
          ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),
