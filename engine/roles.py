@@ -36,8 +36,10 @@ VALUATION_KEYS = re.compile(r"discount|wacc|terminal|exit_multiple|rab|valuation
                             r"sensitivity|cost_of_equity", re.I)
 NAME_HINT = re.compile(r"val|dcf|wacc|overlay|sensitiv", re.I)
 DIVIDER = re.compile(r"^\s*<.*|.*>\s*$")  # a tab that only heads the sheets after it: "Adviser>>", "Client>", "<< Inputs"
-ADVISER_TAB = re.compile(r"^(?:adviser|advisor|overlay|valuation|val|dcf)\b", re.I)
-ADVISER_NAME = re.compile(r"^(?:adviser|advisor|overlay)\b", re.I)  # a client's model can have a "Valuation>" section too
+# the adviser's own names come from VALUATION_DESK_OVERLAY_MARKERS in .env, so the code names no firm
+_ADVISER = "|".join(re.escape(m) for m in ["adviser", "advisor", "overlay", *likeness.markers()])
+ADVISER_TAB = re.compile(rf"^(?:{_ADVISER}|valuation|val|dcf)\b", re.I)
+ADVISER_NAME = re.compile(rf"^(?:{_ADVISER})\b", re.I)  # a client's model can have a "Valuation>" section too
 COPY_SHARE = 0.8  # of the sheets outside the adviser's tabs in last year's client model: the workbook is a copy of it
 
 

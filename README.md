@@ -54,7 +54,8 @@ takes it from there:
    opinion. It confirms the roles only when the evidence supports it (an overlay inside the client model must leave
    the client's sheets as the client's). An overlay set without its sheets, in a copy of the client model with the
    adviser's tabs behind a divider ("Adviser>>" up to "Client>>"), has those tabs as its own and the rest as its copy of
-   the client model, where most of the rest are last year's client model's sheets.
+   the client model, where most of the rest are last year's client model's sheets. The adviser's own names for its
+   divider tabs go in `VALUATION_DESK_OVERLAY_MARKERS` in `.env` (comma separated); the code names no firm.
 5. **Rebuilds last year in Python.** The overlay's formulas are compiled to a module and checked cell by cell against
    Excel. The report's equity value is found in it and tied; the Python rebuild feeds it again from last year's client
    model. The inputs the report also states are sourced, not inferred (`sourced.py`): each is the cell the model's
