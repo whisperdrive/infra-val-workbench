@@ -153,6 +153,27 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
 FOUND_MIN = 0.9  # a figure not under a discounting: this share of its client reads found in this year's model
 
 
+def _moves(sess, summary: dict, keys: list[tuple], base: dict, row: tuple, cols: set) -> bool:
+    """Whether a client row's figures move these cells on this year's feed (at last year's rate): its cells as read,
+    each nudged (a tenth more, plus one), and the cells worked out again. A row the discountings' formulas reach but
+    only a check or a label reads doesn't, and isn't one to wait for. The session is left on the workbook feed."""
+    if not cols:
+        return True
+    nudge = lambda v: v * 1.1 + 1 if isinstance(v, (int, float)) and not isinstance(v, bool) else 1.0
+    defaults, _, months = ov._feed(summary, "current", None, None, rates=False)
+    try:
+        sess.configure("current", defaults, months or 0)
+        # nudged where the feed hands the row's values over: read in the workbook or through a link alike
+        f0, e0 = sess.B.feed, sess.B.ext
+        hit = lambda s, r, c: (s, r) == tuple(row) and c in cols
+        sess.B.feed = lambda s, r, c: nudge(f0(s, r, c)) if hit(s, r, c) else f0(s, r, c)
+        sess.B.ext = lambda i, s, r, c: nudge(e0(i, s, r, c)) if hit(s, r, c) else e0(i, s, r, c)
+        got = dict(zip(keys, sess.values(keys)))
+    finally:
+        sess.configure("workbook")
+    return any(not ov.same(got[k], base.get(k)) for k in keys)
+
+
 def _gaps(sess, summary: dict, cells: list[str]) -> dict:
     """Whether this year's value can be trusted, for each cell: this year's client model is read at all (an overlay
     that reads nothing of it would give last year's figures, rolled by date alone), the rows its discountings' cash
@@ -165,11 +186,27 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
     timing = sorted({k for x in by_fig.values() for k in x["timing"]} - {(s_, r_, "") for s_, r_ in origins})
     sess.derived = {}
     src = sess.prior or sess.ov
+    # not found surely, or kept at last year's by the agents (a stand-in reads last year's at the rolled period, which
+    # for a row of periods of its own is another period's): worked out where a rule fits
+    open_ = lambda k: not sess.rowmap.confident(*k) or (sess.rowmap.explain(*k).get("stand_in")
+                                                        and sess.rowmap.explain(*k).get("by") == "agent")
     for s_, r_, _w in timing:
-        if not sess.rowmap.confident(s_, r_):
+        if open_((s_, r_)):
             rule = ov.timing_rule(src, s_, r_, sess.base_vd)
             if rule:
                 sess.derived[(s_, r_)] = rule
+    # a row the discounted amounts read that carries periods of its own (year numbers, dates: an annual block under a
+    # quarterly header) is timing too: worked out, not hunted for in this year's model
+    for s_, r_ in origins:
+        if (s_, r_) not in sess.derived and open_((s_, r_)):
+            tl = src.timeline(s_)
+            vals = [v for v in (src.value(s_, r_, c) for c in sorted(tl)) if isinstance(v, float)]
+            rule = ov.own_rule(vals)
+            if rule:
+                sess.derived[(s_, r_)] = rule
+    for (s_, r_), rule in sess.derived.items():  # year numbers move with a row of dates on the same sheet
+        if rule["kind"] == "own_year" and not rule.get("ends"):
+            rule["ends"] = next((x["ends"] for (s2, _r), x in sess.derived.items() if s2 == s_ and x.get("ends")), [])
     keys = [ov.parse_a1(c) for c in cells]
     # at last year's discount rate, wherever a person set this year's: a new rate isn't a row matched wrongly
     this, info, _, _ = _read(sess, summary, "current", keys, rates=False)
@@ -189,7 +226,7 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
     labels = src.labels()
     ex = sess.rowmap.explain
     kept = lambda k: ex(*k).get("stand_in") and ex(*k).get("by", "you") in ("you", "code")
-    missing = [k for k in origins if not kept(k) and (sess.rowmap.locate(*k) is None
+    missing = [k for k in origins if not kept(k) and k not in sess.derived and (sess.rowmap.locate(*k) is None
                or by_row.get(k, 0) > 0.5 * max(1, read_by_row.get(k, 0)))]
     blank_by_row, blank_at = Counter(), {}
     for (s_, r_, _c), at in sess.blank.items():
@@ -198,12 +235,17 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
     blank_rows = [k for k, n in blank_by_row.most_common() if n > 0.2 * max(1, read_by_row.get(k, 0)) and k not in missing]
     timing_rows = {(s_, r_) for s_, r_, _w in timing}
     weak_rows = [k for k in sorted(read_by_row) if k not in missing and k not in blank_rows
-                 and k not in timing_rows and not sess.rowmap.confident(*k)]
+                 and k not in timing_rows and k not in sess.derived and not sess.rowmap.confident(*k)]
     agents_kept = lambda k: ex(*k).get("stand_in") and ex(*k).get("by") == "agent"
     timing_open = [k for k in sorted(timing_rows) if k in read_by_row and k not in sess.derived
                    and (not sess.rowmap.confident(*k) or agents_kept(k))]
     reads = len(sess.client_reads)
     share = 1 - len(sess.unmatched) / reads if reads else 0.0  # nothing read of this year's model: nothing found
+    read_cols = {}
+    for s_, r_, c_ in sess.client_reads:
+        read_cols.setdefault((s_, r_), set()).add(c_)
+    idle = [k for k in missing if not _moves(sess, summary, keys, this, k, read_cols.get(k) or set())]
+    missing = [k for k in missing if k not in idle]
     pvd = roll.get("prior_valuation_date")
     zero = this if date_hold else (_read(sess, summary, "current", keys, pvd, 0, rates=False)[0] if pvd else None)
     last, _, _, _ = _read(sess, summary, "prior" if summary["wiring"].get("prior") else "workbook", keys)
@@ -252,6 +294,9 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
             "dcf_rows": len(origins), "dcf_origins": [f"{s_}!r{r_}" for s_, r_ in origins],
             "dcf_missing": [{"row": f"{s_}!r{r_}", "label": labels.get((s_, r_), ""), "why": why_missing((s_, r_))}
                             for s_, r_ in missing],
+            "idle_rows": [{"row": f"{s_}!r{r_}", "label": labels.get((s_, r_), ""),
+                           "why": "not found this year, but its figures don't move the value (tried): last year's stand in"}
+                          for s_, r_ in idle],
             "blank_rows": [{"row": f"{s_}!r{r_}", "label": labels.get((s_, r_), ""),
                             "found": f"{blank_at[(s_, r_)][0]}!r{blank_at[(s_, r_)][1]}",
                             "blank": blank_by_row[(s_, r_)], "of": read_by_row.get((s_, r_), 0)} for s_, r_ in blank_rows],
@@ -259,6 +304,129 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
                            "confidence": ex(s_, r_)["confidence"], "how": ex(s_, r_)["how"]} for s_, r_ in weak_rows],
             "timing_open": [{"row": f"{s_}!r{r_}", "label": labels.get((s_, r_), ""), "found": found((s_, r_))}
                             for s_, r_ in timing_open]}
+
+
+# ---- this year's horizon -----------------------------------------------------------------------------------------
+
+END_WORDS = re.compile(r"\bend\b|terminal|horizon|expir|concession|final|last|maturity", re.I)
+
+
+def _last_flow(db, cores: list[dict]) -> date | None:
+    """The end of the last period any of these discountings has a cash flow in (flags in), on db."""
+    last = None
+    for c in cores:
+        try:
+            flows, ends = ov._flows(db, c["inputs"])
+        except (ValueError, KeyError):
+            continue
+        for col, v in flows.items():
+            if v and isinstance(ends.get(col), date) and (last is None or ends[col] > last):
+                last = ends[col]
+    return last
+
+
+def _label_left(db, s: str, r: int, c: int) -> str:
+    """A cell's row label; where the layout kept none (an inputs sheet's one-date row read as a heading), the text
+    typed to its left on the row."""
+    lab = dcf._row_label(db, s, r)
+    if lab:
+        return lab
+    return " ".join(v for (v,) in db.execute("SELECT value FROM cells WHERE sheet=? AND row=? AND col<? AND formula IS NULL "
+                                              "ORDER BY col", (s, r, c)) if isinstance(v, str) and not dcf._as_date(v))
+
+
+_WINDOW = re.compile(r"""^"(<=?)"\s*&\s*((?:(?:'[^']+'|[A-Za-z_][\w.]*)!)?\$?[A-Z]{1,3}\$?\d+)\s*(\+\s*1)?$""")
+
+
+def _windows(db, trees: list[dict]) -> list[dict]:
+    """The sums in these trees of a row up to a date typed in a cell (SUMIF(dates, "<"&end+1, present values), or
+    SUMIFS with that criterion): an overlay's own horizon, the periods after it left to its terminal value.
+    -> [{"sum": (sheet, row, c1, c2), "dates": (sheet, row, c1, c2), "end": (sheet, row, col)}]."""
+    out, names = [], dcftrace._names(db)
+
+    def walk(n):
+        f = n.get("formula") or ""
+        if "SUMIF" in f.upper() and n.get("cell"):
+            here = dcf._ref(n["cell"], "")[0]
+            for fn, args, _ in dcftrace._calls(dcftrace._expand(db, f, names)):
+                pairs = ([(args[0], args[1], args[2] if len(args) > 2 else args[0])] if fn == "SUMIF" and len(args) in (2, 3)
+                         else [(args[i], args[i + 1], args[0]) for i in range(1, len(args) - 1, 2)] if fn == "SUMIFS" else [])
+                for rng, crit, total in pairs:
+                    m = _WINDOW.match(crit.strip())
+                    # up to and including the end's own period: "<"&end+1 or "<="&end
+                    if not m or (m[1] == "<=") != (not m[3]):
+                        continue
+                    d, sm, e = dcftrace._row(db, rng, here), dcftrace._row(db, total, here), dcf._ref(m[2], here)
+                    if d and sm and e and d[3] - d[2] == sm[3] - sm[2]:
+                        out.append({"sum": sm, "dates": d, "end": e[:3]})
+        for ch in n.get("children") or []:
+            walk(ch)
+    for t in trees:
+        walk(t)
+    return out
+
+
+def _window_last(db, w: dict) -> date | None:
+    """The date of the last period a window's row has a value in, on db (inside the window or after it)."""
+    s, r, c1, c2 = w["sum"]
+    ds, dr, d1, d2 = w["dates"]
+    vals = dcftrace._values(db, s, r, c1, c2)
+    when = {c - d1 + c1: v for c, v in db.execute("SELECT col, value FROM cells WHERE sheet=? AND row=? AND col BETWEEN ? AND ?",
+                                                    (ds, dr, d1, d2))}
+    last = None
+    for c, v in vals.items():
+        x = when.get(c)
+        d = ov.to_date(x) if isinstance(x, (int, float)) and 3000 < x < 120000 else dcf._as_date(x) if isinstance(x, str) else None
+        if v and isinstance(d, date) and (last is None or d > last):
+            last = d
+    return last
+
+
+def this_year_horizon(sess, summary: dict, where: dict) -> dict | None:
+    """Where this year's model forecasts to another date than last year's (a rolling horizon that moved by other than
+    the roll): the overlay's own copy of the forecast's end date goes to the end of the last period this year's cash
+    flows reach, on this year's feed (summary["horizon_values"], read by overlay._feed). Its copy is a date typed on
+    its sheets holding the end of the last period last year's cash flows reach: labelled as an end, a terminal or a
+    horizon date; or the end a sum up to a date reads (SUMIF(dates, "<"&end+1, present values), the periods after it
+    left to a terminal value), where last year's present values stopped on it. Without it, a terminal value placed by
+    the overlay at its model's end stays where last year's model ended, and this year's last periods drop out.
+    -> {"was", "now", "cells"} or None where nothing moves."""
+    summary["horizon_values"] = {}
+    path = summary["wiring"]["overlay"]["db_path"]
+    db = rodb.connect(path)
+    traced = [x for x in (_traced(db, where[e]) for e in ("low", "high")) if x]
+    cores = [c for _, cs in traced for c in cs]
+    wins = _windows(db, [t for t, _ in traced])
+    if not cores and not wins:
+        return None
+    need = set().union(set(), *(ov._dcf_cells(db, c["inputs"]) for c in cores))
+    for w in wins:
+        for s, r, c1, c2 in (w["sum"], w["dates"]):
+            need |= {(s, r, c) for c in range(c1, c2 + 1)}
+    now_db = _patched(sess, summary, db, "current", need)
+    sheets = set(summary["sheets"])
+    moved = set(summary.get("roll", {}).get("valuation_date_cells") or [])
+    out, was_now = {}, None
+    was, now = (_last_flow(db, cores), _last_flow(now_db, cores)) if cores else (None, None)
+    if was and now and was != now:
+        iso = was.isoformat()
+        for s, r, c, v in db.execute("SELECT sheet, row, col, value FROM cells WHERE formula IS NULL AND value=?", (iso,)):
+            if s in sheets and END_WORDS.search(_label_left(db, s, r, c)) and ov._a1(s, r, c) not in moved:
+                out[ov._a1(s, r, c)] = ov.serial(now)
+                was_now = was_now or (was, now)
+    for w in wins:
+        root = ov._typed_in(db, *w["end"], sheets)
+        s, r, c = ov.parse_a1(root)
+        f, v = dcftrace._cell(db, s, r, c)
+        end = dcf._as_date(v) if isinstance(v, str) and not f else None
+        a, b = _window_last(db, w), _window_last(now_db, w)
+        if end and a == end and b and b != a and s in sheets and root not in moved and root not in out:
+            out[root] = ov.serial(b)
+            was_now = was_now or (a, b)
+    if not out:
+        return None
+    summary["horizon_values"] = out
+    return {"was": was_now[0].isoformat(), "now": was_now[1].isoformat(), "cells": list(out)}
 
 
 # ---- this year's discount rate -----------------------------------------------------------------------------------
@@ -570,6 +738,13 @@ def _end_split(db, cs: list[dict]) -> dict:
         return {}
     pv = lambda c: dcf.compute(db, **{**c["inputs"], "compare_to": None}, fix=False)["pv"]
     out = _split(db, main)
+    # a terminal value discounted on its own (its one period, at the forecast's end), its franking credits too: the
+    # terminal value is theirs, undiscounted and discounted, and the franking credits the forecast's
+    tvs = [c for c in fr + other if c.get("periods") == 1 and TV_WORDS.search(c.get("cashflow_label") or "")]
+    if tvs and "pv_tv" not in out:
+        flows = lambda c: ov._flows(db, {"cashflow": c["inputs"]["cashflow"], "dates": c["inputs"].get("dates")})[0]
+        out.update(pv_tv=sum(pv(c) for c in tvs), tv=sum(sum(flows(c).values()) for c in tvs), pv_forecast=out["pv"])
+        fr, other = [c for c in fr if c not in tvs], [c for c in other if c not in tvs]
     out["franking"] = sum(pv(c) for c in fr) if fr else None
     out["other"] = [{"cell": c["cell"], "label": c.get("cashflow_label"), "pv": pv(c)} for c in other]
     out["main_label"] = main.get("cashflow_label")
@@ -585,6 +760,7 @@ def _ties(python: float | None, text: str | None) -> bool | None:
     return abs(python - x) <= 0.5 * 10 ** -d + 1e-9
 
 
+SPLIT_UNITS = (1.0, 1e-3, 1e-6, 1e3)  # the discountings' units against the figure's, the figure's first
 REPORTED = (("terminal_value", "Terminal value", "tv"), ("pv_forecast", "PV of the discrete forecast", "pv_forecast"),
             ("pv_terminal_value", "PV of the terminal value", "pv_tv"),
             ("franking_credits_value", "Value of franking credits", "franking"),
@@ -622,44 +798,57 @@ def reconcile(sess, summary: dict, where: dict, facts: list[dict], figs: dict) -
     saved = {e: figs["saved"].get(where[e]) for e in ("low", "high")}
     thisv = {e: (figs.get("this_year") or {}).get(where[e]) for e in ("low", "high")}
 
-    def view(split: dict, equity: dict) -> dict:
+    def view(split: dict, equity: dict, k: float = 1.0) -> dict:
         out = {}
         for e in ("low", "high"):
             x = split.get(e) or {}
-            out[e] = {k: unit(x.get(k)) for k in ("pv", "pv_forecast", "pv_tv", "tv", "franking")}
-            eq = equity.get(e)
+            out[e] = {f: unit(x[f] * k) if isinstance(x.get(f), float) else None
+                      for f in ("pv", "pv_forecast", "pv_tv", "tv", "franking")}
+            eq = equity.get(e) if k == 1.0 else None  # in other units than the figure (a share of it, say): no share of it
             out[e]["franking_share"] = 100 * x["franking"] / eq if x.get("franking") is not None and isinstance(eq, float) \
                 and eq else None
             out[e]["tv_share"] = 100 * x["pv_tv"] / x["pv"] if x.get("pv_tv") is not None and x.get("pv") else None
         out["mid"] = {k: (out["low"][k] + out["high"][k]) / 2 if out["low"][k] is not None and out["high"][k] is not None
                       else None for k in out["low"]}
         # a share at the mid is the mid's figure over the mid's total (as the report works it), not the average share
-        m, eq = out["mid"], [unit(equity.get(e)) for e in ("low", "high")]
+        m, eq = out["mid"], [unit(equity.get(e)) if k == 1.0 else None for e in ("low", "high")]
         eq_mid = (eq[0] + eq[1]) / 2 if None not in eq else None
         m["franking_share"] = 100 * m["franking"] / eq_mid if m["franking"] is not None and eq_mid else None
         m["tv_share"] = 100 * m["pv_tv"] / m["pv"] if m["pv_tv"] is not None and m["pv"] else None
         return out
 
-    L = view(last, saved)
-    T = view(this, thisv) if this else None
     by_key = {}
     for f in facts:
         if f.get("status") != "rejected" and f.get("key") not in by_key:
             by_key[f["key"]] = f
-    rows = []
-    for key, label, field in REPORTED:
-        f = by_key.get(key)
-        row = {"key": key, "label": label, "python": {e: L[e][field] for e in ("low", "mid", "high")},
-               "this_year": {e: T[e][field] for e in ("low", "mid", "high")} if T else None,
-               "unit": "%" if field.endswith("share") else None}
-        if f:
-            v = f.get("final") or f
-            texts = {"low": v.get("low_text"), "high": v.get("high_text"), "mid": v.get("value_text")}
-            checks = {e: _ties(row["python"][e], t) for e, t in texts.items() if t and keyfacts.numbers(t)}
-            row.update(report={e: t for e, t in texts.items() if t}, page=v.get("page"), ties=checks,
-                       ok=all(checks.values()) if checks else None, basis=v.get("basis"))
-        rows.append(row)
-    return {"rows": rows, "last_year": L, "this_year": T,
+
+    def rows_at(L: dict, T: dict | None) -> list[dict]:
+        rows = []
+        for key, label, field in REPORTED:
+            f = by_key.get(key)
+            row = {"key": key, "label": label, "python": {e: L[e][field] for e in ("low", "mid", "high")},
+                   "this_year": {e: T[e][field] for e in ("low", "mid", "high")} if T else None,
+                   "unit": "%" if field.endswith("share") else None}
+            if f:
+                v = f.get("final") or f
+                texts = {"low": v.get("low_text"), "high": v.get("high_text"), "mid": v.get("value_text")}
+                checks = {e: _ties(row["python"][e], t) for e, t in texts.items() if t and keyfacts.numbers(t)}
+                row.update(report={e: t for e, t in texts.items() if t}, page=v.get("page"), ties=checks,
+                           ok=all(checks.values()) if checks else None, basis=v.get("basis"))
+            rows.append(row)
+        return rows
+
+    # the discountings can count in other units than the figure (thousands, under an equity value in millions, a
+    # share of it): the report's split in the units most of its figures tie in, the figure's where none tie better
+    best = None
+    for k in SPLIT_UNITS:
+        L, T = view(last, saved, k), view(this, thisv, k) if this else None
+        rows = rows_at(L, T)
+        n = sum(1 for r in rows if r["unit"] is None for t in (r.get("ties") or {}).values() if t)
+        if best is None or n > best[0]:
+            best = (n, k, L, T, rows)
+    _, k, L, T, rows = best
+    return {"rows": rows, "last_year": L, "this_year": T, "units": k,
             "streams": {e: {"main": last.get(e, {}).get("main_label"), "other": last.get(e, {}).get("other")}
                         for e in ("low", "high")}}
 
@@ -688,10 +877,27 @@ def assumptions(summary: dict, where: dict) -> dict:
                          "rate_source": c["inputs"].get("rate") if isinstance(c["inputs"].get("rate"), str) else
                          m.get("rate_note") or "a constant",
                          "rate_sighted": m.get("rate_source"), "rate_note": m.get("rate_note"),
+                         "rate_cells": m.get("rate_cells") or [],
                          "valuation_date_source": c["inputs"].get("valuation_date"),
                          "valuation_date_sourced": m.get("valuation_date_sourced"),
                          "cashflow": c["inputs"]["cashflow"], "parts": [p.get("label") for p in c.get("parts") or []],
                          "terminal_value": tv[0]["total"] if tv else None, "terminal_value_row": tv[0]["row"] if tv else None})
+        for c in (dcftrace.cores(traced[0]) if traced else []):
+            L = c.get("loose")
+            if c.get("inputs") or not L:
+                continue
+            # a convention the app doesn't recompute: its rate and date as its formulas read them, nothing recomputed
+            rate = dcf._num(dcf._cell(db, *dcf._ref(L["rate"], "")[:3])) if L.get("rate") else L.get("rate_value")
+            rows.append({"cell": c["cell"], "kind": c.get("kind"), "label": c.get("cashflow_label"), "rate": rate,
+                         "pv": c.get("pv"), "total": c.get("pv"), "anchor": None, "valuation_date": L.get("valuation_date_value"),
+                         "timing": None, "day_count": None, "terminal_date": None, "bridge": [], "periods": c.get("periods"),
+                         "first_period": c.get("first_period"), "last_period": c.get("last_period"),
+                         "undiscounted": c.get("undiscounted"), "rate_source": L.get("rate"), "rate_sighted": L.get("rate_source"),
+                         "rate_cells": L.get("rate_cells") or [],
+                         "rate_note": None if L.get("rate") else "not sourced: no cell every period's factors read holds it",
+                         "valuation_date_source": L.get("valuation_date"), "valuation_date_sourced": bool(L.get("valuation_date")),
+                         "cashflow": [c["cashflow"]], "parts": [p.get("label") for p in c.get("parts") or []],
+                         "terminal_value": None, "terminal_value_row": None, "loose": L["note"]})
         out[end] = rows
     return out
 
@@ -731,8 +937,10 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
     cells = list(dict.fromkeys(x for x in (where["low"], where["high"], where.get("mid")) if x))
     asm = assumptions(summary, where)
     rate_now = this_year_rate(summary, asm, facts)  # on this year's feed from here on, where it's applied
+    horizon = ov.deep(this_year_horizon, sess, summary, where)  # and the overlay's own forecast end, where it moved
     figs = ov.deep(figures, sess, summary, cells)
     figs["rate"] = rate_now
+    figs["horizon"] = horizon
     if where.get("basis") == "cum" and head["basis"] != "cum" and head.get("other"):
         head = {**head, **{k: head["other"][k] for k in ("low", "high")}, "basis": "cum",
                 "texts": head["other"]["texts"], "why": head["why"] + ["the overlay gives the cum-distribution value"]}

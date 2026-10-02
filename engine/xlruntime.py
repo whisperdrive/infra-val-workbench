@@ -682,9 +682,16 @@ class _XL:
         if isinstance(h, XLError) or isinstance(w, XLError):
             return VALUE
         r1, c1 = ref.r1 + int(vals[0]), ref.c1 + int(vals[1])
-        if r1 < 1 or c1 < 1 or int(h) < 1 or int(w) < 1:
+        h, w = int(h), int(w)
+        if not h or not w:
             return REF
-        return Rng(ref.book, ref.src, ref.sheet, r1, c1, r1 + int(h) - 1, c1 + int(w) - 1)
+        # a negative height or width runs up or to the left from the cell offset to, as Excel takes it (the last
+        # 4 x N quarters: OFFSET(X9,,,,-4*N))
+        ra, rb = (r1, r1 + h - 1) if h > 0 else (r1 + h + 1, r1)
+        ca, cb = (c1, c1 + w - 1) if w > 0 else (c1 + w + 1, c1)
+        if ra < 1 or ca < 1:
+            return REF
+        return Rng(ref.book, ref.src, ref.sheet, ra, ca, rb, cb)
 
     @staticmethod
     def RANGE(a, b):

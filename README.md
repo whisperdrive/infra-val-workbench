@@ -27,7 +27,9 @@ takes it from there:
    - how the terminal value is worked out, in the report's words, and any exit multiple. The report is searched for
      everything it says about its terminal value, and that goes to the models with the document; code then classes the
      method (none; an EV/EBITDA, EV/RAB or other exit multiple; growth on an average of the cash flows, on an adjusted
-     or normalised cash flow, or on the final year's). Where there's no terminal value or it's an exit multiple, there's
+     or normalised cash flow, or on the final year's). The report's terminal value method fact decides first; its
+     other sentences count only where they're about the terminal value, and a multiple the valuation implies (its
+     EV/EBITDA cross-check) is never the method. Where there's no terminal value or it's an exit multiple, there's
      no growth rate to source, and the inputs card says so rather than "not found".
 
    One model extracts, code checks each fact against its page, a second model reviews, and they loop on what's open.
@@ -50,14 +52,24 @@ takes it from there:
    what a figure means, not a source of figures.
 4. **Works out which file is which.** It uses likeness, dates, links and where the report's figures sit, with a second
    opinion. It confirms the roles only when the evidence supports it (an overlay inside the client model must leave
-   the client's sheets as the client's).
+   the client's sheets as the client's). An overlay set without its sheets, in a copy of the client model with the
+   adviser's tabs behind a divider ("Adviser>>" up to "Client>>"), has those tabs as its own and the rest as its copy of
+   the client model, where most of the rest are last year's client model's sheets.
 5. **Rebuilds last year in Python.** The overlay's formulas are compiled to a module and checked cell by cell against
    Excel. The report's equity value is found in it and tied; the Python rebuild feeds it again from last year's client
    model. The inputs the report also states are sourced, not inferred (`sourced.py`): each is the cell the model's
    formulas read, found by following them, not by looking for the number, then recomputed from it and checked
    against the report. For each end:
    - the discount rate: the cell the discount factors read (the first and the last period's), the factors
-     recomputed at it, the report's rate for that end (the low value at the higher rate);
+     recomputed at it, the report's rate for that end (the low value at the higher rate). Where the factors blend
+     two cells holding the rate (one for some revenue, one for the rest), both are sourced, and this year's rate goes
+     on both. A discounting is a SUMPRODUCT of cash flows and factors (with 0 / 1 flag rows, a window of years, where
+     it has them), an XNPV or NPV, or the SUM of a present-value row (or of present-value rows added up column by
+     column, blocks of cash flows at one factor row: one discounting of them together, sourced from the parts'
+     factors). A terminal value discounted on its own has one factor, which fits any date: its rate must be one a cell
+     its factors read holds; where its factors follow a convention the app
+     doesn't recompute (mid-year with a part-year stub at its midpoint, then whole-year steps, say), its rate and its
+     valuation date are still the cells their formulas read, and the card says the factors aren't recomputed;
    - the terminal growth rate: the cell the terminal value's formula reads as g, the terminal value recomputed as
      X × (1 + g) / (r − g) at that end's own discount rate;
    - franking credit utilisation: the fraction every period's franking credits read; rerun at nil in Python, the
@@ -69,18 +81,36 @@ takes it from there:
 
    One that isn't sourced to a cell (typed into a formula, say), or doesn't check out, comes to you. What the
    report discloses of the value (the terminal value, the PV of the forecast and of the terminal value,
-   the value of franking credits and its share) is reconciled to the same split of the overlay's discountings.
+   the value of franking credits and its share) is reconciled to the same split of the overlay's discountings: a
+   terminal value discounted on its own (one period, labelled so) is the terminal value, and the split is in the
+   units most of the report's figures tie in (discountings in thousands under an equity value in millions, at 100%
+   under a share of it).
 6. **Rolls forward onto this year's client model.** Rows are found by label, history and numbers, with row agents for
    the ones in doubt. A row still in doubt comes to you with what it is: the heading it sits under and its neighbours,
    what its formula adds up or works out from, last year's figures, which overlay row reads it and whether that's a
    cash flow the value discounts; and the rows of this year's model that might be it, each with its figures for the
-   same periods and a button to use it. The valuation date moves wherever the discountings read it: each discounting's date is
-   followed back to the cell it's typed in, and every one of those moves (a copy on a DCF sheet moves with its input;
-   a DCF sheet with a date of its own has it moved too). And each discounting's periods that end before the new date
+   same periods and a button to use it. Candidates that are the same series from last year's valuation date on are
+   one answer, whichever is meant. A row that carries periods of its own, whatever its sheet's header says (an annual
+   block under a quarterly header: period ends with a stub at either end, period starts, year numbers), is worked
+   out, not hunted for: it moves by its own periods that ended between the two valuation dates. The valuation date
+   moves wherever the discountings read it: each discounting's date is
+   followed back to the cell it's typed in, through plain references and names (=Val_Date), and every one of those
+   moves (a copy on a DCF sheet moves with its input, so cash flow dates counted from the input and discount periods
+   counted from the copy stay in one column;
+   a DCF sheet with a date of its own has it moved too), and so does the cell labelled as the valuation date (an overlay
+   can keep one date for its discountings and another for the rest). Where this year's model forecasts to another date
+   than last year's moved by the roll (a horizon half a year further on, rolled a year), the overlay's periods past its
+   forecast are nil (not last year's figures standing in, nor this year's last period read again from a column past
+   last year's timeline), and the overlay's own copy of the forecast's end follows this year's: a typed date labelled
+   as an end that a terminal value is placed at, or the end a sum up to a date reads (SUMIF(dates, "<"&end+1, present
+   values), the periods after it left to the terminal value), where last year's cash flows stopped on it. A row the discountings reach that isn't found this year, and whose figures don't move the
+   value when nudged (a check, a label), doesn't hold the value back; the gate lists it. And each discounting's periods that end before the new date
    are cut off (its present-value row, else its factor row, else its cash flows, at nil): last year's overlay needed no
    cut-off of its own where last year's model had nothing before last year's date, but this year's model can have the
    year between the two dates filled in (a fixed horizon, a model dated before its valuation date), and a factor worked
-   out from the date would compound those quarters into the value. The period ending on the new date is cut off too,
+   out from the date would compound those quarters into the value. A period's end is the one this year's feed works
+   out for it where the overlay counts its periods from the valuation date (its columns are then this year's periods,
+   with nothing to cut), else last year's moved by the sheet's periods. The period ending on the new date is cut off too,
    as a valuer zeroing the overlay's own period flags by hand does (keeping it is one of the methods below). This
    year's value is shown only where it can be trusted, and
    is held back otherwise, with a need that says why:
@@ -100,7 +130,7 @@ takes it from there:
    (`overlay.REBUILT`), the rows found other than by their labels are listed to check, though the value stands where
    its checks pass.
    Inputs typed into the overlay outside its discountings (a net debt, a cash balance, a declared distribution, an
-   adjustment) aren't fed by this year's model, so they stay at last year's figures: **held**, and shown so, highlighted
+   adjustment; not a units constant a name like "thousand" stands for) aren't fed by this year's model, so they stay at last year's figures: **held**, and shown so, highlighted
    on the Result page and in the workpaper until you set this year's. Each comes with a suggestion from this year's
    client model, checked first against last year's: the row of last year's model that holds last year's figure at
    last year's valuation date (its label agreeing) is the row read in this year's model at this year's date. A
@@ -214,7 +244,7 @@ Your firm's logo goes in the git-ignored `brand/` folder, and the mascot shows w
 ```
 uv run python tests/make_pack.py        # a synthetic pack: fictional names and numbers, both overlay layouts
 uv run python tests/check_workbench.py  # the whole run on it, every model call stubbed; the orchestrator's rules
-uv run python tests/check_trace.py      # reading a DCF back from its factors; the roll's dates and cut-off
+uv run python tests/check_trace.py      # reading a DCF back from its factors (flags, loose conventions); the roll
 uv run python tests/check_xlruntime.py  # Excel functions in the Python runtime
 ```
 

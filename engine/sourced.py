@@ -126,15 +126,20 @@ def rate(asm: dict, facts: list[dict]) -> dict:
         top = next((r for r in rows if r.get("parts")), rows[0])
         s = top.get("rate_sighted")
         sourced = all(r.get("rate_sighted") for r in rows)
-        cells = sorted({r["rate_sighted"]["cell"] for r in rows if r.get("rate_sighted")})
+        # the cell the factors read it from, and every input holding it they read (a blend of two rates, alike)
+        cells = sorted({r["rate_sighted"]["cell"] for r in rows if r.get("rate_sighted")}
+                       | {c for r in rows if r.get("rate_sighted") for c in r.get("rate_cells") or []})
         note = None if sourced else next(r.get("rate_note") for r in rows if not r.get("rate_sighted"))
         more = f" ({len(rows)} discountings" + (f", reading {' and '.join(cells)}" if len(cells) > 1 else "") + ")" \
             if len(rows) > 1 else ""
         rep = want[end]
         ties = _tie(100 * top["rate"], rep) if rep else None
+        loose = any(r.get("loose") for r in rows)  # a convention the app doesn't recompute: the factors aren't
         ends[end] = _end(top["rate"], s, sourced, note, [
             (sourced, f"Sourced: the discount factors read this cell, the first and the last period's alike{more}"
              if sourced else f"Not sourced to a cell: {note}"),
+            (None, f"The factors step by {_pct(top['rate'])} a year, but their convention isn't one the app recomputes, so "
+                   "they aren't recomputed at it") if loose else
             (True, f"Every discount factor recomputed at {_pct(top['rate'])} matches the model's"),
             _vs_report(stated, rep, ties, "rate", "higher" if end == "low" else "lower")],
             rep[1] if rep else None, ties, cells=cells, discountings=len(rows))

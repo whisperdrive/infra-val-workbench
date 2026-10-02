@@ -1002,12 +1002,18 @@ def _wiring(eid: int) -> dict:
     """Which files and sheets the overlay module reads, from the confirmed (or suggested) roles."""
     ov, prior, cur = _role_wb(eid, "prior_overlay"), _role_wb(eid, "prior_model"), _role_wb(eid, "current_model")
     names = {w["id"]: w["sheet_names"] for w in workbooks(eid)}
-    sheets = [s for s in names[ov["id"]] if not ov["sheets"] or s in ov["sheets"]]
     same_file = bool(prior) and prior["id"] == ov["id"]
+    own, by = ov["sheets"], None
+    if not own and prior and not same_file:
+        # set without its sheets: a copy of the client model with the adviser's tabs behind a divider ("Adviser>>") has
+        # those as its own, not every sheet (which would leave nothing to feed from this year's model)
+        own = rolesmod.adviser_sheets(ov["db_path"], names[ov["id"]], names.get(prior["id"], []))
+        by = "divider" if own else None
+    sheets = [s for s in names[ov["id"]] if not own or s in own]
     # the overlay in a copy of the client model, the client's own file assigned as the prior model: the overlay
     # reads its copy's sheets, which are fed from that file
     copy = [s for s in names[ov["id"]] if s not in sheets and s in set(names.get(prior["id"], []))] \
-        if prior and not same_file and ov["sheets"] else []
+        if prior and not same_file and own else []
     client_link = None
     if prior and not same_file and not copy:
         extlinks.ensure(ov["source_path"], ov["db_path"])
@@ -1020,7 +1026,7 @@ def _wiring(eid: int) -> dict:
     elif library.get(ov["id"]) and library.get(ov["id"])["valuation_date"]:
         prior_vd = library.get(ov["id"])["valuation_date"]
     return {"overlay": {"db_path": ov["db_path"], "filename": ov["filename"], "sheets": sheets,
-                        "source_path": ov.get("source_path")},
+                        "source_path": ov.get("source_path"), "sheets_by": by},
             "prior": {"db_path": prior["db_path"], "filename": prior["filename"],
                       "sheets": sorted(prior["sheets"]) if prior["sheets"] else None,
                       "valuation_date": (library.get(prior["id"]) or {}).get("valuation_date")} if prior else None,
@@ -1040,6 +1046,8 @@ def _overlay(eid: int) -> None:
     _SESSIONS.pop(eid, None)
     summary, sess = ovmod.build(OUT / "overlays" / f"e{eid}", w["overlay"], w["prior"], w["current"], reference(eid),
                                 e["name"], w["client_link"], w["prior_valuation_date"], step, client_sheets=w["client_sheets"])
+    if summary.get("relinked"):  # the overlay's own copy, its link filled from last year's client model (overlay.relink)
+        w = {**w, "overlay": {**w["overlay"], "db_path": summary["relinked"]["db_path"]}}
     summary["wiring"] = w
     summary["reference_approved"] = all(f["approved"] for f in reference(eid)) and bool(reference(eid))
     ovmod.deep(_load_holds, eid, sess)
@@ -1229,12 +1237,14 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
     roll = summary.get("roll")
     if not roll or not summary["wiring"].get("current"):
         return
-    if "valuation_date_reads" not in roll or "cutoff" not in roll:
-        # built before every date the discountings read was moved, or before their periods were cut off: work them out
+    if roll.get("date_cells_plan") != ovmod.DATE_CELLS:
+        # traced by older rules (before every date the discountings read was moved, their periods cut off, a date their
+        # formulas read where their convention isn't one the app recomputes): traced again
         lever = next((l for l in summary.get("levers") or [] if l["key"] == "valuation_date"), None)
         roll.update(ovmod.deep(ovmod.date_cells, summary["wiring"]["overlay"]["db_path"], summary.get("outputs") or [],
                                summary.get("sheets"), lever))
-    sess.cutoffs = [(*ovmod.parse_a1(c), ovmod.serial(ovmod.date.fromisoformat(d))) for c, d in roll.get("cutoff") or []]
+    sess.cutoffs = [(*ovmod.parse_a1(c), ovmod.serial(ovmod.date.fromisoformat(d)), *[ovmod.parse_a1(x) for x in at])
+                    for c, d, *at in roll.get("cutoff") or []]
     now = _dates(eid)
     d = now["dates"]
     if d != roll.get("dates") or roll.get("plan") != ovmod.ROLL_PLAN or roll.get("horizon_set") != want:
@@ -1244,6 +1254,9 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
         roll.update(fresh)
     elif roll.get("prior_valuation_date"):
         sess.base_vd = ovmod.serial(ovmod.date.fromisoformat(roll["prior_valuation_date"][:10]))
+    if sess.rowmap and getattr(sess.rowmap, "since", None) != sess.base_vd:  # the finder compares rows from it on
+        sess.rowmap.since = sess.base_vd
+        sess.rowmap._cache.clear()
     roll["confirmed"] = now["confirmed"]
 
 

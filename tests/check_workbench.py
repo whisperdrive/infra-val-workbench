@@ -1105,6 +1105,12 @@ def facts_check() -> None:
     assert found == [{"page": 4, "text": "A terminal value is calculated using an exit multiple of 1.35x the RAB."}], found
     tv = K.terminal_method([], found)  # no fact for it: the report's own words decide
     assert tv["kind"] == "exit_rab" and tv["from"] == "the report's text" and tv["page"] == 4, tv
+    # the fact's words decide over the report's other sentences, and a multiple the valuation implies is a cross-check
+    implied = [{"page": 7, "text": "Implied EV/EBITDA multiple: the FY25 multiple of 19.5x to 22.2x implied by our valuation."}]
+    said = K.terminal_method([{"key": "terminal_value_method", "value_text": "Gordon growth on FY45 dividends",
+                               "quote": "Gordon growth on FY45 dividends", "page": 8}], implied)
+    assert said["kind"] == "growth_final_year" and said["from"] == "the fact", said
+    assert K.terminal_method([], implied)["kind"] == "unknown"
     assert "not applicable" in sourced.growth_applies(tv) and sourced.growth_applies({"kind": "growth_final_year"}) is None
     f = fact(key="terminal_value_method", label="Terminal value method", category="assumption", unit="text",
              value_text="the average of the FY41 to FY45 cash flows", quote="the average of the FY41 to FY45 cash flows")

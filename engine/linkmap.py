@@ -201,10 +201,19 @@ def overlay_to_client(overlay: dict, client: dict | None) -> dict:
             target = scored[0]["idx"]
             scored[0]["matched_by"] = "name" if scored[0].get("is_client") else "the values it last read"
             scored[0]["is_client"] = True
-        elif len(by_sheets) == 1:
-            target = by_sheets[0]["idx"]
-            by_sheets[0].update(is_client=True, matched_by="its sheet names (neither its name nor the values it last "
-                                                          "read match the file: probably another version)")
+        elif by_sheets:
+            # several links with the client model's sheets (versions of it: one for sensitivities, the original):
+            # the one the overlay reads, and reads most
+            with _ro(overlay["db_path"]) as o:
+                reads = dict(o.execute("SELECT idx, SUM(n_cells) FROM extrefs GROUP BY idx"))
+            ranked = sorted(by_sheets, key=lambda b: reads.get(b["idx"]) or 0, reverse=True)
+            one = len(ranked) == 1 or (reads.get(ranked[0]["idx"]) or 0) > (reads.get(ranked[1]["idx"]) or 0)
+            if one and (len(ranked) == 1 or reads.get(ranked[0]["idx"])):
+                target = ranked[0]["idx"]
+                ranked[0].update(is_client=True, matched_by=(
+                    "its sheet names (neither its name nor the values it last read match the file: probably another "
+                    "version)" + ("" if len(ranked) == 1 else f"; of the {len(ranked)} links with them, the one the "
+                                                               "overlay reads most")))
     c_labels = {}
     if client and target:
         with _ro(client["db_path"]) as c:

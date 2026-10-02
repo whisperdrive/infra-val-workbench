@@ -40,12 +40,26 @@ def _number(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+UNIT_NAME = re.compile(r"^(?:thousands?|millions?|billions?|units?|mn|bn)$", re.I)
+
+
+def _unit_cells(db) -> set[str]:
+    """The cells a name for a unit stands for (=Z270/thousand): a units constant, not a figure to roll."""
+    out = set()
+    for name, ref in db.execute("SELECT name, ref FROM names"):
+        r = dcf._ref((ref or "").lstrip("="), "") if UNIT_NAME.match(name or "") else None
+        if r and r[1:3] == r[3:5]:
+            out.add(ov._a1(r[0], r[1], r[2]))
+    return out
+
+
 def find(db, cells: list[str], sheets) -> list[dict]:
     """The typed inputs the equity value cells read outside their discountings, on the overlay's own sheets (a cell
     on a client sheet, or behind a link to another workbook, is fed from this year's model: not held). A discounting's
-    own inputs (its rate, dates, growth, franking utilisation) are the sourced inputs' business, not these.
+    own inputs (its rate, dates, growth, franking utilisation) are the sourced inputs' business, not these, and a
+    units constant (the cell a name like "thousand" stands for) isn't a figure.
     -> [{"cell", "label", "value", "lines": [{"cell", "label"}] (the lines of the equity value it feeds), "ends"}]."""
-    own, out = set(sheets or []), {}
+    own, out, units = set(sheets or []), {}, _unit_cells(db)
     for end, cell in cells:
         try:
             t = dcftrace.trace(db, cell)
@@ -73,7 +87,7 @@ def find(db, cells: list[str], sheets) -> list[dict]:
             typed = {leaf["cell"]: {"sheet": s, "row": r, "col": c, "formula": None, "value": got[1]}} \
                 if got and not got[0] else valuation.reads(db, cells=[(s, r, c)])
             for ref, x in typed.items():
-                if x["formula"] or not _number(x["value"]) or x["sheet"] not in own or ref in theirs or "[" in ref:
+                if x["formula"] or not _number(x["value"]) or x["sheet"] not in own or ref in theirs or "[" in ref                         or ref in units:
                     continue
                 item = out.setdefault(ref, {"cell": ref, "label": _label(db, x["sheet"], x["row"]) or ref,
                                             "value": float(x["value"]), "lines": [], "ends": []})

@@ -16,6 +16,7 @@ import math
 import os
 import re
 import sqlite3
+import statistics
 import threading
 from datetime import date
 from pathlib import Path
@@ -112,6 +113,32 @@ def _reaches(db, sheet: str, row: int, col: int, pv_key, seen=None, depth: int =
                    for rr in range(r[1], r[3] + 1) for cc in range(r[2], r[4] + 1)):
                 return True
     return False
+
+
+def _reach_keys(db, sheet: str, row: int, col: int, depth: int = 5) -> set:
+    """The SUMPRODUCTs (_sp_key) of every formula this cell's leads to through single cells and short ranges, its own
+    included, within depth levels (as _reaches follows them): one walk for every PV a candidate might lead to, where
+    _reaches walks again for each (a workbook with thousands of SUMPRODUCTs took hours)."""
+    keys, seen, frontier = set(), {(sheet, row, col)}, [(sheet, row, col)]
+    for level in range(depth + 1):
+        nxt = []
+        for s, r, c in frontier:
+            f = db.execute("SELECT formula FROM cells WHERE sheet=? AND row=? AND col=?", (s, r, c)).fetchone()
+            if not f or not f[0]:
+                continue
+            keys.update(k for m in dcf._SUMPRODUCT.finditer(f[0]) if (k := _sp_key(m, s)))
+            if level == depth:
+                continue
+            for m in dcf._FREF.finditer(re.sub(r'"[^"]*"', "", f[0])):
+                x = dcf._ref(m[0], s)
+                if x and (x[3] - x[1] + 1) * (x[4] - x[2] + 1) <= 12:
+                    for rr in range(x[1], x[3] + 1):
+                        for cc in range(x[2], x[4] + 1):
+                            if (x[0], rr, cc) not in seen:
+                                seen.add((x[0], rr, cc))
+                                nxt.append((x[0], rr, cc))
+        frontier = nxt
+    return keys
 
 
 def _sp_key(m, here):
@@ -270,8 +297,11 @@ def source_rate(db, walks: list[dict], rate: float) -> dict | None:
     nearest them. -> {"cell", "input", "formula", "label", "heading", "chain", "from"} or None where a walk reads no
     cell holding it."""
     picks = []
-    for w in walks:
-        hold = [(ref, n) for ref, n in w.items() if dcf._num(n["value"]) is not None and abs(dcf._num(n["value"]) - rate) < 1e-9]
+    holds = [{ref for ref, n in w.items() if dcf._num(n["value"]) is not None and abs(dcf._num(n["value"]) - rate) < 1e-9}
+             for w in walks]
+    common = set.intersection(*holds) if holds else set()  # a cell every walk reads: not each period's own copy of it
+    for w, hold in zip(walks, holds):
+        hold = [(ref, w[ref]) for ref in (common or hold)]
         if not hold:
             return None
         ref, n = min(hold, key=lambda x: (bool(x[1]["formula"]), x[1]["depth"]))
@@ -287,6 +317,86 @@ def source_rate(db, walks: list[dict], rate: float) -> dict | None:
     ref, n, chain = picks[0]
     return {"cell": ref, "input": not n["formula"], "formula": n["formula"], "label": dcf._row_label(db, n["sheet"], n["row"]),
             "heading": _heading(db, n["sheet"], n["row"], n["col"]), "chain": chain, "from": len(picks)}
+
+
+def rate_inputs(walks: list[dict], rate: float | None) -> list[str]:
+    """Every cell holding the factors' rate that every walk reads (the first and the last period's factors alike: not
+    a period's own copy of it): a model can blend two rates (one for some revenue, one for the rest; the same last
+    year), and this year's rate goes on each."""
+    if rate is None or not walks:
+        return []
+    hold = lambda w: {ref for ref, n in w.items() if dcf._num(n["value"]) is not None and abs(dcf._num(n["value"]) - rate) < 1e-9}
+    return sorted(set.intersection(*(hold(w) for w in walks)))
+
+
+_ONE_PLUS = re.compile(r"1\s*\+\s*((?:'[^']+'|[A-Za-z_][\w.]*)?!?\$?[A-Z]{1,3}\$?\d+)(?!\s*[*/^\d(])")
+
+
+def _one_plus(db, cells: list) -> float | None:
+    """The value of the cell each of these factor cells' formulas adds to 1, where they all add the same one (a rate:
+    1 / (1 + r) ^ t), else None."""
+    got = set()
+    for k in cells:
+        if not k:
+            return None
+        f = db.execute("SELECT formula FROM cells WHERE sheet=? AND row=? AND col=?", k).fetchone()
+        m = _ONE_PLUS.search(re.sub(r'"[^"]*"', "", (f or [""])[0] or ""))
+        ref = dcf._ref(m[1], k[0]) if m else None
+        v = dcf._num(dcf._cell(db, ref[0], ref[1], ref[2])) if ref else None
+        if v is None or not 0 < v < 0.5:
+            return None
+        got.add(round(v, 12))
+    return got.pop() if len(got) == 1 else None
+
+
+def loose_factors(db, cols: list[int], theirs: dict, sheet: str, dates: str | None = None,
+                  starts: dict | None = None) -> dict | None:
+    """Where no convention dcf recomputes reproduces the factors (read_factors): the rate and the valuation date their
+    formulas read, found by following them, not fitted. The rate: the step the factors take from one period to the
+    next most often (f / (1 + r): whole years), held in a cell every walk reads (source_rate); the valuation date: the
+    latest date the factors read before the first period they discount. -> {"rate" (cell), "rate_value",
+    "rate_source", "valuation_date" (cell), "valuation_date_value", "note"}, or None where neither is found."""
+    from collections import Counter
+    try:
+        ends, _ = dcf.period_ends(db, sheet, cols, dates)
+    except ValueError:
+        return None
+    live = [c for c in sorted(ends) if 0 < theirs.get(c, 0.0) < 1]
+    if len(live) < 4:
+        return None
+    # the rate: what the factors' formulas add to 1 (1 / (1 + r) ^ t), the first and the last period's alike; else
+    # the step the factors take from one period to the next most often (f / (1 + r): whole years)
+    rate = _one_plus(db, [((starts or {}).get("cells") or {}).get(c) for c in dict.fromkeys((live[0], live[-1]))])
+    if rate is None:
+        steps = Counter(round(theirs[a] / theirs[b] - 1, 9) for a, b in zip(live, live[1:]) if theirs[b])
+        rate, n = steps.most_common(1)[0]
+        rate = rate if n >= 3 and 0 < rate < 0.5 else None
+    if starts and starts.get("expr"):
+        walks = [reads(db, expr=starts["expr"], here=starts.get("here") or sheet)]
+    else:
+        cells = (starts or {}).get("cells") or {}
+        walks = [reads(db, cells=[cells[c]]) for c in dict.fromkeys((live[0], live[-1])) if c in cells]
+    if rate is None and walks:
+        # no whole-year step repeats (years counted by YEARFRAC, a leap day apart): the rate cell every walk reads
+        # whose value is the typical step's, within a quarter of a percent
+        guess = statistics.median(theirs[a] / theirs[b] - 1 for a, b in zip(live, live[1:]) if theirs[b])
+        common = set.intersection(*(set(w) for w in walks))
+        near = sorted((abs(v - guess), v) for ref in common if (v := dcf._num(walks[0][ref]["value"])) is not None
+                      and 0 < v < 0.5 and abs(v - guess) <= 0.0025)
+        rate = near[0][1] if near and (len(near) == 1 or near[1][0] > near[0][0] or near[1][1] == near[0][1]) else None
+    src = source_rate(db, walks, rate) if walks and rate is not None else None
+    first = ends[live[0]]
+    # a date every walk reads (a fixed cell, not one period's own start), before the first period they discount
+    every = set.intersection(*(set(w) for w in walks)) if walks else set()
+    dated = sorted((d, ref) for ref in every if (d := dcf._as_date(walks[0][ref]["value"])) and d < first)
+    if not src and not dated:
+        return None
+    return {"rate": src["cell"] if src else None, "rate_value": rate, "rate_source": src,
+            "rate_cells": rate_inputs(walks, rate) if src else [],
+            "valuation_date": dated[-1][1] if dated else None,
+            "valuation_date_value": dated[-1][0].isoformat() if dated else None,
+            "note": "the factors' convention isn't one the app recomputes: the rate and the valuation date are the cells "
+                    "their formulas read, not fitted"}
 
 
 def read_factors(db, df_ref, cols: list[int], theirs: dict | None = None, sheet: str | None = None,
@@ -333,9 +443,14 @@ def read_factors(db, df_ref, cols: list[int], theirs: dict | None = None, sheet:
                 ours = dcf.factors(ends, vd, rate, timing, dc, td)
                 if all(abs(ours[c] - theirs[c]) < 1e-9 for c in ends if c in theirs):
                     src = source_rate(db, walks, rate) if walks else None
+                    if len(live) < 2 and not src:
+                        # one factor fits any date with a rate solved to match it (a terminal value's one period):
+                        # only a rate a cell the factors read holds tells the date
+                        continue
                     hint = None if src else next((r["ref"] for r in dcf.candidate_cells(db, "rate", 40)
                                                   if abs(dcf._num(r["value"]) - rate) < 1e-9), None)
                     return {"rate": src["cell"] if src else round(rate, 12), "rate_source": src,
+                            "rate_cells": rate_inputs(walks, rate) if src else [],
                             "rate_note": None if src else "not sourced: " + (
                                 "no cell the factors read holds it" if walks else "the factors' formulas weren't found")
                             + (f" ({hint} holds the same number, but the factors don't read it)" if hint else ""),
@@ -416,8 +531,9 @@ def find(db) -> list[dict]:
         if (sheet, row, col) in seen:
             continue
         seen.add((sheet, row, col))
+        reach = _reach_keys(db, sheet, row, col)
         for ps, pr, pc, pf, (cf, dfr), key in pvs:
-            if (sheet, row, col) != (ps, pr, pc) and not _reaches(db, sheet, row, col, key):
+            if (sheet, row, col) != (ps, pr, pc) and key not in reach:
                 continue
             v = dcf._num(dcf._cell(db, sheet, row, col))
             if v is None or v == 0:

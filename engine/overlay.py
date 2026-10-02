@@ -247,6 +247,7 @@ class Session:
                                       f"({','.join('?' * len(sheets))})", sheets):
                 self.formula_cells.append((s, r, c))
         self.formula_cells.sort(key=lambda k: (k[2], k[1]))  # column by column: early periods are memoised first
+        self.formula_set = set(self.formula_cells)
         B.cached = lambda s, r, c: self.ov.value(s, r, c)
         self.rowmap = None
         if self.current:  # last year's rows in this year's model: by label, history, words, neighbours, banner
@@ -255,6 +256,7 @@ class Session:
             self.rowmap = rowfind.RowFinder(RowMap(base, self.current), base, self.current)
         self.stood_in = {}  # (sheet, row, col) -> last year's value, used where this year's model has no match
         self.blank = {}  # (sheet, row, col) -> this year's cell found for it, blank where last year's had a value
+        self.beyond = {}  # (sheet, row, col) -> the rolled period past the last this year's model has: nil there
         self.derived = {}  # (sheet, row) -> timing rule: a period flag or date row worked out from the period dates
         self.derived_used = {}  # (sheet, row, col) -> the rule, where a value was worked out on the current feed
         self.client_reads = set()  # (sheet, row, col) of last year's model read on the current feed
@@ -263,7 +265,7 @@ class Session:
         self.horizon_set = None  # "fixed" / "rolling": the engagement's profile says, not worked out (fixed_horizon)
         self.mode = None
         self.holds = {}  # (sheet, row, col) -> value: cells held at Excel's value on every feed (the doctor's fixes)
-        self.cutoffs = []  # (sheet, row, col, period end serial): the discountings' per-period cells (cutoff_cells)
+        self.cutoffs = []  # (sheet, row, col, period end serial[, its date cell]): the discountings' per-period cells (cutoff_cells)
         self.cut = set()  # those of them cut off on the current feed (_cut_off)
         self.keep_on_date = False  # the period ending on the new valuation date stays in (a method: methods.py)
         self.configure("workbook")
@@ -276,6 +278,7 @@ class Session:
         self.unmatched = {}
         self.stood_in = {}
         self.blank = {}
+        self.beyond = {}
         self.derived_used = {}
         self.client_reads = set()
         B.overrides.clear()
@@ -313,18 +316,31 @@ class Session:
         bridge's cash flows paid), and a factor worked out from the date would compound them into the value instead.
         The period ending on the date is past too (the convention dcf.factors keeps, and a valuer zeroing the
         overlay's own period flags by hand does); keep_on_date leaves it in, undiscounted (methods.py). A cell a
-        person or the feed set is left as set. -> the cells cut off."""
+        person or the feed set is left as set. A period's end is its date cell's on this feed where an overlay
+        formula works it out (dates counted from the valuation date move with it: the column is then this year's
+        period, not last year's), else last year's end moved by the sheet's periods. -> the cells cut off."""
         if not self.cutoffs or self.base_vd is None:
             return set()
         new_vd = add_months(self.base_vd, months)
-        shift, cut = {}, set()
-        for s, r, c, end in self.cutoffs:
+        shift, cut, worked = {}, set(), False
+        for s, r, c, end, *at in self.cutoffs:
+            at = at[0] if at else None
+            if at and at in self.formula_set:
+                e = deep(lambda: self.value(*at))
+                worked = True
+                if isinstance(e, (int, float)) and not isinstance(e, bool) and 3000 < e < 120000:
+                    if (e < new_vd or e == new_vd and not self.keep_on_date) and (s, r, c) not in self.B.overrides:
+                        self.B.overrides[(s, r, c)] = 0.0
+                        cut.add((s, r, c))
+                    continue
             if s not in shift:
                 shift[s] = self.period_shift(self.ov if s in self.sheets else (self.prior or self.ov), s)
             e = add_months(end, shift[s]) if shift[s] else end
             if (e < new_vd or e == new_vd and not self.keep_on_date) and (s, r, c) not in self.B.overrides:
                 self.B.overrides[(s, r, c)] = 0.0
                 cut.add((s, r, c))
+        if worked:  # the dates were worked out before the cut: nothing worked out from them stays
+            self.B.reset()
         return cut
 
     def _rolled(self, prior: Workbook, s, r, c):
@@ -338,6 +354,9 @@ class Session:
         tl_p = prior.timeline(s)
         want = add_months(tl_p[c], self.period_shift(prior, s)) if c in tl_p else None
         rule = self.derived.get((s, r))
+        if rule and rule["kind"].startswith("own"):  # a row with periods of its own: moved by them, not hunted for
+            self.derived_used[(s, r, c)] = rule["text"]
+            return self._own_value(rule, prior.value(s, r, c))
         if rule and want is not None:  # timing worked out from the rolled period date, not hunted for
             self.derived_used[(s, r, c)] = rule["text"]
             new_vd = add_months(self.base_vd, self.shift) if self.base_vd is not None else None
@@ -348,8 +367,18 @@ class Session:
             return self._stand_in(prior, s, r, c, want)
         s2, r2 = hit
         c2 = c
+        if want is None and len(tl_p) > 1 and c > max(tl_p):
+            # to the right of last year's timeline: no period last year to roll, so not this year's same column (another
+            # period there, counted twice); as last year had it, nothing
+            self.beyond[(s, r, c)] = "past last year's timeline"
+            return prior.value(s, r, c)
         if want is not None:
             c2 = cur.column_of(s2, want)
+            tl_c = cur.timeline(s2)
+            if c2 is None and tl_c and want > max(tl_c.values()) and rule is None:
+                # past the last period this year's model has: its forecast has ended there, nothing to stand in for
+                self.beyond[(s, r, c)] = to_date(want).isoformat()
+                return 0.0 if isinstance(prior.value(s, r, c), (int, float)) else None
             if c2 is None:
                 self.unmatched[(s, r, c)] = f"period {to_date(want).isoformat()} not in the current model"
                 return self._stand_in(prior, s, r, c, want)
@@ -360,6 +389,19 @@ class Session:
                                          + (f" for {to_date(want).isoformat()}" if want is not None else ""))
             return self._stand_in(prior, s, r, c, want)
         return v
+
+    def _own_value(self, rule: dict, v):
+        """A cell of a row with periods of its own (own_rule), this year: moved on by its periods that ended between
+        last year's valuation date and the new one (on a fixed horizon, none: the dates are the same dates)."""
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or self.base_vd is None:
+            return v
+        n = 0
+        if not self.fixed_horizon():
+            new_vd = add_months(self.base_vd, self.shift)
+            n = sum(1 for e in rule.get("ends") or [] if self.base_vd < e <= new_vd)
+        if not n:
+            return v
+        return add_months(v, n * rule["plen"]) if rule["kind"] == "own_date" else v + n * rule["plen"] / 12
 
     def _stand_in(self, prior: Workbook, s, r, c, want):
         """Last year's value for a client cell this year's model doesn't have: last year's forecast for the same
@@ -564,6 +606,15 @@ def build(out_dir: Path, overlay: dict, prior: dict | None, current: dict | None
     sess = Session(str(module), overlay["db_path"], sheets, None if same_file else (prior or {}).get("db_path"),
                    (current or {}).get("db_path"), client_link,
                    client_sheets or ((prior or {}).get("sheets") if same_file else None))
+    relinked = None
+    if prior and not same_file and link_unsaved(overlay["db_path"], client_link):
+        progress(0.45, "The overlay's link to the client model was saved without values: filling it from last year's "
+                       "client model and working its formulas out again")
+        path2, relinked = deep(relink, sess, out_dir, client_link)
+        sess.close()
+        overlay = {**overlay, "db_path": path2}
+        sess = Session(str(module), path2, sheets, prior["db_path"], (current or {}).get("db_path"), client_link,
+                       client_sheets)
     progress(0.5, f"Recomputing {len(sess.formula_cells):,} formula cells and checking each against Excel")
     val = sess.validate()
     progress(0.7, "Finding levers and outputs")
@@ -594,7 +645,7 @@ def build(out_dir: Path, overlay: dict, prior: dict | None, current: dict | None
         roll.update(date_cells(overlay["db_path"], outputs, sheets, vd_lever))
     summary = {"module": str(module), "stats": {k: v for k, v in stats.items() if k != "not_compiled"},
                "not_compiled": stats["not_compiled"][:50], "validation": val, "levers": levers, "outputs": outputs,
-               "feeds": feeds, "roll": roll, "sheets": sheets,
+               "feeds": feeds, "roll": roll, "sheets": sheets, "relinked": relinked,
                "files": {k: (v or {}).get("filename") for k, v in (("overlay", overlay), ("prior", prior), ("current", current))},
                "client_link": client_link, "same_file": same_file}
     (out_dir / "overlay.json").write_text(json.dumps(summary, default=str, indent=1), encoding="utf-8")
@@ -618,6 +669,56 @@ def _cores(db, outputs: list[dict]) -> list[dict]:
     return out
 
 
+def link_unsaved(path: str, idx: int | None) -> bool:
+    """Whether the overlay's link to the client model was saved without the values it read (Excel's option to save
+    external link values off, or links broken when it was saved), while its formulas read through it: then Excel's
+    saved values of everything those formulas feed are stale, and only a recompute gives them."""
+    if idx is None:
+        return False
+    with _ro(path) as db:
+        have = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if not {"extcells", "extrefs"} <= have:
+            return False
+        cached = db.execute("SELECT COUNT(*) FROM extcells WHERE idx=?", (idx,)).fetchone()[0]
+        reads = db.execute("SELECT COALESCE(SUM(n_cells), 0) FROM extrefs WHERE idx=?", (idx,)).fetchone()[0]
+    return not cached and reads > 0
+
+
+def relink(sess: Session, out_dir: Path, idx: int) -> tuple[str, dict]:
+    """A copy of the overlay's model.db with its link to the client model filled from last year's client model (the
+    values every formula reads through it, as that file has them) and its formulas' saved values worked out again
+    from them, where Excel saved the link without values (link_unsaved). Everything that reads the overlay's saved
+    values (finding the report's figures in it, tracing its discountings, sourcing its inputs) then reads what the
+    overlay gives on last year's model, not Excel's stale figures. -> (the copy's path, what was filled)."""
+    import shutil
+    from openpyxl.utils import get_column_letter
+    dst = out_dir / "overlay_relinked.db"
+    shutil.copyfile(sess.ov.path, dst)
+    sess.configure("prior")
+    sess.B.feed_log = {}
+    try:
+        vals = sess.evaluate_all()
+        log = dict(sess.B.feed_log)
+    finally:
+        sess.B.feed_log = None
+        sess.configure("workbook")
+    stored = lambda v, saved: v.code if isinstance(v, xlruntime.XLError) else (
+        to_date(v).isoformat() if isinstance(v, float) and isinstance(saved, str) and xlruntime._DATE.match(saved)
+        and 0 < v < 2958466 else v)
+    ext = [(i, s, f"{get_column_letter(c)}{r}", r, c, stored(v, None)) for (i, s, r, c), v in log.items()
+           if i == idx and v is not None and not isinstance(v, xlruntime.Rng)]
+    with sqlite3.connect(dst) as db:
+        saved = {(s, r, c): v for s, r, c, v in db.execute("SELECT sheet, row, col, value FROM cells WHERE formula IS NOT NULL")}
+        changed = [(stored(v, saved.get(k)), *k) for k, v in vals.items() if not isinstance(v, xlruntime.Rng)
+                   and not same(v, from_db(saved.get(k)))]
+        db.execute("DELETE FROM extcells WHERE idx=?", (idx,))
+        db.executemany("INSERT INTO extcells(idx, sheet, addr, row, col, value) VALUES (?,?,?,?,?,?)", ext)
+        db.executemany("UPDATE cells SET value=? WHERE sheet=? AND row=? AND col=?", changed)
+    return str(dst), {"link": idx, "link_cells": len(ext), "cells": len(changed), "db_path": str(dst),
+                      "why": "the overlay's link to the client model was saved without values: filled from last year's "
+                             "client model, and the overlay's formulas worked out again from it"}
+
+
 def discount_date_cells(path: str, outputs: list[dict], sheets=None,
                         cores: list[dict] | None = None) -> tuple[list[str], list[str]]:
     """The valuation dates the discountings under the outputs read (dcftrace), and the cells to move for them: each
@@ -628,7 +729,8 @@ def discount_date_cells(path: str, outputs: list[dict], sheets=None,
     move, read = [], []
     with _ro(path) as db:
         for c in cores if cores is not None else _cores(db, outputs):
-            v = (c.get("inputs") or {}).get("valuation_date")
+            # the date the discounting reads: fitted from its factors, else followed from their formulas (loose)
+            v = (c.get("inputs") or {}).get("valuation_date") or (c.get("loose") or {}).get("valuation_date")
             r = dcf._ref(v, "") if isinstance(v, str) else None
             if not r:
                 continue
@@ -640,7 +742,7 @@ def discount_date_cells(path: str, outputs: list[dict], sheets=None,
 
 def cutoff_cells(path: str, outputs: list[dict], cores: list[dict] | None = None) -> list[list[str]]:
     """Each discounting's per-period cells under the outputs, with the date its period ends, for the roll's cut-off
-    (Session._cut_off): [[cell, period end (ISO)]]. Its present-value row where it sums one, else its factor row,
+    (Session._cut_off): [[cell, period end (ISO), the cell that date is in (where read from a row of ends)]]. Its present-value row where it sums one, else its factor row,
     else its cash flows (the factors worked out in its formula). Not an XNPV or an NPV: they count from their own
     first date or column, which the roll doesn't move."""
     import dcf
@@ -651,24 +753,34 @@ def cutoff_cells(path: str, outputs: list[dict], cores: list[dict] | None = None
                 continue
             try:
                 sheet, r, cols = dcf._row_range(db, c.get("pv_row") or c.get("factor_row") or c["inputs"]["cashflow"][0])
-                ends, _ = dcf.period_ends(db, sheet, cols, c["inputs"].get("dates"))
+                ends, note = dcf.period_ends(db, sheet, cols, c["inputs"].get("dates"))
             except (ValueError, KeyError, IndexError):
                 continue
+            # the row the ends were read from, for its cells on this year's feed (not where they were derived from starts)
+            m = re.match(r"(.+?)!r(\d+)", note) if "derived" not in note else None
             for col in cols:
                 if col in ends and (sheet, r, col) not in seen:
                     seen.add((sheet, r, col))
-                    out.append([_a1(sheet, r, col), ends[col].isoformat()])
+                    out.append([_a1(sheet, r, col), ends[col].isoformat()] + ([_a1(m[1], int(m[2]), col)] if m else []))
     return out
 
 
 def _typed_in(db, sheet: str, row: int, col: int, sheets=None, hops: int = 8) -> str:
-    """The cell a value is typed into, following plain references back (=Inputs!C4, =$C$4) within the overlay's own
-    sheets; where a formula does more than refer (EOMONTH(...), a name, another workbook), that cell itself."""
+    """The cell a value is typed into, following plain references back (=Inputs!C4, =$C$4, =Val_Date: a name for one
+    cell) within the overlay's own sheets; where a formula does more than refer (EOMONTH(...), another workbook),
+    that cell itself. Moving the copy and not the cell it copies would leave everything else reading that cell on
+    last year's date: an overlay's cash flow dates counted from it, its discount periods from the copy."""
     import dcf
     for _ in range(hops):
         f = db.execute("SELECT formula FROM cells WHERE sheet=? AND row=? AND col=?", (sheet, row, col)).fetchone()
         body = ((f[0] if f else None) or "").lstrip("=+ ").strip()
-        if not re.fullmatch(r"(?:(?:'[^'\[\]]+'|[A-Za-z0-9_.]+)!)?\$?[A-Z]{1,3}\$?\d+", body):
+        cell = r"(?:(?:'[^'\[\]]+'|[A-Za-z0-9_.]+)!)?\$?[A-Z]{1,3}\$?\d+"
+        if not re.fullmatch(cell, body) and re.fullmatch(r"[A-Za-z_\\][\w.]*", body):
+            # a name: the cell it stands for, the sheet's own name first
+            named = db.execute("SELECT ref FROM names WHERE lower(name)=lower(?) ORDER BY scope IS NOT ?, scope IS NOT NULL",
+                               (body, sheet)).fetchone()
+            body = (named[0] or "").lstrip("=+ ").strip() if named else ""
+        if not re.fullmatch(cell, body):
             break
         r = dcf._ref(body, sheet)
         if not r or (sheets and r[0] not in sheets):
@@ -684,11 +796,15 @@ def date_cells(path: str, outputs: list[dict], sheets, lever: dict | None) -> di
     per-period cells and their period ends: cutoff_cells)}."""
     with _ro(path) as db:
         cores = _cores(db, outputs)
-    move, read = discount_date_cells(path, outputs, sheets, cores)
-    if not move and lever:
-        move = [lever["cell"]]
+        move, read = discount_date_cells(path, outputs, sheets, cores)
+        # the cell labelled as the valuation date moves too, followed to where it's typed: an overlay can keep one
+        # date for its discountings and another for the rest (its period flags, its balances), both last year's
+        root = _typed_in(db, *parse_a1(lever["cell"]), sheets) if lever else None
+    if root and root not in move:
+        move.append(root)
     return {"valuation_date_cells": move, "valuation_date_reads": read, "valuation_date_cell": move[0] if move else None,
-            "valuation_date_by_label": bool(move) and not read, "cutoff": cutoff_cells(path, outputs, cores)}
+            "valuation_date_by_label": bool(move) and not read, "cutoff": cutoff_cells(path, outputs, cores),
+            "date_cells_plan": DATE_CELLS}
 
 
 def horizon(prior: Workbook, current: Workbook, sheets, sheet_for=None) -> tuple[str | None, dict]:
@@ -769,6 +885,7 @@ REBUILT = 0.5  # the two client models share fewer line-item labels than this (r
 ZERO_ROLL_CHECK = (0.87, 1.15)  # inside ZERO_ROLL but outside this, the value runs and a person is asked to confirm
                                 # the move is the new forecast (a judgment call: forecasts move, a mismatched row too)
 ROLL_PLAN = 4  # the rules' version: a roll planned by older rules is planned again when a session loads
+DATE_CELLS = 6  # date_cells' version: the cells a build traced with older rules are traced again when a session loads
 ROLL_MAX = 24  # months: a move beyond it from the timelines isn't a roll-forward
 ROLL_SHEETS = 5  # sheets: fewer can't show how far the timelines moved
 
@@ -779,6 +896,9 @@ def plan_roll(sess: Session, prior: dict | None, overlay: dict, same_file: bool,
     months, basis, new_vd = roll_months(sess, prior, overlay, same_file, (ov_vd, prior_vd, current_vd, this_vd))
     sess.base_vd = serial(date.fromisoformat(ov_vd[:10])) if ov_vd else None
     sess._pshift.clear()
+    if sess.rowmap and getattr(sess.rowmap, "since", None) != sess.base_vd:  # the finder compares rows from it on
+        sess.rowmap.since = sess.base_vd
+        sess.rowmap._cache.clear()
     return {"prior_valuation_date": ov_vd, "months": months, "months_basis": basis,
             "fixed_horizon": bool(sess.current) and sess.fixed_horizon(), "horizon_set": getattr(sess, "horizon_set", None),
             "months_assumed": "assumed:" in basis, "date_check": basis.startswith("check:"),
@@ -808,6 +928,8 @@ def _feed(summary: dict, mode: str, valuation_date: str | None, months: int | No
                          if x.get("value") is not None})
     if rates:
         defaults.update({parse_a1(c): float(v) for c, v in (summary.get("rate_values") or {}).items()})
+    # the overlay's own copy of the forecast's end, where this year's model forecasts to another date (result.py)
+    defaults.update({parse_a1(c): float(v) for c, v in (summary.get("horizon_values") or {}).items()})
     return defaults, {"months": months, "valuation_date": valuation_date, "valuation_date_cell": vd_cells[0] if vd_cells
                       else None, "valuation_date_cells": vd_cells}, months
 
@@ -882,7 +1004,37 @@ def timing_rule(wb: Workbook, s: str, r: int, vd: float | None) -> dict | None:
                 return rule
     if len({v for _, v in pts}) == 1:
         return {**base, "kind": "const", "value": pts[0][1], "text": f"the same in every period ({pts[0][1]:g})"}
-    return None
+    return own_rule([v for _, v in pts])
+
+
+def own_rule(vals: list[float]) -> dict | None:
+    """A row that carries its own periods, one a column, whatever the sheet's header says (an annual block laid out
+    under a quarterly header): dates a whole number of months apart, on the same day or each a month's end (the last
+    may be a short stub, a concession ending part-way through a year), or year numbers one apart. Rolled forward, it
+    moves by its own periods that ended between the two valuation dates (Session._own_value), not by the header's."""
+    if len(vals) < 3 or not all(float(v).is_integer() for v in vals):
+        return None
+    if all(1900 <= v <= 2200 for v in vals):
+        if all(b - a == 1 for a, b in zip(vals, vals[1:])):
+            return {"kind": "own_year", "plen": 12, "text": "year numbers, one a column, carried by the row"}
+        return None
+    if not all(3000 < v < 120000 for v in vals):
+        return None
+    ds = [to_date(v) for v in vals]
+    gaps = [(b.year - a.year) * 12 + b.month - a.month for a, b in zip(ds, ds[1:])]
+    body = gaps[1:-1] if len(gaps) > 2 else gaps  # the first and the last may be stubs (a concession's part-years)
+    month_end = lambda d: xlruntime._add_months(d, 0, end=True) == d
+    inner = ds[1:-1] if len(ds) > 3 else ds
+    regular = all(month_end(d) for d in inner) or len({d.day for d in inner}) == 1
+    if len(set(body)) != 1 or not body[0] > 0 or not all(0 < x <= body[0] for x in (gaps[0], gaps[-1])) or not regular:
+        return None
+    plen = body[0]
+    starts = all(d.day == 1 for d in ds)
+    ends = [add_months(v, plen) - 1 if starts else v for v in vals]
+    stubs = [w for w, x in (("first", gaps[0]), ("last", gaps[-1])) if x < plen]
+    return {"kind": "own_date", "plen": plen, "ends": ends,
+            "text": f"dates {plen} months apart, one a column, carried by the row"
+                    + (f" (the {' and the '.join(stubs)} a stub)" if stubs else "")}
 
 
 def _period_end(rule: dict, t: float) -> float:
@@ -967,7 +1119,7 @@ def _dcf_cells(db, inputs: dict) -> set[tuple]:
             cells.update((m[1], int(m[2]), c) for c in cols)
         return sheet, cols
 
-    for ref in inputs["cashflow"]:
+    for ref in [*inputs["cashflow"], *(inputs.get("mask") or [])]:
         row(ref)
     if inputs.get("dates"):
         row(inputs["dates"])
@@ -1012,6 +1164,7 @@ def _flows(db, inputs: dict) -> tuple[dict, dict]:
                                (sheet, r, cols[0], cols[-1])):
             if dcf._num(v) is not None:
                 flows[c] = flows.get(c, 0.0) + dcf._num(v)
+    flows = dcf.apply_mask(db, flows, cols0, inputs.get("mask"))
     return flows, dcf.period_ends(db, sheet0, cols0, inputs.get("dates"))[0]
 
 

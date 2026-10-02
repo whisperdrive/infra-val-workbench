@@ -29,5 +29,22 @@ def main() -> None:
           "as Excel does)")
 
 
+def offset_check() -> None:
+    """OFFSET with a negative height or width runs up or to the left from the cell it lands on, as Excel takes it (a
+    terminal value on the average of the last N years: SUM(OFFSET(DO105,,,,-4*N))/N); nil height or width is #REF!."""
+    from xlruntime import Rng
+    at = Rng(None, "", "Val", 105, 119, 105, 119)  # DO105
+    back = xl.OFFSET(at, 0, 0, 1, -8.0)  # the last 8 quarters, ending at DO
+    assert (back.r1, back.c1, back.r2, back.c2) == (105, 112, 105, 119), (back.r1, back.c1, back.r2, back.c2)
+    up = xl.OFFSET(at, -1, 2, -3, 2)
+    assert (up.r1, up.c1, up.r2, up.c2) == (102, 121, 104, 122), (up.r1, up.c1, up.r2, up.c2)
+    fwd = xl.OFFSET(at, 0, 1, 1, 4)
+    assert (fwd.c1, fwd.c2) == (120, 123), (fwd.c1, fwd.c2)
+    assert getattr(xl.OFFSET(at, 0, 0, 1, 0), "code", None) == "#REF!"
+    assert getattr(xl.OFFSET(at, 0, 0, 1, -200), "code", None) == "#REF!"  # past the sheet's first column
+    print("OFFSET: ok (a negative height or width runs up or to the left, as Excel; nil is #REF!)")
+
+
 if __name__ == "__main__":
     main()
+    offset_check()

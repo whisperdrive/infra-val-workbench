@@ -913,17 +913,28 @@ def terminal_method(facts: list[dict], passages: list[dict] | None = None) -> di
     mv = {**(m or {}), **((m or {}).get("final") or {})}
     out = {"kind": "unknown", "label": "Not stated", "phrase": None, "page": None, "from": None, "passages": passages or [],
            "multiple": {k: mv.get(k) for k in ("value_text", "low_text", "high_text", "basis", "page")} if m else None}
-    # the fact's own words first (its quote, its value, its basis), then each thing the report says; the phrase shown
-    # is the whole sentence that decided it
-    sources = ([("the fact", t, v.get("page")) for t in (v.get("quote"), v.get("value_text"), v.get("basis")) if t]
-               if f else []) + [("the report's text", x["text"], x["page"]) for x in passages or []]
-    for kind, label, rx in TV_KINDS:
-        for frm, text, page in sources:
-            if re.search(rx, text or "", re.I):
-                said = v.get("quote") if frm == "the fact" and v.get("quote") else text
-                return {**out, "kind": kind, "label": label, "phrase": said if len(said) <= 300 else said[:300].rsplit(" ", 1)[0] + " …",
-                        "page": page, "from": frm}
+    # the fact's own words first (its quote, its value, its basis): they decide where they say anything; then each
+    # thing the report says, where it's about the terminal value (a table of the valuation's EV/EBITDA multiples is
+    # its cross-check, and an "adjusted EBITDA" no terminal cash flow). The phrase shown is the whole sentence that
+    # decided it. A multiple the valuation implies isn't how the terminal value is worked out.
+    fact_said = [("the fact", t, v.get("page")) for t in (v.get("quote"), v.get("value_text"), v.get("basis")) if t] if f else []
+    report_said = [("the report's text", x["text"], x["page"]) for x in passages or []]
+    for sources in (fact_said, report_said):
+        for kind, label, rx in TV_KINDS:
+            for frm, text, page in sources:
+                if frm != "the fact" and kind != "none" and (not _TV_WORDS.search(text or "") or
+                                                             kind.startswith("exit") and _IMPLIED.search(text or "")):
+                    continue
+                if re.search(rx, text or "", re.I):
+                    said = v.get("quote") if frm == "the fact" and v.get("quote") else text
+                    return {**out, "kind": kind, "label": label, "phrase": said if len(said) <= 300 else said[:300].rsplit(" ", 1)[0] + " …",
+                            "page": page, "from": frm}
     return out
+
+
+_IMPLIED = re.compile(r"\bimpl(?:ied|ies|y)\b|cross[- ]?check", re.I)
+_TV_WORDS = re.compile(r"terminal|\bexit\b|perpetu|gordon|growth model|end of the (?:\w+ ){0,2}(?:forecast|concession|lease|"
+                       r"period|term)", re.I)
 
 
 def _basis(f: dict) -> str | None:

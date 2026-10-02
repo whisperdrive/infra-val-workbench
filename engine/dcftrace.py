@@ -122,13 +122,15 @@ _flat = lambda args: np.concatenate([np.atleast_1d(np.asarray(x, dtype=float)).r
 _FUNCS = {"YEARFRAC": _yearfrac, "EXP": np.exp, "LN": np.log, "ABS": np.abs,
           "SUM": lambda *a: float(np.sum(_flat(a))), "AVERAGE": lambda *a: float(np.mean(_flat(a))),
           "MIN": lambda *a: float(np.min(_flat(a))), "MAX": lambda *a: float(np.max(_flat(a))),
-          "ROUND": lambda x, n=0: float(np.round(x, int(n)))}
+          "ROUND": lambda x, n=0: float(np.round(x, int(n))),
+          "IF": lambda c, a=0.0, b=0.0: np.where(np.asarray(c) != 0, a, b) if np.ndim(c) else (a if c else b)}
 
 
 def evaluate(db, expr: str, here: str, given: dict | None = None):
     """An arithmetic expression over cells: a number, or an array when it reads a row (one value per column of
     that row, in order). Dates count as Excel serial numbers. Only + - * / ^, brackets and a few functions
-    (YEARFRAC, EXP, LN, ABS, SUM, AVERAGE, MIN, MAX, ROUND); anything else raises ValueError. given: values to use
+    (YEARFRAC, EXP, LN, ABS, SUM, AVERAGE, MIN, MAX, ROUND, IF on a number: IF(flag, a, ) is a or nil); anything else
+    raises ValueError. given: values to use
     for some cells instead of the workbook's ({(sheet, row, col): value})."""
     given = given or {}
     code, vals, pos = [], [], 0
@@ -166,7 +168,10 @@ def evaluate(db, expr: str, here: str, given: dict | None = None):
             code.append(f"_f['{fn}'](")
         else:
             code.append("**" if m["op"] == "^" else m["op"])
-    return eval("".join(code), {"__builtins__": {}}, {"_v": vals, "_f": _FUNCS})  # noqa: S307 (built from tokens only)
+    try:
+        return eval("".join(code), {"__builtins__": {}}, {"_v": vals, "_f": _FUNCS})  # noqa: S307 (built from tokens only)
+    except SyntaxError as ex:  # an argument left out where Python can't (IF(flag, , b))
+        raise ValueError(f"can't read {text[:40]!r}") from ex
 
 
 # ---- the discounting ----------------------------------------------------------------------------------------
@@ -190,12 +195,74 @@ def _method(db, factors: dict[int, float], sheet: str, cols: list[int], dates: s
         return None
 
 
+def _first_formula(db, pr) -> str | None:
+    return next((f for c, f in db.execute("SELECT col, formula FROM cells WHERE sheet=? AND row=? AND col BETWEEN ? "
+                                          "AND ? AND formula IS NOT NULL ORDER BY col", (pr[0], pr[1], pr[2], pr[3]))), None)
+
+
+def _same_col_rows(f: str, pr) -> list[tuple]:
+    """The other rows of the same column a row's formula reads, on its sheet, in order: (sheet, row)."""
+    refs = [dcf._ref(m[0], pr[0]) for m in dcf._FREF.finditer(_STR.sub("", f))]
+    return list(dict.fromkeys((r[0], r[1]) for r in refs if r and r[1] == r[3] and r[2] == r[4] and r[1] != pr[1]
+                              and r[0] == pr[0]))
+
+
+def _pv_flows(db, pr) -> tuple | None:
+    """A present-value row's cash flows: each column's formula multiplies a cash flow by a factor (or divides it).
+    -> ([the cash-flow row (sheet, row, c1, c2)], its values, the factor rows it reads, the factors) or None."""
+    f0 = _first_formula(db, pr)
+    if not f0 or not re.search(r"[*/]", f0):
+        return None
+    rows = _same_col_rows(f0, pr)
+    pvv = _values(db, *pr)
+    dfs = tuple(x for x in rows if valuation._is_df(db, (x[0], x[1], pr[2], x[1], pr[3])))
+    for s_, r_ in rows:
+        if (s_, r_) in dfs:
+            continue
+        cf = _values(db, s_, r_, pr[2], pr[3])
+        fac = {c: pvv.get(c, 0.0) / cf[c] for c in cf if cf.get(c)}
+        if fac and all(0 < f <= 1.0000001 for f in fac.values()):
+            return [(s_, r_, pr[2], pr[3])], cf, dfs, fac
+    return None
+
+
 def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict | None:
     """One discounting call in a formula -> its core, or None if the call isn't one."""
     fn, args, text = call
     here = sheet
     core = {"cell": _a1(sheet, row, col), "call": text, "whole": whole}
     try:
+        if fn == "SUMPRODUCT" and len(args) > 2:
+            # cash flows x factors x flags: 0 / 1 rows (a period window: the forecast, a concession's part) masking
+            # the cash flows, each spanning their columns
+            rs = [_row(db, a, here) for a in args]
+            if not all(rs):
+                return None
+            df = [r for r in rs if valuation._is_df(db, (r[0], r[1], r[2], r[1], r[3]))]
+            masks = [r for r in rs if r not in df and set(_values(db, *r).values()) <= {0.0, 1.0}]
+            cfs = [r for r in rs if r not in df and r not in masks]
+            if len(df) != 1 or len(cfs) != 1 or not masks or any((m[2], m[3]) != (cfs[0][2], cfs[0][3]) for m in masks):
+                return None
+            cf, fac_row = cfs[0], df[0]
+            cols = list(range(cf[2], cf[3] + 1))
+            fv = list(_values(db, *fac_row).values())
+            seen = {c: fv[i] if i < len(fv) else 0.0 for i, c in enumerate(cols)}  # the factors, read for the method
+            on = {c: math.prod(_values(db, *m).get(c, 0.0) for m in masks) for c in cols}
+            fac = {c: f * on[c] for c, f in seen.items()}  # what the cash flows are discounted at, the flags in
+            flows = _values(db, *cf)
+            starts = {"cells": {c: (fac_row[0], fac_row[1], fac_row[2] + i) for i, c in enumerate(cols)}}
+            m = _method(db, seen, cf[0], cols, starts=starts)
+            core.update(kind="sumproduct", what=f"SUMPRODUCT of a cash-flow row, a discount-factor row and {len(masks)} "
+                        "flag row(s) (0 or 1 by period)", factor_row=_range(*fac_row), mask=[_range(*x) for x in masks],
+                        cashflow=_range(*cf), pv=sum(flows.get(c, 0.0) * f for c, f in fac.items()), factors=fac, method=m)
+            if not m:
+                core["loose"] = valuation.loose_factors(db, cols, seen, cf[0], starts=starts)
+            if m:
+                core["inputs"] = {"cashflow": [_range(*cf)], "mask": core["mask"], "rate": m["rate"],
+                                  "valuation_date": m["valuation_date"], "timing": m["timing"], "day_count": m["day_count"],
+                                  "terminal_date": m["terminal_date"], "adjustments": [],
+                                  "compare_to": core["cell"] if whole else None}
+            return core
         if fn == "SUMPRODUCT" and len(args) == 2:
             a, b = _row(db, args[0], here), _row(db, args[1], here)
             if a and b:
@@ -227,6 +294,8 @@ def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict 
             cols = list(range(cf[2], cf[3] + 1))
             m = _method(db, fac, cf[0], cols, starts=starts)
             core.update(cashflow=_range(*cf), pv=pv, factors=fac, method=m)
+            if not m:
+                core["loose"] = valuation.loose_factors(db, cols, fac, cf[0], starts=starts)
             if m:
                 core["inputs"] = {"cashflow": [_range(*cf)], "rate": m["rate"], "valuation_date": m["valuation_date"],
                                   "timing": m["timing"], "day_count": m["day_count"], "terminal_date": m["terminal_date"],
@@ -278,34 +347,41 @@ def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict 
             if not pr:
                 return None
             # a present-value row: each column's formula multiplies a cash flow by a factor (or divides it)
-            f0 = next((f for c, f in db.execute("SELECT col, formula FROM cells WHERE sheet=? AND row=? AND col BETWEEN ? "
-                                                "AND ? AND formula IS NOT NULL ORDER BY col", (pr[0], pr[1], pr[2], pr[3]))), None)
-            if not f0 or not re.search(r"[*/]", f0):
-                return None
-            refs = [dcf._ref(m[0], pr[0]) for m in dcf._FREF.finditer(_STR.sub("", f0))]
-            same_col = [(r[0], r[1]) for r in refs if r and r[1] == r[3] and r[2] == r[4] and r[1] != pr[1] and r[0] == pr[0]]
             pvv = _values(db, *pr)
-            best = None
-            for s_, r_ in dict.fromkeys(same_col):
-                if valuation._is_df(db, (s_, r_, pr[2], r_, pr[3])):
-                    continue
-                cf = _values(db, s_, r_, pr[2], pr[3])
-                fac = {c: pvv.get(c, 0.0) / cf[c] for c in cf if cf.get(c)}
-                if fac and all(0 < f <= 1.0000001 for f in fac.values()):
-                    best = ((s_, r_, pr[2], pr[3]), cf, fac)
-                    break
-            if not best:
-                return None
-            cf_row, flows, fac = best
+            got = _pv_flows(db, pr)
+            if not got:
+                # present-value rows added up, column by column (two blocks of cash flows discounted at one factor
+                # row): one discounting of their cash flows together
+                f0 = _first_formula(db, pr)
+                parts = _same_col_rows(f0, pr) if f0 and not re.search(r"[*/]", _STR.sub("", f0)) else []
+                each = [_pv_flows(db, (s_, r_, pr[2], pr[3])) for s_, r_ in parts]
+                if len(parts) < 2 or not all(each) or len({x[2] for x in each}) != 1:
+                    return None
+                flows = {c: sum(x[1].get(c, 0.0) for x in each) for c in range(pr[2], pr[3] + 1)}
+                fac = {c: pvv.get(c, 0.0) / flows[c] for c in flows if flows.get(c)}
+                if not fac or not all(0 < f <= 1.0000001 for f in fac.values()):
+                    return None
+                got = ([x[0][0] for x in each], flows, each[0][2], fac)
+                at = parts[0]  # the factors' formulas are the parts': the rate and the date sourced from the first's
+            else:
+                at = (pr[0], pr[1])
+            cf_rows, flows, _, fac = got
             cols = list(range(pr[2], pr[3] + 1))
-            m = _method(db, fac, pr[0], cols, starts={"cells": {c: (pr[0], pr[1], c) for c in cols}})  # the factors seen:
-            # a period with no cash flow shows none
-            core.update(kind="pv row", what="SUM of a present-value row (each column a cash flow times a factor)",
-                        cashflow=_range(*cf_row), pv_row=_range(*pr), pv=sum(pvv.values()), factors=fac, method=m)
+            starts = {"cells": {c: (at[0], at[1], c) for c in cols}}
+            m = _method(db, fac, pr[0], cols, starts=starts)  # the factors seen: a period with no cash flow shows none
+            core.update(kind="pv row", what="SUM of a present-value row (each column a cash flow times a factor)"
+                        if len(cf_rows) == 1 else f"SUM of {len(cf_rows)} present-value rows added up (cash flows times "
+                        "one factor row)", cashflow=_range(*cf_rows[0]), pv_row=_range(*pr), pv=sum(pvv.values()),
+                        factors=fac, method=m)
+            if len(cf_rows) > 1:
+                core["cashflows"] = [_range(*x) for x in cf_rows]
+            if not m:
+                core["loose"] = valuation.loose_factors(db, cols, fac, pr[0], starts=starts)
             if m:
-                core["inputs"] = {"cashflow": [_range(*cf_row)], "rate": m["rate"], "valuation_date": m["valuation_date"],
-                                  "timing": m["timing"], "day_count": m["day_count"], "terminal_date": m["terminal_date"],
-                                  "adjustments": [], "compare_to": core["cell"] if whole else None}
+                core["inputs"] = {"cashflow": [_range(*x) for x in cf_rows], "rate": m["rate"],
+                                  "valuation_date": m["valuation_date"], "timing": m["timing"], "day_count": m["day_count"],
+                                  "terminal_date": m["terminal_date"], "adjustments": [],
+                                  "compare_to": core["cell"] if whole else None}
             return core
     except (ValueError, ZeroDivisionError, OverflowError, TypeError, FloatingPointError):
         return None

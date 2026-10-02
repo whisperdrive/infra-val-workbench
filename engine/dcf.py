@@ -343,13 +343,27 @@ def diagnose(db, calc: dict, rows_given: list[tuple[str, int]], ours: dict[int, 
     return out, fixes
 
 
+def apply_mask(db, flows: dict[int, float], cols: list[int], mask: list | None) -> dict[int, float]:
+    """Cash flows by column times each mask row's value in the same position (0 or 1 by period)."""
+    for ref in mask or []:
+        sheet, row, mcols = _row_range(db, ref)
+        if len(mcols) != len(cols):
+            raise ValueError(f"mask {ref} doesn't span the cash flows' columns")
+        vals = dict(db.execute("SELECT col, value FROM cells WHERE sheet=? AND row=? AND col BETWEEN ? AND ?",
+                               (sheet, row, mcols[0], mcols[-1])))
+        on = {c: _num(vals.get(m)) or 0.0 for c, m in zip(cols, mcols)}
+        flows = {c: v * on.get(c, 0.0) for c, v in flows.items()}
+    return flows
+
+
 def compute(db: sqlite3.Connection, cashflow, rate, valuation_date, dates: str | None = None,
             timing: str = "end", day_count: str = "actual/actual", terminal_date=None,
             adjustments: list | None = None, compare_to=None, rates: list | None = None,
-            fix: bool = True) -> dict:
+            fix: bool = True, mask: list | None = None) -> dict:
     """fix: if the result doesn't match compare_to and the workbook's own formula shows why (another cash-flow
     row, a cut-off date, a different convention, an amount taken on the valuation date), redo it with those
-    corrections and report them."""
+    corrections and report them. mask: rows of 0 / 1 by period over the cash flows' columns (a SUMPRODUCT's flags),
+    multiplied into them."""
     ranges = [cashflow] if isinstance(cashflow, str) else list(cashflow or [])
     if not ranges:
         raise ValueError("cashflow: give at least one row range")
@@ -383,6 +397,7 @@ def compute(db: sqlite3.Connection, cashflow, rate, valuation_date, dates: str |
             if v is not None:
                 flows[c] = flows.get(c, 0.0) + v
         rows_used.append(f"{sheet}!{_addr(cols[0], row)}:{_addr(cols[-1], row)} {_row_label(db, sheet, row)}".strip())
+    flows = apply_mask(db, flows, cols0, mask)
     ends, ends_src = period_ends(db, sheet0, cols0, dates)
     # Row-total columns (e.g. K = SUM(L:HO)) have no period date of their own, so they drop out here.
     flows = {c: v for c, v in flows.items() if c in ends}
@@ -447,7 +462,7 @@ def compute(db: sqlite3.Connection, cashflow, rate, valuation_date, dates: str |
             again = compute(db, fixes.get("cashflow", ranges), rate, valuation_date, dates,
                             fixes.get("timing", best["timing"]), fixes.get("day_count", best["day_count"]),
                             fixes.get("terminal_date", terminal_date), [*(adjustments or []), *fixes.get("add", [])],
-                            compare_to, rates, fix=False)
+                            compare_to, rates, fix=False, mask=mask)
             if again["compare_to"] is not None and _close(again["total"], again["compare_to"]):
                 done = []
                 if "cashflow" in fixes:

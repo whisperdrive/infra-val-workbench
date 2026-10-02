@@ -145,6 +145,17 @@ class RowFinder:
         vals = wb.sheet(sheet)
         return {when: vals.get((row, c)) for c, when in tl.items() if isinstance(vals.get((row, c)), float)}
 
+    def _same_series(self, a: tuple, b: tuple) -> bool:
+        """Two of this year's rows hold the same figures in every period of the first (at least three of them) from
+        the year to last year's valuation date on (since, set with the roll): what they did before it isn't valued."""
+        x, y = self._series(self.current, *a), self._series(self.current, *b)
+        since = getattr(self, "since", None)
+        if since is not None:
+            x = {w: v for w, v in x.items() if w > since - 366}
+        if len(x) < 3 or not set(x) <= set(y):
+            return False
+        return all(abs(x[w] - y[w]) <= EXACT * max(1.0, abs(x[w])) for w in x)
+
     def _shape(self, wb, k) -> tuple | None:
         """(formulas, typed values) in a row, from the rows table (each workbook read once)."""
         if id(wb) not in self._shapes:
@@ -418,6 +429,14 @@ class RowFinder:
                            how=max(ev.items(), key=lambda kv: self.WEIGHTS[kv[0]] * kv[1][0])[0],
                            evidence=[(n, tx) for n, (_, tx) in sorted(ev.items(), key=lambda kv: -self.WEIGHTS[kv[0]] * kv[1][0])])
                 res["alternatives"] = [a for a in res["alternatives"] if a["row"] != f"{k[0]}!r{k[1]}"]
+                # last year's history, and every other candidate the same series in every period: which of them is
+                # meant doesn't change a figure (a model carries one line on several sheets)
+                others = [x[2] for x in ranked[1:4]]
+                if res["confidence"] < CONFIDENT and "history" in ev and ev["history"][0] >= 0.5 and others \
+                        and all(self._same_series(k, o) for o in others):
+                    res["confidence"] = CONFIDENT
+                    res["evidence"].append(("history", f"the other {len(others)} candidate(s) are the same series in every "
+                                                       "period: whichever is meant, the figures are these"))
         if not (res["found"] and (res["confidence"] >= CONFIDENT or res["in_place"])) and self.blank(s, r):
             res.update(found=None, how="nothing to find", confidence=1.0, in_place=False, stand_in=True, blank=True,
                        by="code", evidence=[("code", "last year's row has no label, no numbers and no formulas: nothing "

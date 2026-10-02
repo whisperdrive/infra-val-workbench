@@ -18,7 +18,7 @@ low and the high; the mid is their average, as for the value, except where the m
   mid_period       recomputed at the middle of each period
   mid_year         recomputed with the mid-year convention (half a year before each period's end)
   day_count        recomputed on the other day count (actual/actual for actual/365, and the other way)
-  mid_rate         the mid at the midpoint of the two rates, not the average of the low's and the high's values
+  mid_rate         the mid with both ends at the midpoint of the two rates, rather than each at its own rate
 
 A method that can't be worked out here says why. The preferred method (a person's, else the default) is this year's
 value: the bridge then has a step of its own for the move from the default to it (apply).
@@ -41,8 +41,8 @@ METHODS = (
     ("mid_period", "Recomputed: mid-period", "Each cash flow discounted from the middle of its period"),
     ("mid_year", "Recomputed: mid-year", "Each cash flow discounted from half a year before its period's end"),
     ("day_count", "Recomputed: the other day count", "Years counted the other way (actual/actual or actual/365)"),
-    ("mid_rate", "The mid at the midpoint rate", "The mid worked out at the midpoint of the two discount rates, not as "
-                                                "the average of the low's and the high's values"),
+    ("mid_rate", "The mid at the midpoint rate", "The mid with both ends at the midpoint of the two discount rates, "
+                                                "rather than each end at its own rate"),
 )
 LABEL = {k: label for k, label, _ in METHODS}
 
@@ -183,9 +183,10 @@ def inventory(sess, summary: dict, where: dict, unit, rate_now: dict | None, pre
             mid_r = (rate["low"]["value"] + rate["high"]["value"]) / 2
             ends = {c: mid_r for e in ("low", "high") for c in rate[e]["cells"]}
     if ends:
+        # each end at the midpoint rate, averaged: what else sets the ends apart (an exit multiple) stays averaged
         at = _ends(sess, summary, where, unit, {ov.parse_a1(c): v for c, v in ends.items()})
-        if at["low"] is not None:
-            got["mid_rate"] = {"low": None, "high": None, "mid": at["low"]}
+        if at["low"] is not None and at["high"] is not None:
+            got["mid_rate"] = {"low": None, "high": None, "mid": (at["low"] + at["high"]) / 2}
     else:
         why["mid_rate"] = "the discount rate isn't sourced to a cell at both ends"
     base = got["overlay"]
