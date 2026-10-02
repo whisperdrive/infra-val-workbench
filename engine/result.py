@@ -131,6 +131,11 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
     if w.get("current") and sess.rowmap:
         out["feeds"]["this_year"] = "current"
         out["gaps"] = _gaps(sess, summary, cells)
+        # the roll moves each discounting on by its rate: where one is far off, its dates don't move together
+        out["time"] = time_check(sess, summary, cells)
+        if out["time"] and out["time"]["hold"]:
+            out["gaps"]["reliable"] = False
+            out["gaps"]["time_off"] = [x for x in out["time"]["discountings"] if abs(x["off"]) > TIME_HOLD]
         got, out["roll"], _, _ = _read(sess, summary, "current", keys)
         out["this_year"] = {c: ov._show(got[k]) for c, k in zip(cells, keys)}
         out["cut_off"] = len(sess.cut)  # the discountings' periods before the new date, cut off on this year's feed
@@ -151,6 +156,131 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
 
 
 FOUND_MIN = 0.9  # a figure not under a discounting: this share of its client reads found in this year's model
+TIME_CHECK = 0.005  # a discounting moving on by a rate this far from its own (a year): a point to check
+TIME_HOLD = 0.015  # and this far: its dates don't move together, and this year's value is held back
+
+
+def _rows_read(tree: dict) -> set[tuple]:
+    """Every row a formula in the tree reads, long ranges too (an operand row, not followed cell by cell)."""
+    out = set()
+
+    def walk(n):
+        here = dcf._ref(n["cell"], "")[0] if n.get("cell") else ""
+        for m in dcf._FREF.finditer(n.get("formula") or ""):
+            r = dcf._ref(m[0], here)
+            if r:
+                out.update((r[0], row) for row in range(r[1], r[3] + 1))
+        for ch in n.get("children") or []:
+            walk(ch)
+    walk(tree)
+    return out
+
+
+def time_check(sess, summary: dict, cells: list[str]) -> dict | None:
+    """Whether the roll moves each discounting on by its own rate: this year's model at last year's date (the zero
+    roll, the periods to the new date cut off) against the roll at last year's rate, each discounting's present value
+    of the same cash flows. Rolled a year at 10%, a discounting's present value grows by 10%; where it doesn't, its
+    dates don't move together (cash flow dates counted from one cell, discount periods from a copy of it) and the
+    value is wrong, however plausible it looks. The same cash flows in both runs, matched by their amounts (this
+    year's model gives them either way, in whichever column the overlay puts them); a terminal value worked out again
+    from the periods before it, or a period only one run has, isn't matched. The discountings under the figures, and
+    another output's of the rows their formulas read; not an XNPV or an NPV (they count from their own first date or
+    column, which the roll doesn't move), nor factors worked out inside a formula. The session is left on the
+    workbook feed. -> {"t", "discountings": [{"cell", "rate", "ratio", "implied", "off", "ok"}],
+    "measured", "ok", "hold"}, or None where there's no roll."""
+    roll = summary.get("roll") or {}
+    months = roll.get("months") or 0
+    if not months or sess.base_vd is None or not sess.current:
+        return None
+    db = rodb.connect(summary["wiring"]["overlay"]["db_path"])
+    traced = [x for x in (_traced(db, c) for c in cells) if x]
+    read = set().union(set(), *(_rows_read(t) for t, _ in traced))
+    row_of = lambda rng: (lambda x: (x[0], x[1]))(dcf._row_range(db, rng)) if rng else None
+    # the discountings under the figures, and another output's of the rows their formulas read (a sum of the present
+    # values the figure adds up with a SUMIF): not a discounting of its own elsewhere (a value bridge's)
+    cores = {(c["cell"], c["call"]): c for _, cs in traced for c in cs}
+    for c in ov._cores(db, summary.get("outputs") or []):
+        if c.get("inputs") and row_of(c.get("pv_row") or c.get("factor_row")) in read:
+            cores.setdefault((c["cell"], c["call"]), c)
+    plan = []
+    for c in cores.values():
+        i = c.get("inputs")
+        if not i or c.get("kind") in ("xnpv", "npv") or not (c.get("pv_row") or c.get("factor_row")):
+            continue
+        try:
+            rate = dcf.resolve(db, i["rate"])[0]
+            if c.get("pv_row"):
+                terms = [[dcf._row_range(db, c["pv_row"])]]
+            else:
+                rows = [dcf._row_range(db, c["factor_row"])] + [dcf._row_range(db, m) for m in c.get("mask") or []]
+                terms = [[dcf._row_range(db, cf)] + rows for cf in i["cashflow"]]
+            flows = [dcf._row_range(db, cf) for cf in i["cashflow"]]
+        except (ValueError, KeyError):
+            continue
+        if isinstance(rate, (int, float)) and not isinstance(rate, bool):
+            plan.append((c, float(rate), terms, flows))
+    if not plan:
+        return {"measured": 0, "ok": None, "hold": False, "discountings": [],
+                "why": "no discounting under the figures is read exactly, so the roll's time can't be measured"}
+    keys = {(s, r, col) for _, _, terms, flows in plan for rows in terms + [flows] for s, r, cols in rows for col in cols}
+
+    def run(d, m, cut_to=None):
+        try:
+            sess.configure("current", d, m)
+            if cut_to is not None:
+                sess.cut |= sess._cut_off(cut_to)
+                sess.B.range_cache.clear()
+            return dict(zip(keys, sess.values(list(keys))))
+        finally:
+            sess.configure("workbook")
+
+    def measure(got, terms, flows):
+        """Each column's (cash flow, present value), in column order, where both are there."""
+        num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
+        n = len(terms[0][0][2])
+        pv = [0.0] * n
+        for rows in terms:
+            for k in range(n):
+                x = 1.0
+                for s, r, cols in rows:
+                    x *= num(got.get((s, r, cols[k])))
+                pv[k] += x
+        cf = [sum(num(got.get((s, r, cols[k]))) for s, r, cols in flows if k < len(cols)) for k in range(n)]
+        return [(cf[k], pv[k]) for k in range(n) if cf[k] and pv[k]]
+
+    def matched(a, b):
+        """The same cash flows in both runs, by their amounts (this year's model gives them either way, in whichever
+        column the overlay puts them), an amount met more than once matched in column order: (pv a, pv b) pairs. A
+        terminal value worked out again, or a period one run has and the other doesn't, isn't matched."""
+        key = lambda x: float(f"{x:.9g}")
+        pool = {}
+        for cf, pv in a:
+            pool.setdefault(key(cf), []).append(pv)
+        out = []
+        for cf, pv in b:
+            got = pool.get(key(cf))
+            if got:
+                out.append((got.pop(0), pv))
+        return out
+
+    t = (ov.add_months(sess.base_vd, months) - sess.base_vd) / 365.0
+    then, _, _ = ov._feed(summary, "current", ov.to_date(sess.base_vd).isoformat(), 0, held=False, rates=False)
+    now, _, m = ov._feed(summary, "current", None, None, held=False, rates=False)
+    z, v = run(then, 0, months), run(now, m or 0)
+    out = []
+    for c, rate, terms, flows in plan:
+        pairs = matched(measure(z, terms, flows), measure(v, terms, flows))
+        pz, pv = sum(p for p, _ in pairs), sum(q for _, q in pairs)
+        if not pairs or not pz or pv / pz <= 0:
+            continue
+        ratio = pv / pz
+        implied = ratio ** (1 / t) - 1
+        out.append({"cell": c["cell"], "label": c.get("cashflow_label") or None, "periods": len(pairs),
+                    "rate": rate, "ratio": ratio, "implied": implied, "off": implied - rate,
+                    "ok": abs(implied - rate) <= TIME_CHECK})
+    return {"t": t, "discountings": out, "measured": len(out), "ok": all(x["ok"] for x in out) if out else None,
+            "hold": any(abs(x["off"]) > TIME_HOLD for x in out),
+            "why": None if out else "no discounting under the figures has a present value after the new date to measure"}
 
 
 def _moves(sess, summary: dict, keys: list[tuple], base: dict, row: tuple, cols: set) -> bool:

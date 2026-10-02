@@ -733,6 +733,11 @@ def _rows_job(eid: int, key: str):
     return "done", f"the row agents found {n} row(s) the finder wasn't sure of" if n else "this year's rows found", {}
 
 
+def _time_text(x: dict, t: float) -> str:
+    return (f"{x['cell']} grows {x['ratio'] - 1:+.1%} over {t:.2f} year(s), {x['implied']:.2%} a year against its rate "
+            f"of {x['rate']:.2%}")
+
+
 def _result_job(eid: int, key: str):
     import overlay as ovmod
     import result
@@ -763,6 +768,14 @@ def _result_job(eid: int, key: str):
                           "detail": "; ".join(f"{x['cell']} reads {x['date']}" for x in off[:4]) +
                                     f", not {dc.get('to')}: its date isn't one the roll-forward moves",
                           "go": {"step": "workbench", "anchor": "datesCard"}})
+        if g.get("time_off"):
+            t = (res["figures"].get("time") or {}).get("t") or 0
+            needs.append({"id": "time", "stage": "result", "severity": "block",
+                          "title": "This year's value is held back: the roll doesn't move a discounting on by its rate",
+                          "detail": "; ".join(_time_text(x, t) for x in g["time_off"][:4]) + ": its cash flow dates and "
+                                    "its discount periods don't move together (one counted from the valuation date's input, "
+                                    "the other from a copy of it, say), or its date isn't one the roll moves",
+                          "go": {"step": "workbench", "anchor": "datesCard"}})
         rows = [x["row"] + (f" ({x['label']})" if x.get("label") else "") for x in
                 g["dcf_missing"] + g["blank_rows"] + g["weak_rows"] + g["timing_open"]]
         zero = [c for c, x in g["by_cell"].items() if not x["zero_roll"]["ok"]]
@@ -773,6 +786,19 @@ def _result_job(eid: int, key: str):
                                     (f"; the zero-roll check fails on {', '.join(zero)}" if zero else "") +
                                     ("; this year's valuation date isn't known" if g.get("date_check") else ""),
                           "go": {"step": "result", "anchor": "rowsCard"}, "rows": rows})
+    tc = res["figures"].get("time") or {}
+    near = [x for x in tc.get("discountings") or [] if not x["ok"] and x not in ((g or {}).get("time_off") or [])]
+    if near:
+        needs.append({"id": "time-check", "stage": "result", "severity": "check",
+                      "title": "The roll moves a discounting on by a little more or less than its rate",
+                      "detail": "; ".join(_time_text(x, tc.get("t") or 0) for x in near[:4]) + ": a convention that "
+                                "doesn't move evenly (a part-period stub), or a date that doesn't quite move with the rest",
+                      "go": {"step": "workbench", "anchor": "datesCard"}})
+    if g and tc and not tc.get("measured"):
+        needs.append({"id": "time-none", "stage": "result", "severity": "info",
+                      "title": "The roll's time value isn't measured",
+                      "detail": (tc.get("why") or "") + ": that each discounting moves on by its rate is a person's to check",
+                      "go": {"step": "result", "anchor": "bridgeCard"}})
     if g and not dc.get("moved"):
         needs.append({"id": "dates-none", "stage": "result", "severity": "check",
                       "title": "No valuation date cell was found to move",

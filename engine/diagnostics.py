@@ -252,6 +252,11 @@ def _result(eid: int, res: dict) -> dict:
                      "date_by_label": bool((g.get("date_cells") or {}).get("by_label"))}
         # the cells' names aren't the client's words, but keep them out anyway: the ends, in order
         r["gate"]["zero_roll"] = list(r["gate"]["zero_roll"].values())
+        tc = (res.get("figures") or {}).get("time") or {}
+        if tc:
+            r["gate"]["time"] = {"measured": tc.get("measured"), "ok": tc.get("ok"), "hold": tc.get("hold"),
+                                 "off_bp": [round(1e4 * x["off"]) for x in tc.get("discountings") or []],
+                                 "flows_matched": [x["periods"] for x in tc.get("discountings") or []]}
         if sess is not None and sess.rowmap:
             origins = set(g.get("dcf_origins") or [])
             rows = [(k, x) for k in ("dcf_missing", "blank_rows", "weak_rows", "timing_open", "rebuilt_rows")
@@ -331,7 +336,7 @@ _KEYS = {"app", "generated", "files", "reports", "workbooks", "roles", "placed",
          "chart", "years", "found", "discountings", "readable", "calls", "roll", "months", "date_check", "fixed_horizon",
          "date_cells_moved", "date_cells_read", "gate", "reliable", "no_reads", "reads", "unmatched", "found_share",
          "dcf_rows", "dcf_missing", "blank_rows", "weak_rows", "timing_open", "zero_roll", "date_cells_off",
-         "date_by_label", "family", "rows", "frequency", "units_scale", "timing", "units_from_facts", "kind", "confidence", "has_formula", "adds_up", "reads_rows", "read_by_cells",
+         "date_by_label", "family", "rows", "time", "measured", "hold", "off_bp", "flows_matched", "frequency", "units_scale", "timing", "units_from_facts", "kind", "confidence", "has_formula", "adds_up", "reads_rows", "read_by_cells",
          "feeds_dcf", "values", "candidates", "candidates_with_figures", "redacted", "rebuilt", "rebuilt_rows", "how",
          "copies_passed_over", "low", "high", "mid", "rate_this_year", "set", "applied", "cut_off",
          "methods", "preferred", "ties", "flags", "each", "key", "vs_default",

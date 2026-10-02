@@ -117,7 +117,14 @@ takes it from there:
    - the rows its cash flows come from weren't found (or were found blank, or not surely);
    - a discounting still reads another date than this year's valuation date;
    - the overlay reads nothing of this year's client model (last year's figures, rolled by date alone);
-   - the zero-roll check fails: at last year's valuation date, this year's model is far from last year's value.
+   - the zero-roll check fails: at last year's valuation date, this year's model is far from last year's value;
+   - the time check fails: the roll doesn't move a discounting on by its own rate. This year's model at last year's
+     date (the periods to the new date cut off) against the roll at last year's rate, each discounting's present
+     value of the same cash flows, matched by their amounts: rolled a year at 10%, it grows 10%. Where a discounting's
+     cash flow dates and its discount periods don't move together (one counted from the valuation date's input, the
+     other from a copy of it), it doesn't, and the value is wrong however plausible it looks. More than 1.5% a year off
+     its rate holds the value back (`result.TIME_HOLD`); more than 0.5% is a point to check (`result.TIME_CHECK`).
+     Where no discounting under the value is read exactly, the time isn't measured, and the page says so.
 
    A move of more than about 15% at last year's date (`overlay.ZERO_ROLL_CHECK`, a judgment call) doesn't hold the
    value but asks you to confirm it's the new forecast and not a row matched wrongly.

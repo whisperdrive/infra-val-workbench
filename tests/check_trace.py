@@ -256,8 +256,11 @@ def cutoff_check() -> None:
     last year's model has nothing on or before last year's date, so the overlay never needed a cut-off. This year's
     model, on the same quarters (a fixed horizon), has the year between the two dates filled in: without the cut-off
     those quarters are compounded into this year's value; with it, the value is the quarters after the new date (the
-    one ending on it is past too, the convention dcf keeps; kept, it's in undiscounted: a method of its own)."""
+    one ending on it is past too, the convention dcf keeps; kept, it's in undiscounted: a method of its own). And the
+    roll moves the discounting on by its own rate (the time check); with the valuation date left where it was, it
+    doesn't, and this year's value is held back."""
     import overlay as ov
+    import result
     import xlcompile
     from xlruntime import serial
     out = Path(tempfile.mkdtemp(prefix="trace_cutoff_"))
@@ -332,9 +335,16 @@ def cutoff_check() -> None:
     sess.configure("current", {}, 0)
     assert {k[2] for k in sess.cut} == {c for (_, _, c, e, *_) in cut if e <= serial(vd)}, sorted(sess.cut)
     sess.configure("workbook")
+    summary = {"wiring": {"overlay": {"db_path": db}}, "sheets": ["Val"], "roll": roll, "held_values": {},
+               "outputs": [{"cell": "Val!C16"}]}
+    tc = ov.deep(result.time_check, sess, summary, ["Val!C16"])
+    assert tc["measured"] == 1 and tc["ok"] and not tc["hold"] and abs(tc["discountings"][0]["off"]) < 1e-6, tc
+    stuck = ov.deep(result.time_check, sess, {**summary, "roll": {**roll, "valuation_date_cells": [], "valuation_date_cell": None}},
+                    ["Val!C16"])
+    assert stuck["hold"] and abs(stuck["discountings"][0]["implied"]) < 1e-6, stuck
     print(f"cut-off: ok (rolled a year onto a fixed horizon, the {sum(1 for e in ends if vd < e <= new)} quarters to the "
           f"new date are cut off this year's discounting: {got:,.1f}, not {without:,.1f} with them compounded in; the one "
-          f"ending on the date kept, {kept:,.1f})")
+          f"ending on the date kept, {kept:,.1f}; moved on by its rate, and held back where the date isn't moved)")
 
 
 def masked_check() -> None:
