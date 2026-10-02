@@ -140,7 +140,7 @@ def fallback(c: dict, filename: str) -> dict:
 
 
 PROMPT = """You are checking an Excel valuation model. From the candidate cells below, identify:
-- target_name: the company or asset being valued (a real-world name, e.g. an airport or company, not a code name)
+- target_name: the company or asset being valued (its real-world name, not a code name)
 - project_name: the deal code name if there is one (e.g. "Project X"), else null
 - valuation_date: the date the valuation is as at, YYYY-MM-DD (not the model date, acquisition date or a log entry).
   Prefer a named range or a row labelled exactly "Valuation date" (rank 0) over rows that only mention one. Never

@@ -17,6 +17,7 @@ range, WACC, gearing, beta, terminal value, ...), with charts and links to anoth
 The adviser's own name is a strong sign too; it stays out of this public code: put it in .env as
 VALUATION_DESK_OVERLAY_MARKERS (comma separated) and it is searched in the text, sheet names and file properties.
 """
+import json
 import os
 import re
 import threading
@@ -63,8 +64,12 @@ def norm(s) -> str:
     return re.sub(r"[^a-z]+", " ", s).strip()
 
 
-def markers() -> list[str]:
-    """The adviser's names to look for (VALUATION_DESK_OVERLAY_MARKERS in .env), lower case."""
+SETTINGS = Path(__file__).resolve().parent.parent / "brand" / "settings.json"  # git-ignored: stays on this machine
+BUILT_IN = ("adviser", "advisor", "overlay")  # the adviser's names the code knows; a firm's own are a setting
+
+
+def env_markers() -> list[str]:
+    """The adviser's names in VALUATION_DESK_OVERLAY_MARKERS in .env (comma separated), as typed."""
     raw = os.environ.get("VALUATION_DESK_OVERLAY_MARKERS", "")
     if not raw:
         try:
@@ -73,7 +78,38 @@ def markers() -> list[str]:
                     raw = line.split("=", 1)[1].strip().strip('"').strip("'")
         except OSError:
             pass
-    return [m.strip().lower() for m in raw.split(",") if m.strip()]
+    return [m.strip() for m in raw.split(",") if m.strip()]
+
+
+def saved_markers() -> list[str]:
+    """The adviser's names a person added in Settings (brand/settings.json), as typed."""
+    try:
+        names = json.loads(SETTINGS.read_text(encoding="utf-8")).get("adviser_names") or []
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [str(m).strip() for m in names if str(m).strip()]
+
+
+def save_markers(names: list[str]) -> list[str]:
+    """Keep the adviser's names in brand/settings.json (the other settings there kept), each once."""
+    seen, out = set(), []
+    for m in (str(n).strip() for n in names):
+        if m and m.lower() not in seen:
+            seen.add(m.lower()); out.append(m)
+    try:
+        data = json.loads(SETTINGS.read_text(encoding="utf-8"))
+        data = data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        data = {}
+    data["adviser_names"] = out
+    SETTINGS.parent.mkdir(exist_ok=True)
+    SETTINGS.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return out
+
+
+def markers() -> list[str]:
+    """The adviser's own names to look for (.env's and those added in Settings), lower case, each once."""
+    return list(dict.fromkeys(m.lower() for m in env_markers() + saved_markers()))
 
 
 # ---- the file itself ------------------------------------------------------------------------------------------
@@ -134,7 +170,7 @@ def file_facts(path: str) -> dict:
 def signature(wb: dict) -> dict:
     """wb: {"db_path", "source_path", "filename"}. Cached per model.db."""
     path = wb["db_path"]
-    key = (path, os.path.getmtime(path), wb.get("source_path"))
+    key = (path, os.path.getmtime(path), wb.get("source_path"), tuple(markers()))
     with _LOCK:
         if key in _CACHE:
             return _CACHE[key]

@@ -36,20 +36,35 @@ VALUATION_KEYS = re.compile(r"discount|wacc|terminal|exit_multiple|rab|valuation
                             r"sensitivity|cost_of_equity", re.I)
 NAME_HINT = re.compile(r"val|dcf|wacc|overlay|sensitiv", re.I)
 DIVIDER = re.compile(r"^\s*<.*|.*>\s*$")  # a tab that only heads the sheets after it: "Adviser>>", "Client>", "<< Inputs"
-# the adviser's own names come from VALUATION_DESK_OVERLAY_MARKERS in .env, so the code names no firm
-_ADVISER = "|".join(re.escape(m) for m in ["adviser", "advisor", "overlay", *likeness.markers()])
-ADVISER_TAB = re.compile(rf"^(?:{_ADVISER}|valuation|val|dcf)\b", re.I)
-ADVISER_NAME = re.compile(rf"^(?:{_ADVISER})\b", re.I)  # a client's model can have a "Valuation>" section too
+# the adviser's own names are a setting (likeness.markers: Settings, or .env), so the code names no firm
+
+
+def _adviser(*more: str) -> re.Pattern:
+    names = [*likeness.BUILT_IN, *likeness.markers()]
+    return re.compile(r"^(?:%s)(?!\w)" % "|".join([*map(re.escape, names), *more]), re.I)
+
+
+def adviser_tab() -> re.Pattern:
+    """The divider names that are the adviser's, valuation words too."""
+    return _adviser("valuation", "val", "dcf")
+
+
+def adviser_name() -> re.Pattern:
+    """The divider names that are the adviser's by name only (a client's model can have a "Valuation>" section too)."""
+    return _adviser()
+
+
 COPY_SHARE = 0.8  # of the sheets outside the adviser's tabs in last year's client model: the workbook is a copy of it
 
 
-def adviser_sheets(db_path: str, names: list[str], prior_names: list[str], tab: re.Pattern = ADVISER_TAB) -> list[str] | None:
+def adviser_sheets(db_path: str, names: list[str], prior_names: list[str], tab: re.Pattern | None = None) -> list[str] | None:
     """The overlay's own sheets, where its workbook is a copy of the client model with the adviser's sheets grouped
     behind a divider tab ("Adviser>>" then its sheets, up to the next divider, "Client>>"): the tabs behind an adviser's
     divider, the divider too. Only where most of the sheets outside them are last year's client model's (a copy of
     it): a standalone overlay's own tabs ("Outputs >", "Workings>>") are all the overlay's. None otherwise
     (another version of the model having the same sheets can't tell the overlay's from the client's here).
-    tab: the dividers that are the adviser's; where it isn't known yet which workbook is the overlay, ADVISER_NAME."""
+    tab: the dividers that are the adviser's; where it isn't known yet which workbook is the overlay, adviser_name(). Default adviser_tab()."""
+    tab = tab or adviser_tab()
     if not any(DIVIDER.match(s) and tab.match(s.strip("<> ")) for s in names):
         return None
     db = rodb.connect(db_path)
@@ -282,7 +297,7 @@ def suggest(reports: list[dict], workbooks: list[dict], facts: list[dict]) -> di
         seed = {s: r for s, r in sp["extra"].items() if r or prof["sheets"].get(s, {}).get("anchors")}
         # the adviser's tabs ("Adviser>>" up to "Client>>") in a copy of a client model another workbook here has: one more
         # sign of the overlay, as the adviser's name is (not every overlay is laid out so)
-        tabs = next(filter(None, (adviser_sheets(wb["db_path"], sig["sheets"], o["sheets"], ADVISER_NAME)
+        tabs = next(filter(None, (adviser_sheets(wb["db_path"], sig["sheets"], o["sheets"], adviser_name())
                                   for j, o in st["sigs"].items() if j != wb["id"])), None)
         ov, cl = split(prof, seed, shared, tabs)
         if sp["standalone"] and not tabs and len(workbooks) > 1:  # a separate valuation workbook: every sheet is overlay work

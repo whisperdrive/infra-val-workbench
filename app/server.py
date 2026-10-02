@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "engine"))
 import library  # noqa: E402
+import likeness  # noqa: E402
 import orchestrator  # noqa: E402
 import usage  # noqa: E402
 import workbench  # noqa: E402
@@ -134,6 +135,33 @@ def config():
             "default_arbiter": workbench.DEFAULT_ARBITER, "roles": workbench.rolesmod.ROLES,
             "stages": [{"stage": s, "label": orchestrator.LABEL[s]} for s in orchestrator.STAGES],
             "runtime": xlruntime.RUNTIME}
+
+
+class Settings(BaseModel):
+    adviser_names: list[str]
+
+
+def _settings() -> dict:
+    return {"adviser_names": likeness.saved_markers(), "from_env": likeness.env_markers(),
+            "built_in": list(likeness.BUILT_IN), "file": "brand/settings.json"}
+
+
+@app.get("/api/settings")
+def settings_get():
+    """The adviser's own names (kept on this machine, never committed), the .env's and the ones the code knows."""
+    return _settings()
+
+
+@app.put("/api/settings")
+def settings_put(s: Settings):
+    names = [n.strip() for n in s.adviser_names if n.strip()]
+    if len(names) > 30:
+        raise HTTPException(400, "30 names at most")
+    bad = next((n for n in names if len(n) > 40 or any(ord(c) < 32 for c in n)), None)
+    if bad is not None:
+        raise HTTPException(400, "a name is 40 characters at most, on one line")
+    likeness.save_markers(names)
+    return _settings()
 
 
 # ---- engagements and files ----------------------------------------------------------------------------------------

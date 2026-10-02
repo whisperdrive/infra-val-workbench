@@ -340,6 +340,10 @@ dialog#uploadDlg { border: 1px solid var(--rule-strong); border-radius: 10px; ba
 .dlg-head { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--rule); background: var(--surface); position: sticky; top: 0; z-index: 1; }
 .dlg-head h2 { margin: 0; font-size: 16px; flex: 1; }
 .dlg-body { padding: 16px 18px 22px; display: grid; gap: 16px; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--rule); border-radius: 99px; padding: 2px 4px 2px 10px; font-size: 12.5px; background: var(--surface); }
+.tag.fixed { padding-right: 10px; color: var(--muted, inherit); }
+.tag button { border: 0; background: none; cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 4px; color: inherit; }
 .transcript pre { white-space: pre-wrap; word-break: break-word; background: var(--code-bg); padding: 10px 12px; border-radius: 4px; font: 12px/1.5 var(--mono); max-height: 420px; overflow: auto; margin: 4px 0 10px; }
 @media (max-width: 640px) { .hbar { flex-wrap: nowrap; gap: 8px; padding: 8px 56px 8px 16px; } .brand .name, .brand .sub, .hctl .lbl, #hdrCtl { display: none; }
   .brand .logo { height: 30px; } .hctl { flex: 0 1 auto; min-width: 0; } .hctl select { max-width: 100%; min-width: 0; } #themeBtn { top: 9px; }
@@ -365,7 +369,7 @@ dialog#uploadDlg { border: 1px solid var(--rule-strong); border-radius: 10px; ba
     <div class="hctl" id="hdrCtl" hidden>
       <button class="chip" id="spend" type="button" title="Tokens, time and the log of every model call">$0.00</button>
     </div>
-    <div class="hctl"><button class="hbtn" id="menuBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More: new engagement, models, call log, delete">⋯</button></div>
+    <div class="hctl"><button class="hbtn" id="menuBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More: new engagement, models, call log, settings, delete">⋯</button></div>
     <div class="popover menu-list" id="menuPop" hidden role="menu">
       <button type="button" role="menuitem" id="allBtn">All engagements</button>
       <button type="button" role="menuitem" id="newEng">New engagement</button>
@@ -373,6 +377,7 @@ dialog#uploadDlg { border: 1px solid var(--rule-strong); border-radius: 10px; ba
       <button type="button" role="menuitem" id="callsBtn" data-e>Tokens and the call log</button>
       <button type="button" role="menuitem" id="diagMenu" data-e title="The run described without a word of the client's: counts, yes / no, ratios, dates and the app's own words. Safe to paste where the files can't go.">Export diagnostics (anonymised)</button>
       <button type="button" role="menuitem" id="wpMenu" data-e data-r title="The result, the bridge, the cash flows, the inputs and their checks, the facts, the review and the run log, as an Excel file">Export the workpaper (Excel)</button>
+      <button type="button" role="menuitem" id="setBtn" title="Your firm's names for its tabs and files: kept on this machine, never committed">Settings…</button>
       <button type="button" role="menuitem" id="delEng" class="danger" data-e title="Delete this engagement and everything worked out for it, to run the same files again from the start">Delete this engagement…</button>
     </div>
     <button class="hbtn icon" id="themeBtn" type="button" aria-pressed="false"></button>
@@ -401,6 +406,7 @@ dialog#uploadDlg { border: 1px solid var(--rule-strong); border-radius: 10px; ba
   <div class="row" style="justify-content:flex-end"><button class="btn" type="button" id="delCancel">Cancel</button><button class="btn danger" type="button" id="delGo" disabled>Delete</button></div>
 </div></dialog>
 <dialog id="uploadDlg" aria-labelledby="upTitle"><div class="dlg-head"><h2 id="upTitle">Upload the four files</h2><button class="btn small" type="button" id="upClose">Close</button></div><div class="dlg-body" id="upBody"></div></dialog>
+<dialog id="setDlg" aria-labelledby="setTitle"><div class="dlg-head"><h2 id="setTitle">Settings</h2><button class="btn small" type="button" id="setClose">Close</button></div><div class="dlg-body" id="setBody"><p class="muted">Loading…</p></div></dialog>
 <dialog id="callsDlg" aria-labelledby="callsTitle"><div class="dlg-head"><h2 id="callsTitle">Tokens, time and the call log</h2><button class="btn small" type="button" id="callsClose">Close</button></div><div class="dlg-body" id="callsBody"><p class="muted">Loading…</p></div></dialog>
 <div class="shell" id="shell">
   <div class="content"><div id="now" class="nowbox" hidden></div><main id="main"></main></div>
@@ -589,6 +595,35 @@ function menu(open) { $("#menuPop").hidden = !open; $("#menuBtn").setAttribute("
 $("#menuBtn").onclick = e => { e.stopPropagation(); menu($("#menuPop").hidden); };
 document.addEventListener("click", e => { if (!$("#menuPop").hidden && !e.target.closest("#menuPop, #menuBtn")) menu(false); });
 $("#callsBtn").onclick = () => { menu(false); openCalls(); };
+$("#setBtn").onclick = () => { menu(false); openSettings(); };
+$("#setClose").onclick = () => $("#setDlg").close();
+let SET = null;
+async function openSettings() {
+  if (!$("#setDlg").open) $("#setDlg").showModal();
+  try { SET = await api("/api/settings"); } catch (err) { $("#setBody").innerHTML = `<p class="small">${esc(err.message)}</p>`; return; }
+  renderSettings();
+}
+function renderSettings() {
+  const fixed = n => `<span class="tag fixed">${esc(n)}</span>`;
+  $("#setBody").innerHTML = `<section>
+    <h3 style="margin:0 0 4px;font-size:14px">Your firm's names</h3>
+    <p class="small muted" style="margin:0 0 8px">The names your firm uses for its own tabs and files, as typed: a divider tab like “<i>Name</i>&gt;&gt;” ahead of the overlay's sheets in a copy of the client model, or the name in a cell or the file's properties. They help tell the overlay from the client's models when the roles are suggested. Kept on this machine in <span class="mono">${esc(SET.file)}</span>, never committed and never in the diagnostics.</p>
+    <div class="tags" id="setTags">${SET.adviser_names.map((n, i) => `<span class="tag">${esc(n)}<button type="button" data-i="${i}" aria-label="Remove ${esc(n)}" title="Remove">×</button></span>`).join("") || '<span class="small muted">None added yet.</span>'}</div>
+    <form class="row" id="setAdd" style="margin-top:8px"><input class="in" id="setName" maxlength="40" autocomplete="off" spellcheck="false" placeholder="A name, e.g. your firm's short name" aria-label="A name to add"><button class="btn small primary" type="submit">Add</button></form>
+    <p class="small muted" style="margin:10px 0 4px">Always looked for: ${SET.built_in.map(fixed).join(" ")}${SET.from_env.length ? `; from <span class="mono">.env</span>: ${SET.from_env.map(fixed).join(" ")}` : ""}</p>
+    <p class="small muted" style="margin:0">Applies to roles suggested from now on: for an engagement already set up, suggest its roles again.</p>
+  </section>`;
+  const save = async names => {
+    try { SET = await api("/api/settings", {method: "PUT", body: {adviser_names: names}}); renderSettings(); toast("Settings saved on this machine"); }
+    catch (err) { toast(err.message, 6000); }
+  };
+  $("#setTags").querySelectorAll("button[data-i]").forEach(b => b.onclick = () => save(SET.adviser_names.filter((_, i) => i !== +b.dataset.i)));
+  $("#setAdd").onsubmit = e => {
+    e.preventDefault();
+    const v = $("#setName").value.trim();
+    if (v) save([...SET.adviser_names, v]).then(() => $("#setName")?.focus());
+  };
+}
 $("#wpMenu").onclick = () => { menu(false); if (E) location.href = workpaperUrl(); };
 $("#diagMenu").onclick = () => { menu(false); if (E) location.href = `/api/engagements/${E.id}/diagnostics.json`; };
 const workpaperUrl = () => `/api/engagements/${E.id}/workpaper.xlsx`;

@@ -39,6 +39,7 @@
     uv run python tests/make_pack.py && uv run python tests/check_workbench.py
 """
 import json
+import os
 import re
 import shutil
 import sys
@@ -469,8 +470,23 @@ def adviser_tabs_check() -> None:
     assert rolesmod.adviser_sheets(db, names, ["Inputs", "Ops", "Fin", "Scratch"]) == ["Adviser>>", "Valuation", "PFI"]
     # a standalone overlay: little of the rest is the client model's
     assert rolesmod.adviser_sheets(db, names, ["Ops"]) is None
+    # a firm's own name for its divider is a setting (brand/settings.json, here a temporary one), not in the code
+    import likeness
+    saved, env = likeness.SETTINGS, os.environ.pop("VALUATION_DESK_OVERLAY_MARKERS", None)
+    likeness.SETTINGS = out / "settings.json"
+    try:
+        named = ["XY>>" if s == "Adviser>>" else s for s in names]
+        assert rolesmod.adviser_sheets(db, named, names, rolesmod.adviser_name()) is None
+        assert likeness.save_markers([" XY ", "xy", ""]) == ["XY"] and likeness.markers() == ["xy"]
+        assert rolesmod.adviser_sheets(db, named, names, rolesmod.adviser_name()) == ["XY>>", "Valuation", "PFI"]
+        assert not rolesmod.adviser_name().match("XYZ") and not rolesmod.adviser_name().match("Valuation")
+    finally:
+        likeness.SETTINGS = saved
+        if env is not None:
+            os.environ["VALUATION_DESK_OVERLAY_MARKERS"] = env
     print("adviser tabs: ok (the sheets behind the Adviser>> tab are the overlay's own, the rest its copy of the client "
-          "model; a standalone overlay's tabs leave it whole)")
+          "model; a standalone overlay's tabs leave it whole; a firm's own name for the tab is a setting kept on this "
+          "machine)")
 
 
 def copies_check() -> None:
