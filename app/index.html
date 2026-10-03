@@ -1485,6 +1485,7 @@ function viewRebuild() {
   ${equityPickCard()}
   ${off > 0 ? `<details class="card fold" data-k="mismatches"><summary><span class="ft">${off} cell(s) Python computes differently from Excel</span></summary><div class="fold-body scroll"><table><thead><tr><th>Cell</th><th>Line item</th><th class="num">Python</th><th class="num">Excel</th><th>Formula</th></tr></thead><tbody>
     ${(val.mismatches || []).map(m => `<tr><td class="mono">${esc(m.cell)}</td><td>${esc(m.label)}</td><td class="num">${esc(fmt(m.python, 4))}</td><td class="num">${esc(fmt(m.workbook, 4))}</td><td class="mono small">${esc((m.formula || "").slice(0, 90))}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
+  ${doctorCard()}
   ${fold("module", "The Python module", `overlay_e${E.id}.py`, `<p class="sub">${esc(O.files?.overlay || "")}, sheets ${esc((O.sheets || []).join(", "))}: each formula a Python function, Excel's formula beside it. Regenerated from the workbook, never edited.</p>
     <a class="btn" href="/api/engagements/${E.id}/overlay/module.py" target="_blank" rel="noopener">Open overlay_e${E.id}.py</a>`)}`;
 }
@@ -1575,7 +1576,38 @@ function equityPickCard() {
       <label class="small">Basis<br><select class="in" name="basis"><option value="ex">ex-distribution</option><option value="cum">cum-distribution</option></select></label>
       <button class="btn primary small">Use these cells</button>${w?.how === "picked by you" ? `<button class="btn small ghost" type="button" id="eqClear">Go back to what was found</button>` : ""}</form></details>`;
 }
+// The overlay doctor's cells (doctor.py): those Python can't work out that read nothing changing between the years,
+// which can be held at what Excel saved, a person's decision; and those held now.
+let DOC = {key: null, data: null};
+function doctorCard() {
+  if (!E.doctor_status) return "";
+  return `<div class="card" id="doctorCard"><h2>Cells Python can't work out</h2>${cardNeeds(id => id.startsWith("doctor-"))}<div id="docBody"><p class="muted small">Loading the doctor's findings…</p></div></div>`;
+}
+async function loadDoctor() {
+  const box = $("#docBody"); if (!box) return;
+  const key = JSON.stringify([E.id, E.doctor_status, E.doctor_secs, E.overlay_started_at, E.updated_at]);
+  if (DOC.key !== key) {
+    try { DOC = {key, data: await api(`/api/engagements/${E.id}/doctor`)}; }
+    catch (e) { box.innerHTML = `<p class="small muted">${esc(e.message)}</p>`; return; }
+  }
+  const d = DOC.data || {}, h = d.result?.evidence?.holds || {}, held = d.held || [], heldSet = new Set(held.map(x => x.cell));
+  const todo = (h.safe || []).filter(x => !heldSet.has(x.cell));
+  const row = x => `<tr><td class="mono">${esc(x.cell)}</td><td class="small">${esc(x.title || x.why || "")}</td><td class="num">${esc(x.excel ?? fmt(x.value, 4))}</td></tr>`;
+  box.innerHTML = `<p class="sub">Formulas under the value Python can't work out (a function it lacks, a name, a formula it can't compile). Those that read nothing that changes between the years (no client figure, no assumption, none of the dates the roll moves) can be held at the value Excel saved, on every feed. Holding them is your call: the doctor's check can miss a read, and a held cell whose inputs move on this year's figures holds the value.${d.stale ? " These findings are from an earlier rebuild." : ""}</p>
+    ${todo.length ? `<h3 style="font-size:14px;margin:10px 0 4px">Can be held</h3><div class="scroll"><table class="stack-sm"><thead><tr><th>Cell</th><th>Why Python can't</th><th class="num">Excel saved</th></tr></thead><tbody>${todo.map(row).join("")}</tbody></table></div>
+      <div class="row" style="margin-top:8px"><button class="btn small primary" type="button" data-doc-hold>Hold ${todo.length === 1 ? "it" : `these ${todo.length}`} at Excel's value</button></div>` : `<p class="small muted">Nothing more the doctor can hold.</p>`}
+    ${held.length ? `<h3 style="font-size:14px;margin:14px 0 4px">Held at Excel's value</h3><div class="scroll"><table class="stack-sm"><thead><tr><th>Cell</th><th>Why</th><th class="num">Held at</th></tr></thead><tbody>${held.map(x => row({...x, title: x.why, excel: fmt(x.value, 4)})).join("")}</tbody></table></div>
+      <div class="row" style="margin-top:8px"><button class="btn small" type="button" data-doc-release>Release ${held.length === 1 ? "it" : "them all"}</button></div>` : ""}
+    ${h.n_unsafe ? `<p class="small muted" style="margin-top:10px">${h.n_unsafe} more can't be held: they read something that changes between the years${(h.unsafe || []).length ? ` (${esc(h.unsafe.slice(0, 3).map(x => `${x.cell}: ${x.why}`).join("; "))})` : ""}.</p>` : ""}`;
+  box.querySelector("[data-doc-hold]")?.addEventListener("click", () => act(async () => {
+    await api(`/api/engagements/${E.id}/doctor/holds`, {method: "POST", body: {cells: todo.map(x => x.cell)}}); DOC.key = null;
+    toast("Held at Excel's value: last year is rebuilt again"); }));
+  box.querySelector("[data-doc-release]")?.addEventListener("click", () => act(async () => {
+    await api(`/api/engagements/${E.id}/doctor/holds`, {method: "POST", body: {release: true}}); DOC.key = null;
+    toast("Released: last year is rebuilt again"); }));
+}
 function bindRebuild() {
+  loadDoctor();
   $("#eqLoad")?.addEventListener("click", async () => { try { EQ.cands = await api(`/api/engagements/${E.id}/candidates`); } catch (e) { toast(e.message, 6000); } render(); });
   const f = $("#eqForm");
   if (f) f.onsubmit = ev => { ev.preventDefault(); const b = Object.fromEntries(new FormData(f));

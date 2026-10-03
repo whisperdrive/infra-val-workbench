@@ -1020,6 +1020,81 @@ def flows_check() -> None:
           "than the overlay reads and last year's figures standing in hold; an acknowledgement lets one through)")
 
 
+def doctor_check() -> None:
+    """The overlay doctor on a terminal base read through a top-level OFFSET from a row of normalised cash flows Python
+    can't work out (a function it lacks): what the OFFSET reads is recorded (its target, not only its arguments), so the
+    doctor follows it to the cell Python can't compute, sees that it reads the client model, and doesn't call it safe
+    to hold at Excel's value (held, the terminal base stayed at last year's on revised figures: 18% low, unflagged). Where
+    the function reads only a typed input of the overlay's, it is safe to hold."""
+    import doctor
+    import overlay as ov
+    import xlcompile
+    from xlsxwriter.utility import xl_col_to_name as col_
+    out = Path(tempfile.mkdtemp(prefix="doctor_"))
+    rate, g, n = 0.08, 0.025, 5
+
+    def book(path, flows, typed_base=False):
+        wbk = xlsxwriter.Workbook(path)
+        dt = wbk.add_format({"num_format": "dd-mmm-yy"})
+        cf = wbk.add_worksheet("CF")
+        cf.write(2, 0, "Period ending")
+        cf.write(4, 0, "Free cash flow")
+        for k in range(n):
+            cf.write_datetime(2, 3 + k, date(2026 + k, 6, 30), dt)
+            cf.write_number(4, 3 + k, flows[k])
+        d = wbk.add_worksheet("DCF")
+        d.write(1, 0, "Discount rate")
+        d.write_number(1, 2, rate)
+        for r, label in ((2, "Period ending"), (4, "Cash flow"), (5, "Normalised cash flow"), (7, "Years to the final period"),
+                         (8, "Terminal base"), (9, "Terminal value"), (10, "Terminal growth"), (11, "Discount factor"),
+                         (13, "PV of cash flows"), (14, "PV of terminal value"), (15, "Equity value"), (16, "Base typed")):
+            d.write(r, 0, label)
+        d.write_number(7, 2, n - 1)
+        d.write_number(10, 2, g)
+        d.write_number(16, 2, 140.0)
+        dfs = [1 / (1 + rate) ** (k + 1) for k in range(n)]
+        for k in range(n):
+            c = col_(3 + k)
+            d.write_formula(f"{c}3", f"=CF!{c}3", dt, date(2026 + k, 6, 30))
+            d.write_formula(f"{c}5", f"=CF!{c}5", None, flows[k])
+            d.write_formula(f"{c}6", "=NORMALISE_CF($C$17)" if typed_base else f"=NORMALISE_CF({c}5)", None,
+                            140.0 if typed_base else flows[k])
+            d.write_formula(f"{c}12", f"=1/(1+$C$2)^{k + 1}", None, dfs[k])
+        base = 140.0 if typed_base else flows[-1]
+        tv = base * (1 + g) / (rate - g)
+        pv = sum(f * x for f, x in zip(flows, dfs))
+        last = col_(3 + n - 1)
+        d.write_formula("C9", "=OFFSET($D$6,0,$C$8)", None, base)
+        d.write_formula("C10", "=C9*(1+C11)/(C2-C11)", None, tv)
+        d.write_formula("C14", f"=SUMPRODUCT(D5:{last}5,D12:{last}12)", None, pv)
+        d.write_formula("C15", f"=C10*{last}12", None, tv * dfs[-1])
+        d.write_formula("C16", "=C14+C15", None, pv + tv * dfs[-1])
+        wbk.close()
+
+    def examine(typed_base):
+        tag = "typed" if typed_base else "client"
+        book(out / f"ov_{tag}.xlsx", [100.0, 110.0, 120.0, 130.0, 140.0], typed_base)
+        book(out / f"other_{tag}.xlsx", [105.0, 118.0, 131.0, 144.0, 175.0], typed_base)
+        db0 = build_map.main(str(out / f"ov_{tag}.xlsx"), str(out / f"db0_{tag}"))["db"]
+        db1 = build_map.main(str(out / f"other_{tag}.xlsx"), str(out / f"db1_{tag}"))["db"]
+        src, _ = xlcompile.compile_overlay(db0, ["DCF"], "doc")
+        (out / f"mod_{tag}.py").write_text(src, encoding="utf-8")
+        sess = ov.Session(str(out / f"mod_{tag}.py"), db0, ["DCF"], prior_db=db1, client_sheets=["CF"])
+        reads = ov.deep(lambda: sess.B.reads("DCF", 9, 3))[0]
+        summary = {"wiring": {"overlay": {"db_path": db0, "filename": "ov.xlsx"}, "client_link": None,
+                              "prior": {"filename": "other.xlsx", "db_path": db1}, "current": None, "same_file": False},
+                   "sheets": ["DCF"], "levers": [], "outputs": [{"cell": "DCF!C16", "label": "Equity value", "report": None}],
+                   "validation": {}, "stats": {}, "not_compiled": []}
+        return reads, ov.deep(doctor.examine, sess, summary)["holds"]
+    reads, h = examine(False)
+    assert ("", "DCF", 6, 8) in reads, reads  # the OFFSET's target, read when its value is taken
+    assert not h["safe"] and any(x["cell"] == "DCF!H6" and "client model" in x["why"] for x in h["unsafe"]), h
+    reads, h = examine(True)
+    assert any(x["cell"] == "DCF!H6" for x in h["safe"]), h
+    print("doctor: ok (a top-level OFFSET's target recorded as read; the cell behind it, reading the client model, not "
+          "safe to hold; reading only the overlay's own typed input, safe)")
+
+
 def balances_check() -> None:
     """A balance the overlay reads at last year's valuation date (net debt from the client model's balance row), on a
     fixed horizon (the periods keep their dates both years): this year's value deducts this year's balance at this
@@ -1035,7 +1110,8 @@ def balances_check() -> None:
     from xlsxwriter.utility import xl_col_to_name as col_
     vd, new, rate = date(2025, 6, 30), date(2026, 6, 30), 0.09
 
-    def run(ref: str, current_ends=None, to=None, declared=False, nd_at=None, nd_label="Net debt", decisions=None):
+    def run(ref: str, current_ends=None, to=None, declared=False, nd_at=None, nd_label="Net debt", decisions=None,
+            holds=None):
         out = Path(tempfile.mkdtemp(prefix="balances_"))
         ends = {w: [date(2025 + k, 6, 30) for k in range(10)] for w in ("prior", "current")}
         if current_ends:
@@ -1111,6 +1187,7 @@ def balances_check() -> None:
                    "balance_decisions": decisions or {}}
         roll["balance_cells"] = ov.deep(ov.balance_cells, sess, summary)
         ov.set_balances(sess, roll["balance_cells"], decisions)
+        sess.holds = holds or {}
         figs = ov.deep(result.figures, sess, summary, ["Val!C18"])
         where = {"low": "Val!C18", "high": "Val!C18", "scale": 1, "sign": 1}
         fl = ov.deep(cashflows.layer, sess, summary, where, figs)
@@ -1169,6 +1246,11 @@ def balances_check() -> None:
     roll, figs, cfc, gate = run("plain", decisions={"Client!D11": {"keep": True}})
     k = figs["feed"]["balances"]["kept"]
     assert k and k[0]["why"] == "kept at its date by you" and k[0]["yours"] and not figs["feed"]["balances"]["moved"], k
+    # a cell held at Excel's value (the doctor's) whose input moves this year: the value holds, saying which
+    roll, figs, cfc, gate = run("plain", holds={("Val", 17, 3): 200.0})
+    hm = figs["holds_moved"]
+    assert hm and hm[0]["cell"] == "Val!C17" and hm[0]["inputs"] == ["Client!D11"], hm  # (200 last year, 180 this)
+    assert ("doctor-moved", "block") in [(h["id"], h["severity"]) for h in gate], gate
     # rolling horizon (this year's model a year further on): the plain reference moves with the periods, as before;
     # the same value, a note, not a point to check
     roll, figs, cfc, gate = run("plain", current_ends=[date(2026 + k, 6, 30) for k in range(10)])
@@ -1899,6 +1981,7 @@ if __name__ == "__main__":
     flows_check()
     loose_roll_check()
     balances_check()
+    doctor_check()
     interest_check()
     basis_check()
     pairing_check()

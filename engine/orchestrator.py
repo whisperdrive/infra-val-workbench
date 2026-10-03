@@ -700,14 +700,19 @@ def _rebuild_job(eid: int, key: str):
             log(eid, "rebuild", "note", f"{off} of {val['cells']:,} cells differ from Excel: the doctor looks at them",
                 issue="validation", inputs=core)
             wb._doctor_job(eid)
-            doc = wb.doctor_view(eid)
-            safe = (((doc.get("result") or {}).get("evidence") or {}).get("holds") or {}).get("safe") or []
-            new = [h for h in safe if h["cell"] not in {x["cell"] for x in doc.get("held") or []}]
-            if new:
-                wb.doctor_holds(eid, None)
-                log(eid, "rebuild", "note", f"the doctor found {len(new)} cell(s) it can safely hold at Excel's value: "
-                    "held, and the rebuild runs again", issue="validation", inputs=core)
-                return "done", "holding cells the doctor found safe; rebuilding again", {"rerun": True}
+        # the cells the doctor found it can hold at Excel's value: a person's decision (the Rebuild page), not the
+        # orchestrator's. Its check of what a cell reads can miss a read (it holds only what it can see); a cell held
+        # whose inputs move on this year's feed holds the value (result._holds_moved)
+        doc = wb.doctor_view(eid)
+        safe = (((doc.get("result") or {}).get("evidence") or {}).get("holds") or {}).get("safe") or []
+        new = [h for h in safe if h["cell"] not in {x["cell"] for x in doc.get("held") or []}] if not doc.get("stale") else []
+        if new:
+            needs.append({"id": "doctor-holds", "stage": "rebuild", "severity": "check",
+                          "title": f"{len(new)} cell(s) Python can't work out could be held at Excel's value",
+                          "detail": "the doctor found they read nothing that changes between the years (the client "
+                                    "model, an assumption, the dates the roll moves): holding them at what Excel saved "
+                                    "is yours to decide, on the Rebuild page",
+                          "go": {"step": "rebuild", "anchor": "doctorCard"}})
         needs.append({"id": "validation", "stage": "rebuild", "severity": "info",
                       "title": f"{off} of {val['cells']:,} overlay cells differ from Excel in Python",
                       "detail": "shown on Rebuild; they matter only if they're under the equity value",
@@ -855,14 +860,14 @@ def _result_job(eid: int, key: str):
     g = res["figures"].get("gaps")
     dc = (g or {}).get("date_cells") or {}
     for h in (g or {}).get("holds") or []:  # this year's cash flows against last year's (cashflows.py)
-        anchor = ("equityPick" if h["id"].startswith("equity-")
+        anchor = ("equityPick" if h["id"].startswith("equity-") else "doctorCard" if h["id"] == "doctor-moved"
                   else "bridgeCard" if h["id"].startswith(("cf-split", "cf-sign")) or h["id"] == "damaged"
                   else "methodsCard" if h["id"] == "basis-method"
                   else "compareCard" if h["id"] in ("basis", "interest", "interest-two", "interest-error")
                   else "tieCard" if h["id"].startswith(("rebuild-", "tie-"))
                   else "datesCard" if h["id"] == "roll-assumed" else "termsCard" if h["id"] == "terms-error"
                   else "linesCard" if h["id"] == "lines-error" else "flowsCard")
-        step = "rebuild" if anchor in ("tieCard", "equityPick") else "workbench" if anchor == "datesCard" else "result"
+        step = "rebuild" if anchor in ("tieCard", "equityPick", "doctorCard") else "workbench" if anchor == "datesCard" else "result"
         needs.append(_need_of(h, {"step": step, "anchor": anchor}))
     for i, x in enumerate((g or {}).get("pick_notes") or []):  # picks in a model that changed since they were made
         if x.get("now"):
@@ -1221,7 +1226,8 @@ KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact"
          ("new-lines", "check-lines", "Cash-flow lines to check"), ("scenario", "check-scenario", "A scenario to confirm"),
          ("date-overlay", "check-date", "A date to check"),
          ("date", "confirm-date", "A date to confirm"), ("equity", "pick-cells", "Cells to pick"),
-         ("rows-models", "retry", "A step to try again"), ("damaged", "check-decisions", "Decisions to make again"), ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),
+         ("rows-models", "retry", "A step to try again"), ("doctor-holds", "check-cells", "Cells to hold"),
+         ("doctor-moved", "check-cells", "Cells to hold"), ("damaged", "check-decisions", "Decisions to make again"), ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),
          ("rate-", "check-input", "A model input to check"), ("growth-", "check-input", "A model input to check"),
          ("franking-", "check-input", "A model input to check"), ("tie-", "check-tie", "A tie to check"),
          ("review-", "review-point", "A review point"), ("failed-", "retry", "A step that failed"),

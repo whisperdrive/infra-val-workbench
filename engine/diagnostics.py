@@ -51,7 +51,7 @@ def _vocabulary() -> set[str]:
                                                           "basis-method", "interest-error", "damaged", "rows-models",
                                                           "balance-moved", "balance-unmoved", "balance-after", "balance-kept", "balances",
                                                           "equity-typed", "equity-typed-low", "equity-typed-high", "equity-unmoved-low",
-                                                          "equity-unmoved-high", "equity-mid"}
+                                                          "equity-unmoved-high", "equity-mid", "doctor-holds", "doctor-moved"}
     words |= {"waiting", "queued", "running", "done", "attention", "blocked", "failed", "error", "pending", "approved",
               "rejected", "agreed", "escalated", "withdrawn", "open", "ready", "processing", "unread", "verified",
               "flagged", "resolved", "edited", "figure", "confirmed", "confirmed by the reviewer", "corrected", "disputed",

@@ -232,6 +232,33 @@ def _read(sess, summary: dict, feed: str, cells: list[tuple], vd: str | None = N
     return dict(zip(cells, sess.values(cells))), roll, defaults, months
 
 
+def _holds_moved(sess, summary: dict) -> list[dict]:
+    """The cells held at Excel's saved value (the doctor's, a person's choice) whose own inputs differ between last
+    year's feed and this year's: holding them there leaves this year's value on last year's figures for them (the
+    doctor's check of what a cell reads can miss a read). -> [{"cell", "inputs": ["Sheet!A1"]}]."""
+    if not sess.holds:
+        return []
+    base = "prior" if sess.prior or sess.client_sheets else "workbook"
+    got = {}
+    try:
+        for feed in (base, "current"):
+            d, _, m = ov._feed(summary, feed, None, None)
+            sess.configure(feed, d, m or 0)
+            for k in sess.holds:
+                reads, _ = sess.B.reads(*k)
+                got.setdefault(k, {})[feed] = {x: sess.B.get(*x) for x in reads}
+    finally:
+        sess.configure("workbook")
+    out = []
+    for k, by in got.items():
+        a, b = by.get(base) or {}, by.get("current") or {}
+        moved = sorted(ov._a1(*x[1:]) if x[0] == "" else f"[{x[0]}]{ov._a1(*x[1:])}"
+                       for x in set(a) | set(b) if not ov.same(a.get(x), b.get(x)))
+        if moved:
+            out.append({"cell": ov._a1(*k), "inputs": moved[:8]})
+    return out
+
+
 def _balances(sess, summary: dict) -> dict:
     """The balances read at the valuation date on the current feed (overlay.balance_cells): those moved to this year's
     date, with last year's figure and this year's (in the client models' units), those that couldn't be, and those
@@ -314,6 +341,7 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
                        "other_links": _other_links(getattr(sess, "other_reads", {})),
                        "balances": _balances(sess, summary)}
         out["cut_off"] = len(sess.cut)  # the discountings' periods before the new date, cut off on this year's feed
+        out["holds_moved"] = _holds_moved(sess, summary)  # cells held at Excel's value whose inputs move this year
         if summary.get("rate_values"):
             got, _, _, _ = _read(sess, summary, "current", keys, rates=False)  # at last year's rate: the rate's own step
             out["this_year_last_rate"] = {c: ov._show(got[k]) for c, k in zip(cells, keys)}
@@ -1572,6 +1600,13 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
                         "This year's value reads another linked workbook at last year's figures",
                         f"{said}. Only the client model's link is fed from this year's model; these cells keep the values "
                         "Excel saved last year. Map them to this year's file, or say why they don't change"))
+    hm = figs.get("holds_moved") or []
+    if hm:  # cells held at Excel's value whose inputs move this year: held at last year's figures for them
+        out.append(hold(summary, "doctor-moved", [[x["cell"], x["inputs"]] for x in hm],
+                        f"{len(hm)} cell(s) held at Excel's value read figures that change this year",
+                        "; ".join(f"{x['cell']} reads {', '.join(x['inputs'][:4])}" for x in hm[:6])
+                        + ": held, they stay at what Excel saved last year, so this year's value doesn't take those "
+                          "changes in. Release them on the Rebuild page, or acknowledge why it's right"))
     bal = ((figs.get("feed") or {}).get("balances")) or {}
     if bal.get("moved"):  # balances read at the valuation date, read at this year's date: a person sees the move
         fmt = lambda v: f"{v:,.1f}" if isinstance(v, float) else "–"

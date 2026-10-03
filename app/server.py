@@ -606,6 +606,21 @@ async def doctor_view(eid: int):
     return await _run(workbench.doctor_view, eid)
 
 
+class DoctorHolds(BaseModel):
+    cells: list[str] | None = None
+    release: bool = False
+
+
+@app.post("/api/engagements/{eid}/doctor/holds")
+async def doctor_holds(eid: int, body: DoctorHolds):
+    """Hold the doctor's safe cells at Excel's saved value (cells: those, or every safe one), or release every hold:
+    a person's decision; the rebuild runs again."""
+    got = await _run(workbench.doctor_holds, eid, body.cells, body.release)
+    orchestrator.person(eid, "rebuild", "released the cells held at Excel's value" if body.release else
+                        f"held {len(body.cells) if body.cells else 'the doctor’s safe'} cell(s) at Excel's value")
+    return got
+
+
 @app.get("/api/engagements/{eid}/rows")
 async def rows_view(eid: int):
     """The row agents: what they decided for each row this year's value was waiting on."""

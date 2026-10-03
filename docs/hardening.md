@@ -170,7 +170,12 @@ reviewer's own session.
   it was last year holds; the equity cells aren't listed as inputs held at last year's. Was (re-run): A low and high pasted from a sensitivity run (or data-table cells, which load
   as constants) tie to the report and pass as reliable; this year's value is last year's to the cent, with only two
   "held at last year's" notes, which also push the real held inputs off the list.
-- **S4. The doctor's holds applied without a person** (code re-read; reviewer reproduced). A top-level OFFSET, or an
+- ~~**S4. The doctor's holds applied without a person**~~ — fixed: a formula returning a reference (a top-level
+  OFFSET, an IF returning one) has its target recorded as read, so the doctor follows it; what changes between the
+  years now includes every cell the roll sets (the dates it moves, this year's rate, the inputs a person set, the
+  forecast's end, the cut-off periods); holding the cells it finds safe is a person's decision on the Rebuild page
+  (a point to check says so), never the orchestrator's; and a held cell whose inputs move on this year's feed holds
+  the value. Was (code re-read; reviewer reproduced): A top-level OFFSET, or an
   IF returning one, records only its arguments as reads; the doctor calls it safe and the orchestrator holds it at
   Excel's value: a terminal base frozen at last year's, this year's value about 20% low, no hold.
 - **S5. A shared workbook's date set in another engagement** (re-run). Workbooks are shared by content; a date

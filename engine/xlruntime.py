@@ -1752,7 +1752,11 @@ class Book:
             return set(), set()
         self.rec, self.rec_unknown = set(), set()
         try:
-            fn.raw(col)
+            v = fn.raw(col)
+            if isinstance(v, (Rng, list)):
+                # a reference (a top-level OFFSET, an IF returning one): its target is read only when the cell's value
+                # is taken, so take it here, while reads are recorded (else the doctor sees only its arguments)
+                scalar(v, row, col)
         except Exception:
             pass
         finally:

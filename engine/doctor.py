@@ -551,6 +551,17 @@ class Doctor:
         self.use("workbook")
         _, _, months = _feed(self.summary, "current", None, None)
         moving = set(self.levers) | (set(sess.rolled_timeline(months)) if self.w.get("current") else set())
+        # and every cell the roll-forward sets on this year's feed: the valuation dates it moves, this year's rate,
+        # the inputs a person set, the overlay's copy of the forecast's end, the discountings' cut-off periods
+        roll, sm = self.summary.get("roll") or {}, self.summary
+        for c in (roll.get("valuation_date_cells") or []) + (roll.get("valuation_date_reads") or []) + \
+                list(sm.get("rate_values") or {}) + list(sm.get("held_values") or {}) + list(sm.get("horizon_values") or {}):
+            try:
+                moving.add(parse_a1(c))
+            except (TypeError, ValueError, AttributeError):
+                pass
+        for cut in getattr(sess, "cutoffs", None) or []:
+            moving.add(tuple(cut[:3]))
         safe, unsafe, skipped = [], [], 0
         t0 = time.time()
         for i, c in enumerate(cand):
