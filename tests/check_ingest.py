@@ -9,8 +9,8 @@ the file refused with a reason); never a different figure in silence, never a cr
                without being calculated; not a formula whose result is empty text), Excel's own errors, the last
                calculation's settings (one that didn't finish), and every cell however small the size the sheet
                declares (a tool other than Excel can write it too small)
-  containers   an encrypted workbook (a compound file, not a zip) and a file that isn't a workbook are refused with
-               what to do
+  containers   an encrypted workbook (a compound file, not a zip), a file that isn't a workbook, a document renamed
+               and a workbook saved as Strict Open XML are refused with what to do
   the pack     the synthetic pack run end to end with one file changed, as a model can arrive: protected sheets, a
                macro-enabled workbook, units that start with # ("#/Day"), Excel's errors where the value doesn't read
                them, manual calculation, a data table: the same value. Formulas this year's or last year's model saved
@@ -180,15 +180,27 @@ def saved_state_check() -> None:
 
 def containers_check() -> None:
     out = Path(tempfile.mkdtemp(prefix="ingest_"))
+    def zipped(files: dict) -> bytes:
+        import io
+        b = io.BytesIO()
+        with zipfile.ZipFile(b, "w") as z:
+            for n, x in files.items():
+                z.writestr(n, x)
+        return b.getvalue()
+    strict = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://purl.oclc.org/ooxml/'
+              'spreadsheetml/main"><sheets/></workbook>')
     for name, body, said in (("AssetA_locked.xlsx", OLE + b"\0" * 504, "password"),
-                             ("AssetA_not_a_workbook.xlsx", b"just some text", "isn't an Excel workbook")):
+                             ("AssetA_not_a_workbook.xlsx", b"just some text", "isn't an Excel workbook"),
+                             ("AssetA_a_document.xlsx", zipped({"word/document.xml": "<w/>"}), "no workbook inside"),
+                             ("AssetA_strict.xlsx", zipped({"xl/workbook.xml": strict}), "Strict Open XML")):
         (out / name).write_bytes(body)
         try:
             build_map.main(str(out / name), str(out / name.replace(".xlsx", "")))
             raise AssertionError(f"{name} was read")
         except ValueError as e:
             assert said in str(e) and name in str(e), e
-    print("containers: ok (an encrypted workbook and a file that isn't one are refused, saying what to do)")
+    print("containers: ok (an encrypted workbook, a file that isn't one, a document renamed and a Strict Open XML workbook "
+          "are refused, saying what to do)")
 
 
 # ---- the pack, one thing changed --------------------------------------------------------------------------------------

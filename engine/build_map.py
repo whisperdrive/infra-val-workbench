@@ -220,6 +220,18 @@ def main(path: str, out: str | None = None, progress=None) -> dict:
     if head[:2] != b"PK":
         raise ValueError(f"{os.path.basename(path)} isn't an Excel workbook Python can read (.xlsx / .xlsm), or it's "
                          "damaged: open it in Excel, save it as .xlsx or .xlsm, and upload it again")
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as z:
+            book = z.read("xl/workbook.xml") if "xl/workbook.xml" in z.namelist() else None
+    except zipfile.BadZipFile:
+        book = None
+    if book is None:  # a zip, but not a workbook (a document renamed), or a damaged one
+        raise ValueError(f"{os.path.basename(path)} isn't an Excel workbook (no workbook inside it), or it's damaged: "
+                         "open it in Excel, save it as .xlsx or .xlsm, and upload it again")
+    if b"purl.oclc.org/ooxml/spreadsheetml" in book[:4000]:  # Strict Open XML, which the readers don't take
+        raise ValueError(f"{os.path.basename(path)} is saved as Strict Open XML: open it in Excel, save it as an Excel "
+                         "Workbook (.xlsx) or a macro-enabled one (.xlsm), and upload it again")
     report = progress or (lambda frac, msg: None)
     t0 = time.time()
     report(0.0, "Opening workbook")
