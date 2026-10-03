@@ -137,15 +137,18 @@ def inputs(eid: int, name: str, snap: dict, holds: bool = True) -> str:
                    for w in snap["workbooks"] if w["id"] in ids)
     ov_dir = wb.OUT / "overlays" / f"e{eid}"
     if name == "roles":
-        return _h([wb._roles_key(eid, snap["workbooks"], snap["documents"]),
-                   [(k, r["id"], r["sheets"]) for k, r in rl.items() if r["confirmed"] and r.get("by") == "you"],
-                   (wb.acks(eid).get("role-check") or {}).get("key")])
+        ack = (wb.acks(eid).get("role-check") or {}).get("key")  # only when there is one: unacknowledged roles hash
+        return _h([wb._roles_key(eid, snap["workbooks"], snap["documents"]),  # as before acknowledging was added
+                   [(k, r["id"], r["sheets"]) for k, r in rl.items() if r["confirmed"] and r.get("by") == "you"]]
+                  + ([ack] if ack else []))
     rebuild = [roles, built, _critical(snap["facts"]), _file_state(ov_dir / "holds.json") if holds else None,
                (snap.get("profile") or {}).get("horizon"), equity_pick(eid)]
     if name in ("rebuild", "map"):
         return _h(rebuild)
     picks = {k: v for k, v in wb._read_rowpicks(eid).items() if not (isinstance(v, dict) and v.get("by") == "agent")}
-    rows = [rebuild, wb.this_year_date(eid), picks]
+    # and the row finder's version: the agents' picks made by an older one are set aside (workbench._load_rowpicks), so
+    # the agents look again, and the result after them
+    rows = [rebuild, wb.this_year_date(eid), picks, _rows_version()]
     if name == "rows":
         return _h(rows)
     res = [rows, equity_pick(eid), (snap.get("profile") or {}).get("fy_end_month"),
@@ -157,6 +160,11 @@ def inputs(eid: int, name: str, snap: dict, holds: bool = True) -> str:
            _file_state(wb.acks_file(eid)),  # and the checks a person acknowledged, with the reason
            _result_version()]  # and the result's rules: a result worked out by older rules is worked out again
     return _h(res) if name == "result" else _h(["review", result_digest(eid)])
+
+
+def _rows_version() -> int:
+    import rowfind
+    return rowfind.VERSION
 
 
 def _result_version() -> int:
@@ -830,6 +838,16 @@ def _result_job(eid: int, key: str):
                           "title": f"Your pick for {x['row']} ({x.get('label') or ''}) no longer matches this year's model",
                           "detail": f"it was {x['was']}, and the model has changed since: {x['how']}. Pick it again",
                           "go": {"step": "result", "anchor": "rowsCard"}})
+    for i, x in enumerate((g or {}).get("held_notes") or []):  # figures you set, where the overlay changed under them
+        if x.get("now"):
+            needs.append({"id": f"held-moved-{i}", "stage": "result", "severity": "info",
+                          "title": f"Your figure for {x['label']} found again in the changed overlay: {x['now']}",
+                          "detail": f"it was set at {x['cell']}; {x['how']}", "go": {"step": "result", "anchor": "heldCard"}})
+        else:
+            needs.append({"id": f"held-lost-{i}", "stage": "result", "severity": "check",
+                          "title": f"Your figure for {x['label']} ({x['value']:,.1f}) isn't applied: the overlay changed",
+                          "detail": f"it was set at {x['cell']}; {x['how']}. Last year's figure is used until you set it "
+                                    "again", "go": {"step": "result", "anchor": "heldCard"}})
     if g and not g["reliable"]:
         if g.get("no_reads"):
             needs.append({"id": "no-reads", "stage": "result", "severity": "block",
@@ -1161,6 +1179,7 @@ PAGE_ANCHOR = {"workbench": "filesCard", "report": "reportCard", "rebuild": "tie
 KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact", "A fact to add"),
          ("roles", "confirm-roles", "The roles to confirm"), ("no-reads", "check-roles", "The roles to check"),
          ("dates-", "check-date", "A date to check"), ("zero-roll", "check-forecast", "A move to check"),
+         ("held-lost-", "check-held", "A figure to set again"), ("held-moved-", "note", "A figure found again"),
          ("held-", "check-held", "An input held at last year's"), ("rebuilt", "confirm-rows", "Rows to confirm"),
          ("new-lines", "check-lines", "Cash-flow lines to check"), ("scenario", "check-scenario", "A scenario to confirm"),
          ("date-overlay", "check-date", "A date to check"),

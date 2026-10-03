@@ -66,7 +66,8 @@ off and time-checks it on the roll, on the Model assumptions card and the cash-f
 | A typed terminal base | the terminal value grows from a figure typed in the overlay | point to check |
 | A renamed sheet | two of this year's sheets as like last year's: neither taken; the choice no longer depends on the run | fixed |
 | An earlier result | the result shown while the bridge runs again, or after a run that failed, is marked; the workpaper waits | fixed |
-| Rules' version | results worked out by older rules are worked out again | fixed |
+| Rules' version | results worked out by older rules are worked out again; a newer row finder makes the row agents look again (their older picks were set aside with nothing rerunning them, so the rows waited for a person) | fixed |
+| Your held figures | a figure set for a held input, where the overlay changed under it: found again by its label and last year's figure, or set aside, never applied to another input | point to check |
 
 ### The page
 - The cash-flow chart's years are four digits and in order (a forecast past 2049 put its 2050s first).
@@ -89,8 +90,8 @@ High: a wrong value can still reach the result unflagged.
 
 1. ~~Row agents settle "by the numbers" on the candidate nearest last year's~~ — done: by meaning, numbers a band.
 2. ~~Same-label matching when a block is inserted, or a case column~~ — done: block copies by heading; case columns.
-3. ~~Row picks keyed by address, not by file~~ — done: each pick keeps a card and is found again (held inputs still by
-   address).
+3. ~~Row picks keyed by address, not by file~~ — done: each pick keeps a card and is found again; so does a figure set
+   for a held input (its label and last year's figure), set aside where it can't be found.
 4. **A mid-period valuation date** keeps the whole straddling period (half a year's cash flow already earned). Point
    to check with the elapsed fraction; a proration method.
 5. **A distribution declared at this year's date in the client model** that the overlay doesn't deduct.

@@ -1618,6 +1618,7 @@ function viewResult() {
   ${methodsCard(R)}
   ${heldCard(R)}
   ${rowsCard(R)}
+  ${agentsCard()}
   ${termsCard(R)}
   ${compareCard(R)}
   ${drivesCard(R)}
@@ -1713,7 +1714,7 @@ function bindMethods() {
 const heldNote = R => { const n = (R.held || []).filter(h => h.held).length;
   return n ? ` · <button class="linkbtn warnt" type="button" data-jump-held>${n} input${n > 1 ? "s" : ""} held at last year's</button>` : ""; };
 function heldCard(R) {
-  const H = R.held; if (!H?.length) return "";
+  const H = R.held || [], ns = (E.run?.needs || []).filter(n => /^held-(lost|moved)-/.test(n.id)); if (!H.length && !ns.length) return "";
   const still = H.filter(h => h.held).length;
   const row = h => { const sg = h.suggestion || {}, ok = sg.status === "checked", now = h.this_year ?? sg.value ?? "";
     return `<tr class="${h.held ? "held" : ""}"><td><b>${esc(h.label)}</b> ${h.held ? `<span class="pill warn">held at last year's</span>` : `<span class="pill ok">this year's · ${h.from === "suggestion" ? "accepted" : "typed"} by you</span>`}
@@ -1723,8 +1724,9 @@ function heldCard(R) {
         <div class="row small" style="justify-content:flex-end;gap:6px;margin-top:6px">${sg.value != null && h.this_year !== sg.value ? `<button class="btn small primary" type="button" data-held-use="${esc(h.cell)}" data-v="${sg.value}">Use ${vN(sg.value)}</button>` : ""}<button class="btn small" type="button" data-held-set="${esc(h.cell)}">Set</button>${h.held ? "" : `<button class="linkbtn" type="button" data-held-clear="${esc(h.cell)}">Back to last year's</button>`}</div></td>
       <td class="small">${sg.value != null ? `<span class="${ok ? "okt" : "warnt"}">${ok ? "✓ checked" : "check it"}</span> ` : `<span class="muted">no suggestion:</span> `}${esc(sg.text || "")}</td></tr>`; };
   return `<div class="card" id="heldCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Inputs held at last year's</h2>${still ? `<span class="pill warn">${still} held</span>` : `<span class="pill ok">all set for this year</span>`}</div>
-    <p class="sub">Typed into the overlay outside its discountings, these stay at last year's figures in the roll-forward until you set this year's. The suggestion comes from this year's client model, found through the row that holds last year's figure in last year's model; nothing is applied until you use it or set your own. Figures as typed in the overlay.</p>
-    <div class="scroll"><table class="stack-sm"><thead><tr><th>Input</th><th class="num">Last year</th><th class="num">This year</th><th>From this year's model</th></tr></thead><tbody>${H.map(row).join("")}</tbody></table></div></div>`;
+    <p class="sub">Typed into the overlay outside its discountings, these stay at last year's figures in the roll-forward until you set this year's. The suggestion comes from this year's client model, found through the row that holds last year's figure in last year's model; nothing is applied until you use it or set your own. Figures as typed in the overlay. A figure you set is kept with the input it's for (its label and last year's figure): if the overlay changes under it, it's found again by those, or set aside, never applied to another input.</p>
+    ${ns.length ? needsList(ns) : ""}
+    ${H.length ? `<div class="scroll"><table class="stack-sm"><thead><tr><th>Input</th><th class="num">Last year</th><th class="num">This year</th><th>From this year's model</th></tr></thead><tbody>${H.map(row).join("")}</tbody></table></div>` : ""}</div>`;
 }
 function bindHeld() {
   const post = (cell, value, source) => act(async () => {
@@ -1749,6 +1751,33 @@ function rowsCard(R) {
   return `<div class="card" id="rowsCard"><h2>Rows to find in this year's model</h2><p class="sub">This year's value reads these rows of last year's client model, and the row finder couldn't settle where each is this year, so the value waits. For each: what it is last year (where it sits, what it adds up, its figures, what reads it), and the rows of this year's model that might be it, with their figures for the same periods. Use one, type another, or keep last year's values on purpose; last year's values are never used silently.</p>
     <div class="stack" style="gap:12px">${rows.map(rowBlock).join("")}</div>
     ${check.length ? `<h3 style="font-size:15px;margin:16px 0 6px">And to check: found by their numbers in a model that looks rebuilt</h3><div class="stack" style="gap:12px">${check.map(rowBlock).join("")}</div>` : ""}</div>`;
+}
+// What the row agents did (rowagent.py): for each row of last year's model the row finder couldn't settle in this
+// year's, the row they settled on, how and why, and whether a person has since picked another; then the notes the
+// models made about this year's model (kept for the next run on the same file, shown to them with every row).
+const FAMILY_WORD = {identity: "its label", place: "where it sits", role: "what it does", numbers: "its numbers"};
+function agentsCard() {
+  const A = E.row_agents; if (!A || (!A.rows?.length && !A.notes?.length)) return "";
+  const settled = A.rows.filter(x => x.decision), open = A.rows.filter(x => !x.decision);
+  const how = x => x.how === "meaning" ? `By what it means: ${esc((x.agreed || []).map(f => FAMILY_WORD[f] || f).join(", "))} agree${(x.agreed || []).length > 1 ? "" : "s"}`
+    : x.how === "agents" ? `By the models${A.models ? `: ${esc(A.models.proposes)} found it, ${esc(A.models.checks)} checked it` : ""}` : "";
+  const to = x => !x.decision ? `<span class="pill warn">left open</span>` : x.decision === "-" ? `<span class="muted">last year's values, kept</span>`
+    : `<b>${esc(x.to_label || "(no label)")}</b> <span class="mono small muted">${esc(x.decision)}</span>`;
+  const mine = x => x.now_by === "you" ? `<div class="small" style="margin-top:4px"><span class="pill ok" title="Your pick replaces the agents'">you picked ${esc(x.now === "-" ? "last year's values" : x.now)}</span></div>` : "";
+  const row = x => `<tr><td><b>${esc(x.label || "(no label)")}</b> <span class="mono small muted">${esc(x.row)}</span>${x.origin ? `<div class="small muted">a cash flow the value discounts</div>` : ""}</td>
+      <td>${to(x)}${mine(x)}</td>
+      <td class="small">${how(x)}${x.why ? `<div class="muted">${esc(x.why)}</div>` : ""}${x.review ? `<div class="muted">The check: ${esc(x.review)}</div>` : ""}${x.advice ? `<div class="muted">Looked at again: ${esc(x.advice)}</div>` : ""}</td>
+      <td>${x.decision ? `<button class="btn small" type="button" data-rowinfo="${esc(x.row)}">Pick another…</button>` : `<button class="btn small" type="button" data-jump-rows>Pick it…</button>`}</td></tr>
+    ${x.decision ? `<tr hidden data-rowbox="${esc(x.row)}"><td colspan="4"></td></tr>` : ""}`;
+  const pills = `${settled.length ? `<span class="pill ok">${settled.length} settled</span>` : ""}${open.length ? `<span class="pill warn">${open.length} left open</span>` : ""}${A.stale ? `<span class="pill" title="Made before a workbook was built again, or by an older row finder: the agents look again">from an earlier run</span>` : ""}`;
+  const notes = A.notes?.length ? `<h3 style="font-size:14px;margin:16px 0 4px">What they noted about this year's model</h3>
+    <ul class="small" style="margin:0;padding-left:18px">${A.notes.map(n => `<li style="margin:0 0 4px">${esc(n)}</li>`).join("")}</ul>
+    <p class="small muted" style="margin:6px 0 0">Written by the models as they looked: how this year's model is laid out, where its lines moved. Every later call sees them, and they're kept for the next run on this version of the model. They're the models' notes, not checked figures.</p>` : "";
+  return `<div class="card" id="agentsCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">What the row agents did</h2><div class="row" style="gap:6px">${pills}</div></div>
+    <p class="sub">For each row of last year's model the row finder couldn't settle in this year's, the agents look first at what the row means (its label, where it sits, what it does; its numbers only as a sanity check), then ask the models about any still open: one finds the row, the other checks it.${A.rounds ? ` Then ${A.rounds} round${A.rounds > 1 ? "s" : ""} against last year's figures at last year's date.` : ""} Your pick always wins over theirs.</p>
+    ${A.models_error ? `<div class="callout warn small">The models couldn't be asked: ${esc(A.models_error)}. Rows not settled by what they mean are left for you.</div>` : ""}
+    ${A.rows.length ? `<div class="scroll"><table class="stack-sm"><thead><tr><th>Last year's row</th><th>This year's</th><th>How</th><th></th></tr></thead><tbody>${A.rows.map(row).join("")}</tbody></table></div>` : ""}
+    ${notes}</div>`;
 }
 // Cash-flow lines this year's model has and last year's didn't (or had nothing in), on the sheets the overlay reads:
 // the roll leaves them out, so they're a point to check, not a hold. Figures in this year's model's units.
@@ -1923,8 +1952,8 @@ function bindRowQuick(root) {
     Object.keys(ROWCTX).forEach(k => delete ROWCTX[k]);
     toast(`${b.dataset.rowuseQuick} is ${b.dataset.to} this year: the bridge runs again`); }));
 }
-async function rowPicker(row) {
-  const box = document.querySelector(`[data-rowbox="${CSS.escape(row)}"]`); if (!box) return;
+async function rowPicker(row, root = document) {
+  const box = root.querySelector(`[data-rowbox="${CSS.escape(row)}"]`); if (!box) return;
   box.hidden = false; box.firstElementChild.innerHTML = `<p class="muted small">Looking in this year's model…</p>`;
   let r; try { r = await api(`/api/engagements/${E.id}/overlay/row?row=${encodeURIComponent(row)}`); } catch (e) { box.firstElementChild.innerHTML = `<div class="callout bad">${esc(e.message)}</div>`; return; }
   const alts = [...(r.found ? [{row: r.found, label: r.found_label, why: "what was found"}] : []), ...(r.alternatives || [])];
@@ -1943,7 +1972,8 @@ function bindResult() {
   bindRate();
   bindMethods();
   document.querySelectorAll("[data-end]").forEach(b => b.onclick = () => { state.bridgeEnd = b.dataset.end; render(); });
-  document.querySelectorAll("[data-rowinfo]").forEach(b => b.onclick = () => rowPicker(b.dataset.rowinfo));
+  document.querySelectorAll("[data-rowinfo]").forEach(b => b.onclick = () => rowPicker(b.dataset.rowinfo, b.closest(".card") || document));
+  document.querySelectorAll("[data-jump-rows]").forEach(b => b.onclick = () => jumpTo("result", "rowsCard"));
   document.querySelectorAll("[data-rowctx]").forEach(bindRowQuick);
   loadRowContexts();
   const R = E.result; if (!R?.bridges) return;

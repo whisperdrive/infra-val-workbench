@@ -690,6 +690,52 @@ def place_check() -> None:
           "wrong kind for its role is refused before it's stored)")
 
 
+def slots_check() -> None:
+    """One file uploaded into two slots: the client model with the overlay's tabs inside it, placed by hand as both last
+    year's client model and last year's overlay, with no sheets named (an upload's slot names none). The roles stay
+    the person's, and the sheets come from the suggestion, which picked the same file: the overlay's tabs for the
+    overlay, the rest for the client model. Then the branch itself, on its own: every role placed by a person, the two
+    slots' sheets unnamed, the checks fail ("its sheets aren't named"), the suggestion's sheets fill them in, the checks
+    pass, and the roles are confirmed as the person's, with nothing to acknowledge."""
+    e = wb.create("Asset A, FY26 (one file, two slots)")
+    eid = e["id"]
+    confirm_insurance(eid)
+    rep, both, cur = PACK_B
+    for name, role in ((rep, "prior_report"), (both, "prior_model"), (both, "prior_overlay"), (cur, "current_model")):
+        upload(eid, name, role)
+    mine = lambda: all(r.get("by") == "you" and r["confirmed"] for r in wb.roles(eid).values()) and len(wb.roles(eid)) == 4
+    v = wait(eid, lambda v: status(v)["roles"] in (*orc.SETTLED, "blocked", "failed") and mine()
+             and wb.roles(eid)["prior_overlay"]["sheets"], "the roles")
+    rl = wb.roles(eid)
+    assert status(v)["roles"] in orc.SETTLED and rl["prior_model"]["id"] == rl["prior_overlay"]["id"], (status(v), rl)
+    a = orc._assignment(wb.suggest_roles(eid))
+    assert rl["prior_overlay"]["sheets"] == a["prior_overlay"]["sheets"] and rl["prior_model"]["sheets"] == a["prior_model"]["sheets"], (rl, a)
+    assert not set(rl["prior_overlay"]["sheets"]) & set(rl["prior_model"]["sheets"] or []), rl
+    mine_now = {k: {"kind": r["kind"], "id": r["id"], "sheets": r["sheets"]} for k, r in rl.items()}
+    assert not orc.verify_roles(eid, mine_now) and not [n for n in v["needs"] if n["id"] == "role-check"], v["needs"]
+    # the branch on its own: the orchestrator kept off the roles while it runs, so nothing else fills the sheets first
+    with orc._lock:
+        orc._active[(eid, "roles")] = "running"
+    try:
+        wb.confirm_roles(eid, {k: {**mine_now[k], "sheets": None} for k in ("prior_model", "prior_overlay")}, "you")
+        bad = orc.verify_roles(eid, {**mine_now, **{k: {**mine_now[k], "sheets": None} for k in ("prior_model", "prior_overlay")}})
+        assert "the overlay is inside the client model but its sheets aren't named" in bad, bad
+        got = orc._roles_job(eid, "slots")
+        assert got == ("done", "confirmed by you, the sheets named from the suggestion", {}), got
+        rl = wb.roles(eid)
+        assert all(r.get("by") == "you" and r["confirmed"] for r in rl.values()), rl
+        assert rl["prior_overlay"]["sheets"] == a["prior_overlay"]["sheets"] and rl["prior_model"]["sheets"] == a["prior_model"]["sheets"], rl
+    finally:
+        with orc._lock:
+            orc._active.pop((eid, "roles"), None)
+        orc.poke()
+    v = wait(eid, lambda v: status(v)["roles"] in (*orc.SETTLED, "blocked", "failed") and not v["busy"], "the roles again")
+    assert status(v)["roles"] in orc.SETTLED and not [n for n in v["needs"] if n["id"] == "role-check"], (status(v), v["needs"])
+    wb.delete(eid)
+    print("slots: ok (one file uploaded as both last year's client model and its overlay: the roles stay yours, the "
+          "overlay's tabs and the client's sheets named from the suggestion, the checks pass, nothing to acknowledge)")
+
+
 def overview_check(eid: int) -> None:
     """The list of every engagement: where each is, and the value the result page shows."""
     e = wb.create("Asset A, nothing yet")
@@ -720,6 +766,58 @@ def rows_context_check(eid: int) -> None:
     assert k["row"] == "CashFlow!r9" and k["figures"][0] is None and isinstance(k["figures"][1], float), k
     print("rows: ok (a row to find says what it is: its heading and neighbours, what it's worked out from, last "
           "year's figures, the overlay row that reads it; this year's candidates with their figures)")
+
+
+def versions_check(eid: int) -> None:
+    """A newer row finder makes the row agents look again (their picks by an older one are set aside), and the result
+    after them; roles nobody acknowledged keep the fingerprint they had before acknowledging was added, so an update
+    doesn't place every engagement's files again (nor ask the second opinion again)."""
+    import rowfind
+    snap = orc._snapshot(eid)
+    rows0, res0, roles0 = (orc.inputs(eid, n, snap) for n in ("rows", "result", "roles"))
+    was = rowfind.VERSION
+    rowfind.VERSION = was + 1
+    try:
+        assert orc.inputs(eid, "rows", snap) != rows0 and orc.inputs(eid, "result", snap) != res0
+    finally:
+        rowfind.VERSION = was
+    rl = snap["roles"]
+    assert not wb.acks(eid).get("role-check")
+    assert roles0 == orc._h([wb._roles_key(eid, snap["workbooks"], snap["documents"]),
+                             [(k, r["id"], r["sheets"]) for k, r in rl.items() if r["confirmed"] and r.get("by") == "you"]])
+    print("versions: ok (a newer row finder runs the row agents again, and the result after them; the roles' "
+          "fingerprint is as before unless a person acknowledged their check)")
+
+
+def agents_view_check() -> None:
+    """What the row agents did, on the page: each row they looked at, the row they settled on, how and why, and a
+    person's later pick beside it; the notes they made about this year's model; from an earlier run, said so."""
+    import rowfind
+    e = wb.create("Asset A, FY26 (the agents' view)")
+    eid = e["id"]
+    assert wb.get(eid)["row_agents"] is None
+    d = wb.OUT / "overlays" / f"e{eid}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "rowagent.json").write_text(json.dumps({"at": time.time(), "v": rowfind.VERSION, "open_before": 3, "open_after": 1,
+        "notes": ["the cash flows moved to a sheet per scenario", {"not": "a note"}], "rounds": [{"revisited": []}],
+        "models": {"proposes": "luna", "checks": "sol"}, "decisions": [
+            {"row": "CF!r9", "label": "Distributions", "decision": "CF!r12", "to_label": "Distributions", "how": "meaning",
+             "why": "agreed by identity, place", "agreed": ["identity", "place"], "origin": True, "trail": "long"},
+            {"row": "CF!r10", "label": "Tax paid", "decision": "CF!r14", "to_label": "Income tax", "how": "agents",
+             "why": "the same line, renamed", "review": "it is"},
+            {"row": "CF!r11", "label": "Capex", "decision": None, "why": "no row like it"}]}), encoding="utf-8")
+    (d / "rowpicks.json").write_text(json.dumps({"CF!r10": {"to": "CF!r15", "by": "you"}}), encoding="utf-8")
+    A = wb.get(eid)["row_agents"]
+    assert [(x["row"], x["decision"], x["now"], x["now_by"]) for x in A["rows"]] == [
+        ("CF!r9", "CF!r12", None, None), ("CF!r10", "CF!r14", "CF!r15", "you"), ("CF!r11", None, None, None)], A["rows"]
+    assert A["notes"] == ["the cash flows moved to a sheet per scenario"] and A["rounds"] == 1 and not A["stale"], A
+    assert A["rows"][0]["agreed"] == ["identity", "place"] and A["rows"][0]["origin"] and "trail" not in A["rows"][0], A
+    x = json.loads((d / "rowagent.json").read_text(encoding="utf-8"))
+    (d / "rowagent.json").write_text(json.dumps({**x, "v": rowfind.VERSION - 1}), encoding="utf-8")
+    assert wb.row_agents(eid)["stale"]
+    wb.delete(eid)
+    print("agents: ok (the row agents' picks on the page with how and why, a person's later pick beside theirs, the "
+          "notes they made about this year's model; from an older row finder, said so)")
 
 
 def held_check(eid: int) -> None:
@@ -761,6 +859,32 @@ def held_check(eid: int) -> None:
     assert any(r[6] == "Held inputs" for r in book["Bridge"].iter_rows(values_only=True)), "no held step in the chart"
     assert {h["cell"]: (h["held"], h["this_year"], h["from"]) for h in res["held"]} == \
         {"Val_Inputs!C7": (False, make_pack.NET_DEBT_NEW, "suggestion"), "Val_Inputs!C8": (False, 30.0, "typed")}
+    # each figure is kept with the input it was set for: where the overlay changes under it (as if a corrected overlay
+    # moved one input and put another in the other's cell), the one whose label and last year's figure are at exactly
+    # one other input is found again there; the other is set aside, not applied to whatever its cell now holds
+    hf = wb.held_file(eid)
+    set_ = json.loads(hf.read_text(encoding="utf-8"))
+    assert all(x.get("file") for x in set_.values()), set_
+    mid_set = res["values"]["this_year"]["mid"]
+    t0 = finished()
+    hf.write_text(json.dumps({"Val_Inputs!C30": set_["Val_Inputs!C8"],
+                              "Val_Inputs!C7": {**set_["Val_Inputs!C7"], "label": "Capex reserve"}}), encoding="utf-8")
+    orc.poke()
+    v = wait(eid, lambda v: finished() != t0 and not v["busy"] and status(v)["result"] in orc.SETTLED
+             and set(json.loads(hf.read_text(encoding="utf-8"))) == {"Val_Inputs!C8", "Val_Inputs!C7"}
+             and any(n["id"].startswith("held-lost-") for n in v["needs"]), "the figures checked against the overlay")
+    now = json.loads(hf.read_text(encoding="utf-8"))
+    assert now["Val_Inputs!C8"]["moved_from"] == "Val_Inputs!C30" and now["Val_Inputs!C8"]["value"] == 30.0, now
+    moved = next(n for n in v["needs"] if n["id"].startswith("held-moved-"))
+    lost = next(n for n in v["needs"] if n["id"].startswith("held-lost-"))
+    assert moved["severity"] == "info" and "Val_Inputs!C8" in moved["title"] and moved["go"]["anchor"] == "heldCard", moved
+    assert lost["severity"] == "check" and "Capex reserve" in lost["title"] and "isn't applied" in lost["title"] \
+        and "Val_Inputs!C7" in lost["detail"] and lost["kind_label"] == "A figure to set again", lost
+    res = wb.get(eid)["result"]
+    by = {h["cell"]: h for h in res["held"]}
+    assert by["Val_Inputs!C7"]["held"] and by["Val_Inputs!C8"]["this_year"] == 30.0, by
+    nd_move = -(make_pack.NET_DEBT_NEW - make_pack.NET_DEBT)
+    assert abs(res["values"]["this_year"]["mid"] - (mid_set - nd_move)) < 1e-6, (res["values"]["this_year"], mid_set)
     t0 = finished()
     for c in ("Val_Inputs!C7", "Val_Inputs!C8"):
         wb.set_held(eid, c, None)
@@ -768,9 +892,11 @@ def held_check(eid: int) -> None:
     wait(eid, lambda v: finished() != t0 and not v["busy"] and status(v)["review"] in orc.SETTLED, "the result back again")
     res = wb.get(eid)["result"]
     assert abs(res["values"]["this_year"]["mid"] - mid0) < 1e-9 and all(h["held"] for h in res["held"])
+    assert not [n for n in orc.view(eid)["needs"] if re.match(r"held-(lost|moved)-", n["id"])]
     print(f"held: ok (net debt and the declared distribution held at last year's, each with a suggestion from this year's "
           f"model checked against last year's; set, the bridge has their step ({move:+.1f}) and this year's value moves "
-          f"by it; back, the first result)")
+          f"by it; a figure whose input moved is found again by its label and last year's figure, one whose cell now "
+          f"holds another input is set aside, not applied; back, the first result)")
 
 
 def rate_check(eid: int) -> None:
@@ -1571,6 +1697,8 @@ def main() -> None:
     lines_check(eid)
     gate_check()
     review_check(eid)
+    versions_check(eid)
+    agents_view_check()
     held_check(eid)
     rate_check(eid)
     methods_check(eid)
@@ -1595,6 +1723,7 @@ def main() -> None:
         assert any(r_ and "reaches the equity value" in r_ for r_ in roles), (x, g["dcf_origins"], roles)
     print("layouts: ok (the overlay standalone and inside the client model give the same value this year: the roll "
           "moves the valuation date the discountings read)")
+    slots_check()
     delete_check(eid)
 
 

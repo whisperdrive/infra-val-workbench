@@ -112,7 +112,8 @@ takes it from there:
    the ground up, its numbers and structure together where exactly one candidate has both. Then the models: asked
    whether a row means the same, given its card, its lineage, its role in the valuation (the overlay rows reading it,
    its path to the equity value), the searcher's trail and what's been learned about this year's model (notes kept
-   for every row and the next run). Each pick keeps a card of the row it chose and is found again from it when the
+   for every row and the next run; shown on the Result page with each row the agents decided, how and why, under
+   "What the row agents did"). Each pick keeps a card of the row it chose and is found again from it when the
    client sends a corrected model; one that can't be is set aside, not applied to another row. A single figure off
    the timeline is read from the column headed as last year's (a case column inserted before it). Your picks are
    logged, without a word of the client's, to learn how often each combination of evidence is right (`evidence.py`).
@@ -206,6 +207,9 @@ takes it from there:
    client model, checked first against last year's: the row of last year's model that holds last year's figure at
    last year's valuation date (its label agreeing) is the row read in this year's model at this year's date. A
    suggestion is only applied when you use it, or type your own figure; the bridge then has a step of its own for it.
+   Your figure is kept with the input it's for (its label and last year's figure, and the overlay it was set on): if
+   a corrected overlay moves the input, it's found again where exactly one input has both, and said so; otherwise
+   it's set aside, a point to check, never applied to whatever the old cell now holds.
 7. **Bridges last year's value to this year's.** Report → rounding → rebuilt → time value → last year's cash flows paid
    → this year's forecast → discount rate → this year, for the low and the high; the mid is their average. The time
    value, the cash flows and the new forecast are at last year's discount rate; where you set this year's (the Result

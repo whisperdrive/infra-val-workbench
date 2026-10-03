@@ -246,7 +246,12 @@ def _result(eid: int, res: dict) -> dict:
                         "sourced": {e: (x.get("ends") or {}).get(e, {}).get("sourced") for e in ("low", "high")}}
                     for k, x in (res.get("inputs") or {}).items()},
          "held_inputs": {"n": len(res.get("held") or []), "still_held": sum(1 for h in res.get("held") or [] if h["held"]),
-                         "suggestions": _count((h.get("suggestion") or {}).get("status") for h in res.get("held") or [])},
+                         "suggestions": _count((h.get("suggestion") or {}).get("status") for h in res.get("held") or []),
+                         # your figures, where the overlay changed under them: found again, or set aside
+                         "moved": sum(1 for x in (((res.get("figures") or {}).get("gaps") or {}).get("held_notes") or [])
+                                      if x.get("now")),
+                         "set_aside": sum(1 for x in (((res.get("figures") or {}).get("gaps") or {}).get("held_notes") or [])
+                                          if not x.get("now"))},
          "rate_this_year": {"set": bool(((res.get("inputs") or {}).get("rate") or {}).get("this_year")),
                             "applied": bool((((res.get("inputs") or {}).get("rate") or {}).get("this_year") or {}).get("applied"))},
          "cut_off": (res.get("figures") or {}).get("cut_off"),
@@ -438,6 +443,7 @@ _KEYS = {"app", "generated", "files", "reports", "workbooks", "roles", "placed",
          "date", "ok", "run", "stages", "needs", "facts", "n", "by_status", "failing_checks", "image", "keys", "result",
          "worked_out", "stopped", "basis", "located", "tied", "rebuilt_tied", "held", "this_to_last", "bridge_steps",
          "bridge_notes", "terminal", "inputs", "not_applicable", "sourced", "held_inputs", "still_held", "suggestions",
+         "moved", "set_aside",
          "chart", "years", "found", "discountings", "readable", "calls", "roll", "months", "date_check", "fixed_horizon",
          "date_cells_moved", "date_cells_read", "gate", "reliable", "no_reads", "reads", "unmatched", "found_share",
          "dcf_rows", "dcf_missing", "blank_rows", "weak_rows", "timing_open", "zero_roll", "date_cells_off",

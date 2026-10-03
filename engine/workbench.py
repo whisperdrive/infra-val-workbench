@@ -298,7 +298,7 @@ def get(eid: int) -> dict | None:
     terminal = terminal_view(eid, rl)
     return {**e, "documents": documents(eid), "workbooks": wbs, "facts": facts(eid), "roles": rl,
             "session": _session(eid), "now": time.time(), "run": orchestrator.view(eid),
-            "dates": dates(eid, e.get("result"), wbs, rl), "terminal": terminal}
+            "dates": dates(eid, e.get("result"), wbs, rl), "terminal": terminal, "row_agents": row_agents(eid, wbs, rl)}
 
 
 def terminal_view(eid: int, rl: dict | None = None) -> dict | None:
@@ -1136,11 +1136,92 @@ def held_file(eid: int) -> Path:
 
 def held_values(eid: int) -> dict:
     """This year's figures a person set for the inputs held at last year's: {cell: {"value", "label", "by", "from",
-    "was", "at"}}."""
+    "was", "at", "file"}}. Each keeps what it was set for (the input's label, last year's figure, the overlay it was
+    set on), so it's applied only while its cell is still that input (_held_checked)."""
     try:
         return json.loads(held_file(eid).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+
+
+_HELD = threading.Lock()  # held.json read, merged and written by one at a time (a person setting, the session moving)
+
+
+def _plain(text) -> str:
+    return " ".join(str(text or "").split()).lower()
+
+
+def _held_checked(eid: int, sess, summary: dict) -> dict:
+    """This year's figures a person set (held.json), each applied only while it's still the input it was set for: at
+    its cell, a typed figure with the same label and last year's figure ("was") as when it was set. Where the overlay
+    changed under it (a corrected overlay, rows inserted), found again by that label and figure, where exactly one
+    typed input on the overlay's own sheets has both: moved there, and saved. Else set aside, not applied, and said so
+    (sess.held_notes, a need): never written into another input. -> the figures to apply, by cell."""
+    import held as heldmod
+    import overlay as ovmod
+    vals, notes, moved, out = held_values(eid), [], {}, {}
+    sess.held_notes = notes
+    if not vals:
+        return out
+    path = sess.ov.path
+    own = set(summary.get("sheets") or [])
+    with rodb.connect(path) as db:
+        def what(cell):  # (label, typed figure) at a cell, or None where it's a formula, text or blank
+            try:
+                s_, r_, c_ = ovmod.parse_a1(cell)
+            except (TypeError, ValueError, AttributeError):
+                return None
+            got = db.execute("SELECT formula, value FROM cells WHERE sheet=? AND row=? AND col=?", (s_, r_, c_)).fetchone()
+            if not got or got[0] or not _num(got[1]):
+                return None
+            return heldmod._label(db, s_, r_) or cell, float(got[1])
+        typed = None
+        for cell, x in vals.items():
+            if not isinstance(x, dict) or x.get("value") is None:
+                continue
+            if x.get("was") is None or not x.get("label"):  # nothing kept to check it by: applied as set
+                out[cell] = x
+                continue
+            here = what(cell)
+            if here and _plain(here[0]) == _plain(x["label"]) and ovmod.same(here[1], x["was"]):
+                out[cell] = x
+                if x.get("moved_from"):  # found again on an earlier run: said until the person sets it again
+                    notes.append({"cell": x["moved_from"], "now": cell, "label": x["label"], "value": x["value"],
+                                  "how": x.get("moved_how") or ""})
+                continue
+            if typed is None:  # the overlay's typed figures, once: where else an input with this label and figure is
+                typed = [(s_, r_, c_, v) for s_, r_, c_, v in db.execute(
+                    "SELECT sheet, row, col, value FROM cells WHERE formula IS NULL AND typeof(value) IN ('integer','real')")
+                    if not own or s_ in own]
+            hits = [ovmod._a1(s_, r_, c_) for s_, r_, c_, v in typed
+                    if ovmod.same(float(v), x["was"]) and _plain(heldmod._label(db, s_, r_)) == _plain(x["label"])]
+            hits = [h for h in hits if h != cell and h not in vals and h not in out]
+            changed = "the overlay was replaced since" if x.get("file") and x["file"] != path else "the overlay changed since"
+            if here is None:
+                why = f"{cell} no longer holds a typed figure"
+            elif _plain(here[0]) != _plain(x["label"]):
+                why = f"{cell} is now “{here[0]}”"
+            else:
+                why = f"last year's figure at {cell} is now {here[1]:,.4g}, not {x['was']:,.4g}"
+            if len(hits) == 1:
+                how = f"{changed}: {why}; found again at {hits[0]} by its label and last year's figure"
+                out[hits[0]] = x
+                moved[cell] = (hits[0], how)
+                notes.append({"cell": cell, "now": hits[0], "label": x["label"], "value": x["value"], "how": how})
+            else:
+                notes.append({"cell": cell, "now": None, "label": x["label"], "value": x["value"],
+                              "how": f"{changed}: {why}; " + (f"{len(hits)} inputs have its label and last year's figure"
+                                                             if hits else "no input has its label and last year's figure")})
+    if moved:  # saved where they were found, merged into the file as it is now (a person may have set one meanwhile)
+        with _HELD:
+            now = held_values(eid)
+            for a, (b, how) in moved.items():
+                if a in now and b not in now and now[a].get("at") == vals[a].get("at"):
+                    x = now.pop(a)
+                    now[b] = {**x, "file": path, "moved_from": x.get("moved_from") or a, "moved_how": how}
+            f = held_file(eid)
+            f.write_text(json.dumps(now, indent=1), encoding="utf-8")
+    return out
 
 
 def set_held(eid: int, cell: str, value: float | None, source: str = "typed") -> dict:
@@ -1152,17 +1233,23 @@ def set_held(eid: int, cell: str, value: float | None, source: str = "typed") ->
         raise ValueError(f"{cell} isn't an input held at last year's")
     if source not in ("suggestion", "typed"):
         raise ValueError("source is suggestion or typed")
-    vals = held_values(eid)
-    if value is None:
-        vals.pop(cell, None)
-    else:
-        vals[cell] = {"value": float(value), "label": item["label"], "by": "you", "from": source, "was": item["value"],
-                      "at": time.time()}
-    f = held_file(eid)
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(vals, indent=1), encoding="utf-8")
+    try:  # the overlay it's set on: a figure is applied only while its cell is still this input (_held_checked)
+        path = overlay_session(eid)[0].ov.path
+    except Exception:
+        path = None
+    with _HELD:
+        vals = held_values(eid)
+        if value is None:
+            vals.pop(cell, None)
+        else:
+            vals[cell] = {"value": float(value), "label": item["label"], "by": "you", "from": source, "was": item["value"],
+                          "at": time.time(), "file": path}
+        f = held_file(eid)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(vals, indent=1), encoding="utf-8")
     if eid in _SESSIONS:
-        _SESSIONS[eid][1]["held_values"] = vals
+        sess, summary = _SESSIONS[eid]
+        summary["held_values"] = _held_checked(eid, sess, summary)
     _touch(eid)  # the result's inputs changed: the orchestrator works it out again
     return {"cell": cell, "label": item["label"], "value": value, "was": item["value"], "from": source}
 
@@ -1322,7 +1409,7 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
     if getattr(sess, "horizon_set", None) != want:
         sess.horizon_set = want
         sess._pshift.clear()
-    summary["held_values"] = held_values(eid)  # this year's figures a person set, on this year's feed
+    summary["held_values"] = _held_checked(eid, sess, summary)  # this year's figures a person set, while still theirs
     summary["this_year_rate"] = this_year_rate(eid)  # and this year's discount rate (result.this_year_rate)
     summary["method"] = preferred_method(eid)  # and the method this year's value is worked out by (methods.py)
     summary["method_choice"] = method_choice(eid)  # who chose it, when, and the one it replaced
@@ -1954,6 +2041,36 @@ def _rows_job(eid: int, cells: list[str]) -> None:
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps(res, default=str), encoding="utf-8")
     _set("engagements", eid, rows_status="done", rows_step="Done")
+
+
+def row_agents(eid: int, wbs: list | None = None, rl: dict | None = None) -> dict | None:
+    """What the row agents did, for the page: each row they looked at (the row they settled on, how, why, what the
+    reviewer said, and whether it still stands or a person has since picked another), and the notes they made about
+    this year's model, kept for the next run on the same file. None before they've run."""
+    f = _rowagent_file(eid)
+    try:
+        res = json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+    except (OSError, ValueError):
+        return None
+    if not res:
+        return None
+    import rowfind
+    picks = _read_rowpicks(eid)
+    rows = []
+    for d in res.get("decisions") or []:
+        p = picks.get(d.get("row"))
+        p = (p if isinstance(p, dict) else {"to": p, "by": "you"}) if p else {}
+        rows.append({"row": d.get("row"), "label": d.get("label"), "decision": d.get("decision"),
+                     "to_label": d.get("to_label"), "how": d.get("how"), "why": d.get("why"), "review": d.get("review"),
+                     "advice": d.get("advice"), "agreed": d.get("agreed"), "origin": bool(d.get("origin")),
+                     "now": p.get("to"), "now_by": p.get("by")})
+    wbs, rl = wbs if wbs is not None else workbooks(eid), rl if rl is not None else roles(eid)
+    ids = {(rl.get(k) or {}).get("id") for k in ("prior_overlay", "prior_model", "current_model")}
+    built = max([w.get("processed_at") or 0 for w in wbs if w["id"] in ids] + [0])
+    return {"at": res.get("at"), "rows": rows, "notes": [n for n in res.get("notes") or [] if isinstance(n, str)],
+            "rounds": len(res.get("rounds") or []), "open_before": res.get("open_before"),
+            "open_after": res.get("open_after"), "models": res.get("models"), "models_error": res.get("models_error"),
+            "stale": bool((res.get("at") or 0) < built or res.get("v") != rowfind.VERSION)}
 
 
 def rows_view(eid: int) -> dict:
