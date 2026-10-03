@@ -1369,19 +1369,45 @@ def terms_confirmed(eid: int) -> dict:
     return got if isinstance(got, dict) else {}
 
 
+def _terms_still(eid: int, sess) -> list[str]:
+    """The confirmed terms still the terms they were confirmed for: on the same file (this year's client model for a
+    new term, last year's for a gone one) and under the same label at their row. One confirmed on another version of
+    the model is set aside, so another line at that row doesn't enter the value as confirmed."""
+    got, rl, out = terms_confirmed(eid), roles(eid), []
+    for key, x in got.items():
+        x = x if isinstance(x, dict) else {}
+        was = key.startswith("was:")
+        role = "prior_model" if was else "current_model"
+        if x.get("file") is not None and x["file"] != (rl.get(role) or {}).get("id"):
+            continue
+        wbk = (sess.prior or sess.ov) if was else sess.current
+        try:
+            k = _row_ref(key[4:] if was else key)
+        except ValueError:
+            continue
+        if x.get("label") and wbk is not None and _plain(wbk.labels().get(k, "")) != _plain(x["label"]):
+            continue
+        out.append(key)
+    return sorted(out)
+
+
 def confirm_term(eid: int, row: str, ok: bool, label: str | None = None) -> dict:
     """Confirm a term this year's model adds belongs in this year's value, or one it drops is gone (ok), or take that
-    back. The gate then works out whether the value can be shown again."""
+    back; kept with its label and the file it's in (_terms_still). The gate then works out whether the value can be
+    shown again."""
+    fid = (roles(eid).get("prior_model" if row.startswith("was:") else "current_model") or {}).get("id")
+
     def change(got):
         got = got if isinstance(got, dict) else {}
         if ok:
-            got[row] = {"label": label or "", "by": "you", "at": time.time()}
+            got[row] = {"label": label or "", "by": "you", "at": time.time(), "file": fid}
         else:
             got.pop(row, None)
         return got
-    got = store.update(terms_file(eid), change, {})
+    store.update(terms_file(eid), change, {})
     if eid in _SESSIONS:
-        _SESSIONS[eid][1]["terms_confirmed"] = sorted(got)
+        sess, summary = _SESSIONS[eid]
+        summary["terms_confirmed"] = _terms_still(eid, sess)
     _touch(eid)
     return {"row": row, "confirmed": ok, "label": label or ""}
 
@@ -1462,7 +1488,9 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
     summary["this_year_rate"] = this_year_rate(eid)  # and this year's discount rate (result.this_year_rate)
     summary["method"] = preferred_method(eid)  # and the method this year's value is worked out by (methods.py)
     summary["method_choice"] = method_choice(eid)  # who chose it, when, and the one it replaced
-    summary["terms_confirmed"] = sorted(terms_confirmed(eid))  # and the terms a person confirmed (result._term_changes)
+    summary["terms_confirmed"] = _terms_still(eid, sess)  # and the terms a person confirmed, still those (result._term_changes)
+    # the files the engagement's checks are worked out on: an acknowledgement is of a check on these (result.hold)
+    summary["files_key"] = sorted([k, r.get("kind"), r.get("id")] for k, r in roles(eid).items())
     summary["acks"] = acks(eid)  # and the checks a person acknowledged, with the reason (result.hold)
     summary["damaged"] = store.damaged(OUT / "overlays" / f"e{eid}")  # and their files that couldn't be read
     roll = summary.get("roll")

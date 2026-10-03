@@ -1075,6 +1075,37 @@ def typed_ends_check(first: int) -> None:
           "them pointing at typed figures: paired, held, nothing under them moving; a mid no longer the ends' midpoint holds)")
 
 
+def lapse_check(first: int) -> None:
+    """A person's decisions are of the files they were made on: an acknowledgement's key covers the engagement's files,
+    so one made before a client model was replaced lapses (said, with its reason, not applied); a confirmed term
+    applies only on the file it was confirmed on and under the same label at its row (another line at that row
+    entered the value "confirmed by you")."""
+    import result
+    sess, summary = wb.overlay_session(first)
+    wb._sync_roll(eid := first, sess, summary)
+    h = result.hold(summary, "cf-stale", ["DCF!C9"], "t", "d")
+    other = {**summary, "files_key": summary["files_key"][:-1] + [["current_model", "workbook", -1]],
+             "acks": {"cf-stale": {"key": h["key"], "reason": "checked", "at": time.time()}}}
+    h2 = result.hold(other, "cf-stale", ["DCF!C9"], "t", "d")
+    assert h2["key"] != h["key"] and not h2["acked"] and h2["lapsed"]["reason"] == "checked", h2
+    n = orc._need_of(h2, {"step": "result"})
+    assert n["severity"] == "block" and "acknowledged before" in n["detail"] and "checked" in n["detail"], n
+    # the confirmed term (Insurance, this year's Operations!r10): applies as confirmed, not on another file or label
+    kept = wb.terms_confirmed(eid)
+    assert "Operations!r10" in wb._terms_still(eid, sess), kept
+    f = wb.terms_file(eid)
+    try:
+        x = kept["Operations!r10"]
+        wb.store.write(f, {**kept, "Operations!r10": {**x, "file": -1}})
+        assert "Operations!r10" not in wb._terms_still(eid, sess)
+        wb.store.write(f, {**kept, "Operations!r10": {**x, "label": "Land tax levy"}})
+        assert "Operations!r10" not in wb._terms_still(eid, sess)
+    finally:
+        wb.store.write(f, kept)
+    print("lapse: ok (an acknowledgement made on other files lapses, its reason said; a confirmed term applies only on "
+          "its file and under its label)")
+
+
 def shared_dates_check(first: int) -> None:
     """A workbook is shared by its content across engagements; its valuation date, and who confirmed it, is each
     engagement's own: corrected in another engagement using the same client model, this one's date, roll and result
@@ -1900,6 +1931,7 @@ def main() -> None:
     methods_check(eid)
     failures_check(eid)
     typed_ends_check(eid)
+    lapse_check(eid)
     shared_dates_check(eid)
     damaged_check(eid)
     rows_context_check(eid)

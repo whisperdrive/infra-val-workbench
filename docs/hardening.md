@@ -191,7 +191,10 @@ reviewer's own session.
   written in place without locks and read as empty when damaged: eight acknowledgements at once lost 151 of 160; a
   damaged rate file drops this year's rate with no flag; two quick row picks while the overlay thread is busy keep
   one; the rows job drops the agents' earlier picks on every rerun.
-- **S7. Decisions outlive their inputs**. Acknowledgements of `cf-stale`, `cf-exact`, `cf-tv-nil`, `other-link` and
+- ~~**S7. Decisions outlive their inputs**~~ — fixed: every check's key covers the engagement's files (its roles'
+  workbooks and report), so an acknowledgement made before a client model was replaced lapses, said beside the check
+  with its reason; a confirmed term keeps the file it was confirmed on and its label, and applies only while both
+  still hold. Was: Acknowledgements of `cf-stale`, `cf-exact`, `cf-tv-nil`, `other-link` and
   `roll-assumed` are keyed without this year's figures, and survive a replaced client model; a confirmed term is keyed
   by row address, so another line at that row enters the value "confirmed by you".
 - **S8. A person's edits to approved facts** (code re-read). The rebuild's fingerprint carries only an edit's value

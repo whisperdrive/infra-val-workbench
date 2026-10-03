@@ -65,11 +65,14 @@ def fingerprint(obj) -> str:
 
 def hold(summary: dict, hid: str, figures, title: str, detail: str, severity: str = "block", **more) -> dict:
     """A check's finding: {"id", "key", "title", "detail", "severity", "acked"}. A "block" holds this year's value back
-    unless a person acknowledged this id on these figures (summary["acks"]); a "check" is a point to look at."""
-    key = fingerprint(figures)
+    unless a person acknowledged this id on these figures and these files (summary["acks"], summary["files_key"]: a
+    client model replaced since lapses the acknowledgement, even where the figures a check keys on are the same); a
+    "check" is a point to look at. An acknowledgement that lapsed is kept beside it ("lapsed"), with its reason."""
+    key = fingerprint([figures, summary.get("files_key")])
     ack = (summary.get("acks") or {}).get(hid)
     acked = ack if ack and ack.get("key") == key else None
-    return {"id": hid, "key": key, "title": title, "detail": detail, "severity": severity, "acked": acked, **more}
+    return {"id": hid, "key": key, "title": title, "detail": detail, "severity": severity, "acked": acked,
+            **({"lapsed": ack} if ack and not acked else {}), **more}
 
 
 def holding(holds: list[dict]) -> bool:

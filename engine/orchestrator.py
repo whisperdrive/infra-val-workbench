@@ -829,6 +829,10 @@ def _acked(n: dict, key: str, ack: dict | None) -> dict:
     """A need a person can acknowledge with a reason (key: the figures it found). Acknowledged on these figures, it
     stays on the list as a note with the reason; on other figures it stands again."""
     n = {**n, "ack": key}
+    if ack and ack.get("key") != key:  # acknowledged before, on other figures or files: said, not applied
+        when = time.strftime("%d %B %Y", time.localtime(ack.get("at") or time.time())).lstrip("0")
+        n.update(detail=(n.get("detail") or "") + f" — acknowledged before ({when}), on other figures or files"
+                        + (f": {ack['reason']}" if ack.get("reason") else "") + "; look again")
     if ack and ack.get("key") == key:
         when = time.strftime("%d %B %Y", time.localtime(ack.get("at") or time.time())).lstrip("0")
         n.update(severity="info", acked=ack, title="Acknowledged: " + n["title"],
@@ -840,7 +844,7 @@ def _acked(n: dict, key: str, ack: dict | None) -> dict:
 def _need_of(h: dict, go: dict, stage_: str = "result", **more) -> dict:
     """A check's finding (result.hold) as a need: blocks hold the value back until acknowledged."""
     return _acked({"id": h["id"], "stage": stage_, "severity": h["severity"], "title": h["title"],
-                   "detail": h["detail"], "go": go, **more}, h["key"], h.get("acked"))
+                   "detail": h["detail"], "go": go, **more}, h["key"], h.get("acked") or h.get("lapsed"))
 
 
 def _result_job(eid: int, key: str):
