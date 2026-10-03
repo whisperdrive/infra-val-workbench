@@ -1449,6 +1449,9 @@ def diagnostics_check(eid: int) -> None:
     assert not leaked and d["redacted"] == 0, (leaked, d["redacted"])
     m = d["models"]
     assert m["prior_model"]["timelines"]["annual"]["periods_max"] == 21 and "quarterly" not in m["current_model"]["timelines"], m
+    # what each saved file says of its results: none missing, no errors, calculated as Excel calculates
+    assert all(x["saved"] == {"errors": 0, "hidden_sheets": 0, "unsaved_formulas": 0, "calc_mode": "auto",
+                              "calc_completed": True, "iterate": False} for x in m.values()), m
     assert d["alike"]["prior_model_vs_current_model"]["labels"] > 0.8 and d["profile"]["fy_end_month"] == 6, d["alike"]
     r = d["result"]
     assert r["worked_out"] and r["tied"] == {"low": True, "high": True} and r["terminal"] == "growth_final_year", r

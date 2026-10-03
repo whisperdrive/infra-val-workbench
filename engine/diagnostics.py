@@ -61,6 +61,7 @@ def _vocabulary() -> set[str]:
               "flagged", "resolved", "edited", "figure", "confirmed", "confirmed by the reviewer", "corrected", "disputed",
               "native", "you", "orchestrator", "agents", "agent", "code", "block", "check", "info", "note",
               "monthly", "quarterly", "semi-annual", "annual", "irregular", "none", "fixed", "rolling",
+              "auto", "manual", "autoNoTable",
               "dates", "date_check", "client_dates", "timelines", "assumed", "this_year_date",
               "quote", "table", "range", "ex", "cum", "low", "mid", "high", "rate", "growth", "multiple", "franking",
               "checked", "figure only", "not found", "no row this year", "no date this year", "nil",
@@ -133,8 +134,21 @@ def model_shape(db_path: str) -> dict:
             x["periods_max"] = max(x["periods_max"], len(tl))
             x["first"] = min(filter(None, (x["first"], _iso(tl[0]))))
             x["last"] = max(filter(None, (x["last"], _iso(tl[-1]))))
+        # what the saved file says of its results: formulas saved with none, Excel's errors, how it was last calculated,
+        # sheets hidden (a row map built before these were recorded has none of them: left out)
+        saved = {"errors": db.execute("SELECT COUNT(*) FROM cells WHERE value IN ('#N/A','#REF!','#VALUE!','#DIV/0!',"
+                                      "'#NAME?','#NUM!','#NULL!')").fetchone()[0],
+                 "hidden_sheets": db.execute("SELECT COUNT(*) FROM sheets WHERE state <> 'visible'").fetchone()[0]}
+        try:
+            saved["unsaved_formulas"] = db.execute("SELECT COUNT(*) FROM unsaved").fetchone()[0]
+            calc = dict(db.execute("SELECT key, value FROM meta WHERE key LIKE 'calc.%'"))
+            saved["calc_mode"] = calc.get("calc.calcMode", "auto")
+            saved["calc_completed"] = calc.get("calc.calcCompleted", "1") not in ("0", "false")
+            saved["iterate"] = calc.get("calc.iterate", "0") in ("1", "true")
+        except Exception:
+            pass
         return {"sheets": len(sheets), "line_items": items, "formula_cells": formulas, "timelines": by,
-                "sheets_without_timeline": len(sheets) - sum(x["sheets"] for x in by.values())}
+                "sheets_without_timeline": len(sheets) - sum(x["sheets"] for x in by.values()), "saved": saved}
     finally:
         t.close()
 
@@ -453,6 +467,7 @@ def _red(n: list) -> str:
 # the export's own field names: never the client's
 _KEYS = {"app", "generated", "files", "reports", "workbooks", "roles", "placed", "by", "confirmed", "same_file_as_overlay",
          "models", "sheets", "line_items", "formula_cells", "timelines", "periods_max", "first", "last",
+         "saved", "errors", "hidden_sheets", "unsaved_formulas", "calc_mode", "calc_completed", "iterate",
          "sheets_without_timeline", "error", "alike", "labels", "sheet_names", "profile", "fy_end_month", "horizon", "dates",
          "date", "ok", "run", "stages", "needs", "facts", "n", "by_status", "failing_checks", "image", "keys", "result",
          "worked_out", "stopped", "basis", "located", "tied", "rebuilt_tied", "held", "this_to_last", "bridge_steps",
