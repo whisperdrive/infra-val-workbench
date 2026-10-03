@@ -101,8 +101,22 @@ takes it from there:
    them, and come off the forecast's present value. The split is in the
    units most of the report's figures tie in (discountings in thousands under an equity value in millions, at 100%
    under a share of it).
-6. **Rolls forward onto this year's client model.** Rows are found by label, history, numbers and a trace, with row
-   agents for the ones in doubt. The trace starts from the rows both models clearly share (the same label, last year's
+6. **Rolls forward onto this year's client model.** Rows are found by a set of tools, cheap ones first, the next when
+   they disagree or can't settle a row: the address (a model whose structure is unchanged), the label, the row's block
+   and its heading (`structure.py`: a downside case inserted above the base is a copy of the base block, and the copy
+   headed as last year's is taken), its lineage (what it's made of and what it feeds, two steps out), its kind, and
+   its numbers as a sanity band, never the selector (the closest rows to last year's are often a prior-forecast block,
+   another case or the 100% row). A row settles where kinds of evidence agree (who it is, where it is, what it does,
+   its numbers); each row says which agreed. The row agents' first pass takes a candidate only where something other
+   than its numbers says it's the same line item and it isn't a copy of last year's figures; in a model rebuilt from
+   the ground up, its numbers and structure together where exactly one candidate has both. Then the models: asked
+   whether a row means the same, given its card, its lineage, its role in the valuation (the overlay rows reading it,
+   its path to the equity value), the searcher's trail and what's been learned about this year's model (notes kept
+   for every row and the next run). Each pick keeps a card of the row it chose and is found again from it when the
+   client sends a corrected model; one that can't be is set aside, not applied to another row. A single figure off
+   the timeline is read from the column headed as last year's (a case column inserted before it). Your picks are
+   logged, without a word of the client's, to learn how often each combination of evidence is right (`evidence.py`).
+   `tests/variants.py` measures the tools on synthetic pairs of models with known answers. The trace starts from the rows both models clearly share (the same label, last year's
    numbers: an output like the distributions or the cash flow available, an input like a volume or a tariff) and
    follows the dependency graph to the row, down from the outputs and up from the inputs, pairing each step with last
    year's by its label, its numbers or its words, else as the one row left once the others are paired. It follows
@@ -351,6 +365,9 @@ uv run python tests/check_xlruntime.py  # Excel functions in the Python runtime
   - `cashflows.py`: this year's cash flows against last year's, period by period, and the checks on them.
   - `interest.py`: the interest valued, the report's against the share the overlay applies.
   - `specs.py`: the models side by side.
+  - `structure.py`: rows' kinds, blocks and their copies, a row's lineage, from the workbook's shapes.
+  - `lineage.py`: what drives the value: every input under it, by what it does, with its effect.
+  - `evidence.py`: what the row tools agreed on, and whether they were right, from a person's picks.
   - `scenarios.py`: the scenario each client model was saved on, this year's next to last year's, and when each was
     saved.
   - `workpaper.py`: the Excel workpaper, built in memory from the engagement's result.

@@ -603,7 +603,7 @@ class RowFinder:
                          for n, (sc, _) in ev.items())
             # the same label where it was, and last year's numbers in the periods both have: nothing beats that
             sure = "label" in ev and ev["label"][0] >= 1.0 and "history" in ev
-            why = self.other_shape(s, r, k) or self._kind_clash(s, r, k)
+            why = self.other_shape(s, r, k) or self._kind_clash(s, r, k) or self.suspect_copy(s, r, k)
             if why:  # another kind of row: its evidence counts for less, and alone it isn't enough
                 ev["shape"] = (0.0, why)
                 total -= 0.2
@@ -640,7 +640,7 @@ class RowFinder:
                 # meant doesn't change a figure (a model carries one line on several sheets)
                 others = [x[2] for x in ranked[1:4]]
                 if res["confidence"] < CONFIDENT and "history" in ev and ev["history"][0] >= 0.5 and others \
-                        and all(self._same_series(k, o) for o in others):
+                        and k not in odd and all(self._same_series(k, o) for o in others):
                     res["confidence"] = CONFIDENT
                     res["evidence"].append(("history", f"the other {len(others)} candidate(s) are the same series in every "
                                                        "period: whichever is meant, the figures are these"))
@@ -687,14 +687,15 @@ class RowFinder:
             j = len(want & got) / max(1, len(want | got))
             if j < 0.5:
                 continue
-            if lab:
-                same = [x for x in b["rows"] if _norm(clab.get((b["sheet"], x), "")) == lab]
-                if len(same) == 1:
-                    out.append(((b["sheet"], same[0]), round(j, 2), f"under its label in the block headed '{b['heading']}', "
-                                                                    f"as last year's ('{mine['heading']}')"))
-            elif len(b["rows"]) == len(mine["rows"]):
-                out.append(((b["sheet"], b["rows"][i]), round(0.6 * j, 2), f"at its place in the block headed "
-                                                                           f"'{b['heading']}', as last year's"))
+            same = [x for x in b["rows"] if lab and _norm(clab.get((b["sheet"], x), "")) == lab]
+            if len(same) == 1:
+                out.append(((b["sheet"], same[0]), round(j, 2), f"under its label in the block headed '{b['heading']}', "
+                                                                f"as last year's ('{mine['heading']}')"))
+            elif not same and len(b["rows"]) == len(mine["rows"]):
+                # its place in a block headed as last year's, of the same size: its label changed (or it has none)
+                out.append(((b["sheet"], b["rows"][i]), round((0.5 if lab else 0.6) * j, 2),
+                            f"at its place in the block headed '{b['heading']}', as last year's"
+                            + (" (its label changed)" if lab else "")))
         return sorted(out, key=lambda x: (-x[1], x[0]))[:3]
 
     def _lineage(self, s, r, k) -> tuple | None:

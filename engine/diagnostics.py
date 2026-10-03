@@ -44,7 +44,8 @@ def _vocabulary() -> set[str]:
     words |= set(methods.LABEL)
     import cashflows
     import lineage
-    words |= set(cashflows.IDS) | set(cashflows.KINDS) | set(lineage.GROUPS) | {"interest", "interest-two", "inside", "after", "basis",
+    words |= set(cashflows.IDS) | set(cashflows.KINDS) | set(lineage.GROUPS)
+    words |= {"identity", "place", "role", "numbers", "structure"} | {"interest", "interest-two", "inside", "after", "basis",
                                                           "rebuild-low", "rebuild-high", "tie-low", "tie-high", "roll-assumed",
                                                           "terms-error", "lines-error", "other-link", "role-check"}
     words |= {"waiting", "queued", "running", "done", "attention", "blocked", "failed", "error", "pending", "approved",
@@ -255,6 +256,7 @@ def _result(eid: int, res: dict) -> dict:
                                                               if str(y)[2:].isdigit()]),
                    "undated": (res.get("chart") or {}).get("undated")},
          "flows": _flows(res),
+         "row_evidence": _calibration(),
          "drives": {"groups": {g["group"]: len(g["inputs"]) for g in (res.get("drives") or {}).get("groups") or []},
                     "nudged": (res.get("drives") or {}).get("nudged"), "capped": (res.get("drives") or {}).get("capped"),
                     "leaves": (res.get("drives") or {}).get("leaves"), "error": bool((res.get("drives") or {}).get("error"))},
@@ -366,6 +368,16 @@ def _flows(res: dict) -> dict:
             "client_rows": {k: (fc.get("rows") or {}).get(k) for k in ("rows", "compared", "changed")}}
 
 
+def _calibration() -> list:
+    """How often the finder's row has been a person's pick, by the kinds of evidence that agreed on it (evidence.py):
+    the app's words and counts only."""
+    try:
+        import evidence
+        return evidence.calibration()[:20]
+    except Exception:
+        return []
+
+
 def _methods(inv: dict) -> dict:
     """The methods inventory as ratios: each method's mid against the default's, whether it was worked out, the
     preferred one, whether the recompute ties, how many forecast flags of the overlay's own were found."""
@@ -439,7 +451,7 @@ _KEYS = {"app", "generated", "files", "reports", "workbooks", "roles", "placed",
          "flows", "cores", "recomputed", "both_years", "periods", "why", "checks", "id", "severity", "acked", "split",
          "client_rows", "compared", "changed", "outside_of_value", "revised", "added", "dropped", "cash_flows", "outside",
          "convention", "ordered", "undated", "this_year", "interest", "stated", "applied", "drives", "groups",
-         "nudged", "capped", "leaves", "overlay", "client"}
+         "nudged", "capped", "leaves", "overlay", "client", "row_evidence", "agreed", "share"}
 
 
 def as_text(eid: int) -> str:

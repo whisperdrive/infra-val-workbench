@@ -75,18 +75,22 @@ off and time-checks it on the roll, on the Model assumptions card and the cash-f
 - The models side by side: one table of each model's specifications (the report, the overlay as saved, the rebuild,
   both client models, this year), last year's flagged where they don't agree.
 
+### Row finding (measured)
+On synthetic pairs of models with known answers (`tests/variants.py`: revised, renamed, a downside case inserted, the
+sheet renamed, a prior-forecast block, reordered, a row dropped, and combinations), 44 rows: before, 35 right and 9
+wrong (every row of an inserted downside case, confidently; the prior-forecast copy taken by its numbers); now 44
+right, none wrong. The tools: address, label, block and heading, lineage two steps out, kind, numbers as a band; the
+row agents by meaning, then the models with the row's card, lineage, role in the valuation, trail and notes; pick
+cards found again in a corrected model; a person's picks logged, anonymised, for calibration.
+
 ## Left to do, ranked
 
 High: a wrong value can still reach the result unflagged.
 
-1. **Row agents settle "by the numbers" on the candidate nearest last year's.** A prior-forecast comparison block,
-   another scenario's row or the 100% row can beat the true revised row, and the zero roll then sits near 1 by
-   construction. Take a numbers-only pick only when one candidate passes, on the expected sheet; otherwise a person.
-2. **Same-label matching when a block is inserted.** A new downside or 100% block above the base block, or a new case
-   column ahead of Base for single-cell inputs, moves the read silently. Compare the label's occurrence count and the
-   case header between the models.
-3. **Row picks and held inputs keyed by address, not by file.** A replaced client model keeps last year's picks
-   pointing at other lines, counted as confident. Store the file and the figures with each pick and re-check on load.
+1. ~~Row agents settle "by the numbers" on the candidate nearest last year's~~ — done: by meaning, numbers a band.
+2. ~~Same-label matching when a block is inserted, or a case column~~ — done: block copies by heading; case columns.
+3. ~~Row picks keyed by address, not by file~~ — done: each pick keeps a card and is found again (held inputs still by
+   address).
 4. **A mid-period valuation date** keeps the whole straddling period (half a year's cash flow already earned). Point
    to check with the elapsed fraction; a proration method.
 5. **A distribution declared at this year's date in the client model** that the overlay doesn't deduct.

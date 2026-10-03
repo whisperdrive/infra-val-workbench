@@ -9,6 +9,7 @@
 
     uv run python tests/check_trace.py
 """
+import json
 import sqlite3
 import sys
 import tempfile
@@ -1581,6 +1582,44 @@ def agent_context_check() -> None:
           "trail; the reviewer sees the trail, the row's role in the valuation and the notes)")
 
 
+def variants_check() -> None:
+    """The row tools measured on synthetic pairs of models with known answers (tests/variants.py: revised, renamed, a
+    downside case inserted, the sheet renamed, a prior-forecast block, reordered, a row dropped, and combinations):
+    no row settled on the wrong row; at most a few left open for the models."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    import variants
+    got = variants.measure(variants.pairs(Path(tempfile.mkdtemp(prefix="variants_"))))
+    wrong = [(n, r["row"], r["want"], r["got"]) for n, x in got.items() for r in x["rows"] if r["verdict"] == "wrong"]
+    right = sum(x["right"] for x in got.values())
+    total = sum(x["right"] + x["open"] + x["wrong"] for x in got.values())
+    assert not wrong, wrong
+    assert right >= total - 2, {n: (x["right"], x["open"]) for n, x in got.items()}
+    print(f"variants: ok ({right} of {total} rows right across {len(got)} kinds of change, none wrong)")
+
+
+def evidence_check() -> None:
+    """A person's picks, learned from without a word of the client's (evidence.py): each decision logged with the kinds
+    of evidence that agreed on the finder's row and whether it was right; the calibration says how often each
+    combination has been right."""
+    import evidence
+    import workbench as wbm
+    keep = wbm.OUT
+    wbm.OUT = Path(tempfile.mkdtemp(prefix="evidence_"))
+    try:
+        for right in (True, True, False):
+            evidence.record(["identity", "numbers"], 0.9, right, ["identity", "numbers"], "label")
+        evidence.record(["numbers"], 0.5, False, ["place", "role"], "history")
+        cal = {tuple(x["agreed"]): x for x in evidence.calibration()}
+        assert cal[("identity", "numbers")]["n"] == 3 and cal[("identity", "numbers")]["right"] == 2, cal
+        assert cal[("numbers",)]["share"] == 0.0, cal
+        line = evidence.log_file().read_text(encoding="utf-8").splitlines()[0]
+        assert set(json.loads(line)) == {"at", "agreed", "confidence", "right", "picked", "how"}, line
+    finally:
+        wbm.OUT = keep
+    print("evidence: ok (each pick logged by the kinds of evidence that agreed, no label or figure; how often each "
+          "combination has been right)")
+
+
 if __name__ == "__main__":
     main()
     mid_year_check()
@@ -1605,3 +1644,5 @@ if __name__ == "__main__":
     meaning_check()
     pick_card_check()
     agent_context_check()
+    variants_check()
+    evidence_check()

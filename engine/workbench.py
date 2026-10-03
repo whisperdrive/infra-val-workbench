@@ -1861,6 +1861,15 @@ def row_pick(eid: int, prior_row: str, current_row: str | None) -> dict:
     if to and not keep and not sess.current.db.execute("SELECT 1 FROM rows WHERE sheet=? AND row=?", to).fetchone():
         raise ValueError(f"{current_row} isn't a line item in this year's model")
     picks = _read_rowpicks(eid)
+    if to and not keep:  # what the finder had, against the person's pick: learned from, without a word of the client's
+        try:
+            import evidence
+            import rowagent
+            ex = ovmod.deep(sess.rowmap.explain, s, r)
+            picked = ovmod.deep(rowagent._families, sess.rowmap, s, r, to, ex)
+            evidence.record(ex.get("agreed"), ex.get("confidence"), ex.get("found") == to, sorted(picked), ex.get("how"))
+        except Exception:
+            pass
     if to:
         picks[prior_row] = {"to": current_row, "by": "you", **({"card": ovmod.deep(sess.rowmap.card, sess.current, to)}
                                                              if not keep else {})}
