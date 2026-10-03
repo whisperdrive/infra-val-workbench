@@ -26,10 +26,11 @@ import build_map  # noqa: E402
 ENDS = [date(2026 + k, 6, 30) for k in range(8)]
 # kinds of change the row tools still settle wrongly (the second review, 3 October 2026; docs/hardening.md S1, S9):
 # taken off as each is fixed, so the measure stays honest and a new wrong row anywhere else fails the check
-KNOWN_WRONG = {"rebuilt, low case beside a revised central", "costs and tax merged", "small copies swapped, close figures"}
+KNOWN_WRONG = {"costs and tax merged", "small copies swapped, close figures"}
 # kinds where leaving the rows open (for the models or a person) is the right answer: nothing in the model says which
 OPEN_OK = {"downside above, no headings, no value row", "downside above, base renamed, the value reads both",
-           "copies swapped, no headings, no value row", "copies swapped, close figures"}
+           "copies swapped, no headings, no value row", "copies swapped, close figures",
+           "rebuilt, low case beside a revised central"}
 LINES = (("Revenue", 100.0), ("Operating costs", -40.0), ("Tax paid", -15.0))  # then Distributions, their sum
 
 

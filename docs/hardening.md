@@ -203,8 +203,11 @@ reviewer's own session.
   approval or page, and an update recognises the older roles key without running anything. Was (code re-read): The rebuild's fingerprint carries only an edit's value
   text; the result's none of it: a growth rate or a rate range edited reruns nothing, and the page calls the result
   current.
-- **S9. The rebuilt-model fallback** takes the only row within the numbers band: a low case beside a central case
-  revised 20% up.
+- ~~**S9. The rebuilt-model fallback**~~ — fixed: where the row it would take has its label in more than one place
+  this year (copies: a low case beside a central one), it's taken only as the one copy reaching the model's own
+  valuation row last year's row reached; else it's left for the models or a person (the review's case now open).
+  A rebuilt model's unique rows are taken as before, listed to confirm. Was: the fallback took the only row within the
+  numbers band: a low case beside a central case revised 20% up.
 
 ### After an internal failure
 

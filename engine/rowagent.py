@@ -134,13 +134,21 @@ def by_meaning(finder, s: str, r: int) -> dict | None:
     # or one of the kinds a row's values fix (dates, flags, factors, a share, an index) exactly
     broad = lambda x: "calculated" if x in ("series", "subtotal") else x
     want = broad(kinds[0].get((s, r), {}).get("kind"))
-    both = [(k, c) for k in candidates(finder, s, r) if (c := finder.check(s, r, k))["ok"]
-            and not finder.suspect_copy(s, r, k) and want and broad(kinds[1].get(k, {}).get("kind")) == want]
+    kind = [k for k in candidates(finder, s, r) if want and broad(kinds[1].get(k, {}).get("kind")) == want
+            and not finder.suspect_copy(s, r, k)]
+    both = [(k, c) for k in kind if (c := finder.check(s, r, k))["ok"]]
     if len(both) != 1:
         return None
     k, c = both[0]
-    return {"to": k, "check": c, "label": finder.current.labels().get(k, ""), "agreed": ["numbers", "structure"],
-            "rebuilt": True}
+    # in copies (its label in more than one place this year: a low case beside a central one), what it does decides:
+    # the one copy reaching the model's own valuation (by its label) last year's row reached. Numbers in the band alone
+    # took a low case beside a central case revised 20% up
+    lab = rowfind._norm(finder.current.labels().get(k, ""))
+    twins = [x for x in finder._index()["by_label"].get(lab, []) if broad(kinds[1].get(x, {}).get("kind")) == want] if lab else []
+    if len(twins) > 1 and [x for x in twins if finder._by_value(s, r, [x])] != [k]:
+        return None
+    return {"to": k, "check": c, "label": finder.current.labels().get(k, ""),
+            "agreed": ["numbers", "structure"] + (["role"] if len(twins) > 1 else []), "rebuilt": True}
 
 
 def role_of(sess, summary: dict, cells: list[str], s: str, r: int) -> str | None:
