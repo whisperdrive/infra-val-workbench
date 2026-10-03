@@ -1527,7 +1527,14 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
         except Exception as ex:  # beside the value, not in its way
             inv = {"methods": [], "default": methods.DEFAULT, "preferred": methods.DEFAULT, "asked": summary.get("method"),
                    "error": f"{type(ex).__name__}: {ex}"}
+    import specs
+    try:  # the models side by side, the way a shop compares products' specifications
+        spec = specs.build(sess, summary, facts, head, where, tie, figs, _flows_public(fl, unit), asm, inputs, rec,
+                           scenario, inter, this_year, rate_now, terminal, inv, unit)
+    except Exception as ex:  # beside the value, not in its way
+        spec = {"error": f"{type(ex).__name__}: {ex}"}
     return {"head": head, "where": where, "tie": tie, "figures": figs, "bridges": br, "chart": ch, "reconcile": rec,
+            "specs": spec,
             "flows": _flows_public(fl, unit), "flow_checks": {"split": cfc.get("split") or {}, "rows": cfc.get("rows")},
             "interest": {k: inter.get(k) for k in ("report", "report_text", "model", "error")},
             "assumptions": asm, "inputs": inputs, "held": held_inputs, "terminal": terminal, "methods": inv,

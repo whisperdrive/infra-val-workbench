@@ -341,6 +341,14 @@ dialog#uploadDlg { border: 1px solid var(--rule-strong); border-radius: 10px; ba
 .dlg-head h2 { margin: 0; font-size: 16px; flex: 1; }
 .dlg-body { padding: 16px 18px 22px; display: grid; gap: 16px; }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+table.specs { border-collapse: collapse; min-width: 860px; }
+table.specs th[scope="row"] { text-align: left; font-weight: 600; position: sticky; left: 0; background: var(--surface); min-width: 210px; }
+table.specs td, table.specs th { padding: 5px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; font-size: 13px; }
+table.specs thead th { font-size: 12px; text-align: left; vertical-align: bottom; }
+table.specs .spec-grp { text-align: center; border-bottom: 2px solid var(--rule); }
+table.specs .spec-now { background: color-mix(in srgb, var(--blue, #1a9afa) 6%, transparent); }
+table.specs tr.spec-sec th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding-top: 12px; }
+table.specs tr.spec-flag th[scope="row"], table.specs tr.spec-flag td { background: var(--warn-bg); }
 .tag { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--rule); border-radius: 99px; padding: 2px 4px 2px 10px; font-size: 12.5px; background: var(--surface); }
 .tag.fixed { padding-right: 10px; color: var(--muted, inherit); }
 .tag button { border: 0; background: none; cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 4px; color: inherit; }
@@ -1611,6 +1619,7 @@ function viewResult() {
   ${heldCard(R)}
   ${rowsCard(R)}
   ${termsCard(R)}
+  ${compareCard(R)}
   ${flowsCard(R)}
   ${linesCard(R)}
   ${scenarioCard(R)}
@@ -1779,6 +1788,22 @@ function flowsCard(R) {
     ${ns.length ? needsList(ns) : ""}
     <div class="scroll" style="margin-top:8px"><table class="stack-sm"><thead><tr><th>Discounting</th><th>Function</th><th>Convention</th><th>On the roll</th><th class="num">Last year PV</th><th class="num">This year PV</th></tr></thead><tbody>${F.cores.map(core).join("")}</tbody></table></div>
     ${split}${per}</div>`;
+}
+// The models side by side, like comparing products' specifications (specs.py): last year's report, overlay as saved and
+// rebuild should agree (a row where they don't is flagged); last year's and this year's client models give the rows the
+// value reads, in their own units; this year rolled forward. Each figure's source on hover.
+function compareCard(R) {
+  const S = R.specs; if (!S?.sections?.length) return S?.error ? `<div class="card" id="compareCard"><h2>The models side by side</h2><p class="small muted">${esc(S.error)}</p></div>` : "";
+  const fmt = c => { if (!c || c.v == null) return `<span class="muted">–</span>`;
+    const v = c.t === "num" ? vN(c.v) : c.t === "pct" ? vPct(c.v) : c.t === "x" ? `${Number(c.v).toFixed(2)}x` : esc(String(c.v));
+    return c.src ? `<span title="${esc(c.src)}">${v}</span>` : v; };
+  const flags = S.sections.reduce((n, s) => n + s.rows.filter(r => r.flag).length, 0);
+  const body = S.sections.map(s => `<tr class="spec-sec"><th colspan="${S.columns.length + 1}">${esc(s.title)}</th></tr>` + s.rows.map(r =>
+    `<tr class="${r.flag ? "spec-flag" : ""}"><th scope="row">${esc(r.label)}${r.flag ? ` <span class="pill warn" title="Last year's report, overlay and rebuild should agree here">differ</span>` : ""}${r.note ? `<div class="small muted" style="font-weight:400">${esc(r.note)}</div>` : ""}</th>${r.cells.map((c, i) => `<td class="${c && (c.t === "num" || c.t === "pct" || c.t === "x") ? "num" : ""}${i >= 4 ? " spec-now" : ""}">${fmt(c)}</td>`).join("")}</tr>`).join("")).join("");
+  return `<div class="card" id="compareCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">The models side by side</h2>${flags ? `<span class="pill warn">${flags} row${flags > 1 ? "s" : ""} where last year's don't agree</span>` : `<span class="pill ok">last year's agree</span>`}</div>
+    <p class="sub">Each model's specifications in one place: the report, the overlay as Excel saved it and the rebuild should agree; the client models show the rows the value reads, in their own units; this year is rolled forward. Hover a figure for its source.</p>
+    <div class="scroll"><table class="specs"><thead><tr><th></th><th colspan="4" class="spec-grp">Last year</th><th colspan="2" class="spec-grp spec-now">This year</th></tr>
+      <tr><th></th>${S.columns.map((c, i) => `<th class="${i >= 4 ? "spec-now" : ""}">${esc(c.label)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div></div>`;
 }
 function linesCard(R) {
   const L = R.figures?.gaps?.new_lines; if (!L?.length) return "";

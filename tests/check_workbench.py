@@ -316,6 +316,14 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
         len(ch["series"]["this_year"]) == 20, ch
     assert list(ch["series"]["last_year"])[0] == "FY2026" and list(ch["series"]["this_year"])[0] == "FY2027", ch["years"]
     assert ch["years"] == sorted(ch["years"]) and ch["years"][-1] == "FY2046", ch["years"]  # past 2049 sorts in order too
+    # the models side by side: last year's report, overlay as saved and rebuild agree on every row
+    sp = res["specs"]
+    assert not sp.get("error") and [s["title"] for s in sp["sections"]][:3] == ["The value", "Assumptions", "Discounting"], sp
+    rows = {r["label"]: r for s in sp["sections"] for r in s["rows"]}
+    assert not [k for k, r in rows.items() if r["flag"]], [(k, r["cells"][:3]) for k, r in rows.items() if r["flag"]]
+    assert rows["Equity value, mid"]["cells"][5]["v"] == res["values"]["this_year"]["mid"], rows["Equity value, mid"]
+    assert rows["Undiscounted forecast cash flows (no terminal value)"]["cells"][3] and \
+        rows["Undiscounted forecast cash flows (no terminal value)"]["cells"][4], rows["Undiscounted forecast cash flows (no terminal value)"]
     # this year's cash flows against last year's: every discounting read period by period, the step split
     fl = res["flows"]
     assert fl["cores"] and all(c.get("last") and c.get("this") and c["form"]["recomputed"] for c in fl["cores"]), fl["cores"]
