@@ -25,7 +25,7 @@ import valuation
 
 FRANKING = re.compile(r"frank|imputation|gamma|utili[sz]", re.I)
 GROWTH_WORDS = re.compile(r"growth|\btgr\b|terminal|perpetu", re.I)
-_LIT = re.compile(r"(?<![\w.$])(\d*\.\d+|\d+)(%?)(?![\w.])")
+_LIT = re.compile(r"(?<![\w.$])((?:\d*\.\d+|\d+)(?:[Ee][+-]?\d+)?)(%?)(?![\w.])")  # 1E-2 is 0.01
 
 
 def _pct(v: float) -> str:

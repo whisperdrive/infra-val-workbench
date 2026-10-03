@@ -127,28 +127,46 @@ def summarize_table(run: list[tuple[int, str, dict]]) -> str:
             + " | " + "; ".join(cols))
 
 
-def error_cells(path: str) -> dict[str, dict[tuple[int, int], str]]:
-    """Cells whose saved result is an Excel error (#N/A, #REF!, #DIV/0!...), per sheet.
-
-    calamine returns these as empty strings, so read them from the sheet XML (cells with t="e")."""
+def saved_state(path: str) -> tuple[dict, dict, dict]:
+    """What the sheet XML says of the saved results that calamine can't: (cells whose saved result is an Excel error
+    (#N/A, #REF!, #DIV/0!...) {sheet: {(row, col): "#N/A"}}, formulas with no saved result at all (the workbook saved
+    without being calculated; not a formula whose result is empty text) {sheet: {(row, col)}}, the workbook's
+    calculation settings {"calcMode": "manual", "calcCompleted": "0", ...}). calamine returns both kinds of cell as
+    empty, which would read as blank, or zero."""
     import zipfile
     from xml.etree import ElementTree as ET
     ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
           "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
     z = zipfile.ZipFile(path)
     rels = {r.get("Id"): r.get("Target") for r in ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))}
-    out: dict[str, dict[tuple[int, int], str]] = {}
-    cell_re = re.compile(rb'<c r="([A-Z]{1,3})(\d+)"[^>]*?t="e"[^>]*>.*?<v>([^<]*)</v>', re.S)
-    for sh in ET.fromstring(z.read("xl/workbook.xml")).find("m:sheets", ns):
+    errors: dict[str, dict[tuple[int, int], str]] = {}
+    unsaved: dict[str, set[tuple[int, int]]] = {}
+    err_re = re.compile(rb'<c r="([A-Z]{1,3})(\d+)"[^>]*?t="e"[^>]*>.*?<v>([^<]*)</v>', re.S)
+    # a cell whose only content is its formula (<f>...</f> or a shared formula's <f .../>), with no <v> or an empty one
+    # with no type (as openpyxl saves a formula it never calculated): no saved result. Excel saves a formula whose result
+    # is empty text with t="str": a result
+    bare_re = re.compile(rb'<c r="([A-Z]{1,3})(\d+)"([^>]*)>\s*<f\b[^>]*(?:/>|>[^<]*</f>)\s*(?:<v\s*/>|<v>\s*</v>)?\s*</c>')
+    root = ET.fromstring(z.read("xl/workbook.xml"))
+    for sh in root.find("m:sheets", ns):
         target = rels.get(sh.get(f"{{{ns['r']}}}id"), "")
         target = target.lstrip("/") if target.startswith("/") else "xl/" + target
         if target not in z.namelist():
             continue
-        errs = {(int(r), column_index_from_string(c.decode())): v.decode()
-                for c, r, v in cell_re.findall(z.read(target))}
+        x = z.read(target)
+        errs = {(int(r), column_index_from_string(c.decode())): v.decode() for c, r, v in err_re.findall(x)}
         if errs:
-            out[sh.get("name")] = errs
-    return out
+            errors[sh.get("name")] = errs
+        bare = {(int(r), column_index_from_string(c.decode())) for c, r, a in bare_re.findall(x)
+                if b't="str"' not in a and b't="inlineStr"' not in a}
+        if bare:
+            unsaved[sh.get("name")] = bare
+    calc = root.find("m:calcPr", ns)
+    return errors, unsaved, (dict(calc.attrib) if calc is not None else {})
+
+
+def error_cells(path: str) -> dict[str, dict[tuple[int, int], str]]:
+    """Cells whose saved result is an Excel error (#N/A, #REF!, #DIV/0!...), per sheet (saved_state)."""
+    return saved_state(path)[0]
 
 
 def _array_cells(af, row: int, col: int, pending: dict) -> str:
@@ -193,12 +211,21 @@ def main(path: str, out: str | None = None, progress=None) -> dict:
     if not path.lower().endswith((".xlsx", ".xlsm")):
         raise ValueError("build_map needs .xlsx or .xlsm (openpyxl can't read formulas from .xlsb/.xls); "
                          "save a copy from Excel first")
+    with open(path, "rb") as f:
+        head = f.read(8)
+    if head == bytes.fromhex("D0CF11E0A1B11AE1"):  # an OLE compound file, not a zip: encrypted, or the old format
+        raise ValueError(f"{os.path.basename(path)} is password-protected (encrypted) or in the old .xls format: open it "
+                         "in Excel, remove the password (File > Info > Protect Workbook) or save it as .xlsx / .xlsm, and "
+                         "upload it again")
+    if head[:2] != b"PK":
+        raise ValueError(f"{os.path.basename(path)} isn't an Excel workbook Python can read (.xlsx / .xlsm), or it's "
+                         "damaged: open it in Excel, save it as .xlsx or .xlsm, and upload it again")
     report = progress or (lambda frac, msg: None)
     t0 = time.time()
     report(0.0, "Opening workbook")
     wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
     cal = CalamineWorkbook.from_path(path)
-    errors = error_cells(path)
+    errors, unsaved, calc = saved_state(path)
 
     try:
         name_rows = defined_names(path)
@@ -218,8 +245,14 @@ def main(path: str, out: str | None = None, progress=None) -> dict:
                           n_formula INT, n_const INT, patterns TEXT, samples TEXT);
         CREATE TABLE edges(src_sheet TEXT, src_row INT, dst_sheet TEXT, dst_row INT, kind TEXT);
         CREATE TABLE names(name TEXT, ref TEXT, scope TEXT);
+        CREATE TABLE unsaved(sheet TEXT, row INT, col INT);
+        CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
     """)
     db.executemany("INSERT INTO names VALUES (?,?,?)", name_rows)
+    # formulas Excel saved no result for, and how the workbook was last calculated (a calculation that didn't finish
+    # leaves results that may be stale): what calamine can't say
+    db.executemany("INSERT INTO unsaved VALUES (?,?,?)", [(sh, r, c) for sh, xs in unsaved.items() for r, c in xs])
+    db.executemany("INSERT INTO meta VALUES (?,?)", [(f"calc.{k}", str(v)) for k, v in calc.items()])
 
     lines = [f"WORKBOOK {os.path.basename(path)}",
              "Legend: sheet!row label [units] f=formula cells c=constant cells | pattern(s) in R1C1 "
@@ -232,6 +265,9 @@ def main(path: str, out: str | None = None, progress=None) -> dict:
         name = ws.title
         report(0.02 + 0.93 * i_sheet / n_sheets, f"Reading sheet {i_sheet + 1} of {n_sheets}: {name}")
         max_row, last_report = ws.max_row or 1, 0
+        # read-only mode reads only as far as the size the sheet declares (<dimension>), which a tool other than Excel
+        # can write too small: cells beyond it would be dropped without a word (calamine reads them). Read every cell
+        ws.reset_dimensions()
         values = cal.get_sheet_by_name(name).to_python(skip_empty_area=False)
         sheet_errors = errors.get(name, {})
         val = lambda r, c: sheet_errors.get((r, c)) or (
@@ -338,6 +374,7 @@ def main(path: str, out: str | None = None, progress=None) -> dict:
     db.executescript("""
         CREATE INDEX ix_cells ON cells(sheet,row,col);
         CREATE INDEX ix_rows ON rows(sheet,row);
+        CREATE INDEX ix_unsaved ON unsaved(sheet,row,col);
     """)
     db.commit()
     # Row-to-row edges with OFFSET resolved and lookups narrowed to the current scenario (edges.py).

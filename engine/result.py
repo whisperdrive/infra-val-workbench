@@ -316,6 +316,22 @@ def _balances(sess, summary: dict) -> dict:
     return {"moved": moved, "unmoved": unmoved, "after": after, "kept": kept}
 
 
+def _calc(db_path: str) -> dict:
+    """How a workbook was last calculated, as it saved it ({"calcMode": "manual", "calcCompleted": "0", ...}): the row
+    map's meta (build_map.saved_state); {} for one built before it recorded it."""
+    try:
+        with rodb.connect(db_path) as db:
+            return {k[5:]: v for k, v in db.execute("SELECT key, value FROM meta WHERE key LIKE 'calc.%'")}
+    except Exception:
+        return {}
+
+
+def _unusable(sess) -> list[dict]:
+    """The client cells the last read took that hold no figure (overlay.Session.unusable): [{"row", "col", "model",
+    "cell", "what"}], "row"/"col" last year's cell, "cell" the one read (this year's, on this year's feed)."""
+    return [{"row": f"{s_}!r{r_}", "col": c_, **x} for (s_, r_, c_), x in sorted((getattr(sess, "unusable", None) or {}).items())]
+
+
 def _other_links(reads: dict) -> dict:
     """The cells this year's value read from workbooks linked other than the client model's: {link: {"cells",
     "nonzero"}} (each at last year's saved value, not fed from anything this year)."""
@@ -337,6 +353,7 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
     out = {"saved": {c: ov._show(sess.ov.value(*k)) for c, k in zip(cells, keys)}, "feeds": {"rebuilt": base_feed}}
     got, _, _, _ = _read(sess, summary, base_feed, keys)
     out["rebuilt"] = {c: ov._show(got[k]) for c, k in zip(cells, keys)}
+    out["unusable_prior"] = _unusable(sess)  # last year's client cells read with no saved result
     out["this_year"], out["roll"], out["gaps"] = None, None, None
     if w.get("current") and sess.rowmap:
         out["feeds"]["this_year"] = "current"
@@ -350,13 +367,15 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
         # met on the way to this year's value: a circular reference (Python takes the value Excel saved there, last
         # year's) and functions it lacks (#NAME?, which an IFERROR turns into a figure): neither is this year's
         loops, lacks = sorted({ov._a1(*k) for k in sess.B.cycles}), dict(sess.B.unsupported)
+        unusable = _unusable(sess)
         out["this_year"] = {c: ov._show(got[k]) for c, k in zip(cells, keys)}
         # last year's figures standing in on this year's feed, and the periods past this year's forecast (read nil)
         out["feed"] = {"stood_in": [{"row": f"{s_}!r{r_}", "col": c_, "value": float(v)}
                                     for (s_, r_, c_), v in sess.stood_in.items() if isinstance(v, (int, float))],
                        "beyond": [{"row": f"{s_}!r{r_}", "col": c_, "why": str(w)} for (s_, r_, c_), w in sess.beyond.items()],
                        "other_links": _other_links(getattr(sess, "other_reads", {})),
-                       "balances": _balances(sess, summary), "circular": loops, "unknown": lacks}
+                       "balances": _balances(sess, summary), "circular": loops, "unknown": lacks,
+                       "unusable": unusable}
         out["cut_off"] = len(sess.cut)  # the discountings' periods before the new date, cut off on this year's feed
         out["holds_moved"] = _holds_moved(sess, summary)  # cells held at Excel's value whose inputs move this year
         if summary.get("rate_values"):
@@ -738,7 +757,9 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
             if not isinstance(v, (int, float)) or isinstance(v, bool) or round(v) != want:
                 vd_off.append({"cell": c, "date": ov.to_date(v).isoformat() if isinstance(v, (int, float)) and v > 0
                                else str(v)})
-    by_row = Counter((s_, r_) for (s_, r_, _c) in sess.unmatched)
+    # cells with no saved figure this year (unusable: a formula never calculated, an error) have a hold of their own
+    explained = {k for k, x in (getattr(sess, "unusable", None) or {}).items() if x["model"] == "current"}
+    by_row = Counter((s_, r_) for (s_, r_, _c) in sess.unmatched if (s_, r_, _c) not in explained)
     read_by_row = Counter((s_, r_) for (s_, r_, _c) in sess.client_reads)
     labels = src.labels()
     ex = sess.rowmap.explain
@@ -747,6 +768,8 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
                or by_row.get(k, 0) > 0.5 * max(1, read_by_row.get(k, 0)))]
     blank_by_row, blank_at = Counter(), {}
     for (s_, r_, _c), at in sess.blank.items():
+        if (s_, r_, _c) in explained:  # no saved figure there (unusable): a hold of its own says so, not a row to find
+            continue
         blank_by_row[(s_, r_)] += 1
         blank_at.setdefault((s_, r_), at)
     blank_rows = [k for k, n in blank_by_row.most_common() if n > 0.2 * max(1, read_by_row.get(k, 0)) and k not in missing]
@@ -1627,7 +1650,55 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
                         "This year's value reads another linked workbook at last year's figures",
                         f"{said}. Only the client model's link is fed from this year's model; these cells keep the values "
                         "Excel saved last year. Map them to this year's file, or say why they don't change"))
+    # a workbook saved before its calculation finished: what it saved may be stale (the tie, the rebuild's check, the
+    # figures read from it). Its formulas' results are all Excel saved: a point to check, and calculating it fixes it
+    stale = []
+    for which, name in (("overlay", "last year's overlay"), ("prior", "last year's client model"),
+                        ("current", "this year's client model")):
+        x = (summary.get("wiring") or {}).get(which) or {}
+        if x.get("db_path") and _calc(x["db_path"]).get("calcCompleted") in ("0", "false"):
+            stale.append(f"{name} ({x.get('filename') or 'its file'})")
+    # the overlay's own formulas Excel saved no result for: Python works them out again, but every check against what
+    # Excel saved (the cells reproduced, the split of last year's value, the reconciliation) is short of them
+    try:
+        with rodb.connect(((summary.get("wiring") or {}).get("overlay") or {})["db_path"]) as db:
+            sheets = list(summary.get("sheets") or [])
+            gone = [ov._a1(*x) for x in db.execute(f"SELECT sheet, row, col FROM unsaved WHERE sheet IN "
+                                                    f"({','.join('?' * len(sheets))}) ORDER BY sheet, row, col", sheets)]
+    except Exception:
+        gone = []
+    if gone:
+        out.append(hold(summary, "unsaved-overlay", gone[:200],
+                        f"{len(gone)} of the overlay's formulas have no saved result",
+                        f"{', '.join(gone[:6])}{' …' if len(gone) > 6 else ''}: the overlay was saved without being "
+                        "calculated (or its calculation didn't finish). Python works them out again, but the checks "
+                        "against what Excel saved are short of them, and they can hold the value for that reason. Open "
+                        "it in Excel, calculate it (F9), save it and upload it again", severity="check"))
+    if stale:
+        out.append(hold(summary, "calc-incomplete", stale,
+                        f"{len(stale)} workbook(s) saved before their calculation finished",
+                        f"{'; '.join(stale)}: Excel's last calculation of it didn't finish, so the figures it saved may "
+                        "be stale. Open it in Excel, let it calculate, save it and upload it again", severity="check"))
     fd = figs.get("feed") or {}
+    cur = fd.get("unusable") or []
+    for which, xs, name, sev in (("current", cur, "this year's client model", "block"),
+                                 ("prior", figs.get("unusable_prior") or [], "last year's client model", "check")):
+        unsaved = sorted({x["cell"] for x in xs if x["what"] == "no saved value"})
+        errors = [x for x in xs if x["what"] != "no saved value"]
+        if unsaved:  # read as blank, which isn't a figure: on this year's feed last year's stands in, on last year's nil
+            out.append(hold(summary, f"unsaved-{which}", unsaved,
+                            f"{len(unsaved)} cell(s) the value reads have no saved figure in {name}",
+                            f"{', '.join(unsaved[:6])}{' …' if len(unsaved) > 6 else ''}: formulas Excel saved no result "
+                            "for (the workbook was saved without being calculated, or its calculation didn't finish), so "
+                            "there's no figure to read. Open it in Excel, calculate it (F9), save it and upload it again",
+                            severity=sev))
+        if errors:
+            cells = sorted({f"{x['what']} at {x['cell']}" for x in errors})
+            out.append(hold(summary, f"errors-{which}", cells,
+                            f"{len(errors)} cell(s) the value reads are Excel errors in {name}",
+                            f"{', '.join(cells[:6])}{' …' if len(cells) > 6 else ''}, where last year's model had a figure: "
+                            "an error under the value (or a figure an IFERROR made of it). Fix it in the model, or "
+                            "check the row is the right one", severity=sev))
     if fd.get("circular"):  # Excel iterates a loop; Python takes the value Excel saved where it meets one: last year's
         xs = fd["circular"]
         out.append(hold(summary, "circular", xs[:40],

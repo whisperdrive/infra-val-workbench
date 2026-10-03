@@ -53,7 +53,9 @@ def _vocabulary() -> set[str]:
                                                           "equity-typed", "equity-typed-low", "equity-typed-high", "equity-unmoved-low",
                                                           "equity-unmoved-high", "equity-mid", "doctor-holds", "doctor-moved",
                                                           "declared", "declared-error", "method-unapplied", "balance-off",
-                                                          "own-inputs", "tie-loose-low", "tie-loose-high", "circular", "unknown-fn"}
+                                                          "own-inputs", "tie-loose-low", "tie-loose-high", "circular", "unknown-fn",
+                                                          "unsaved-current", "unsaved-prior", "unsaved-overlay", "errors-current", "errors-prior",
+                                                          "calc-incomplete"}
     words |= {"waiting", "queued", "running", "done", "attention", "blocked", "failed", "error", "pending", "approved",
               "rejected", "agreed", "escalated", "withdrawn", "open", "ready", "processing", "unread", "verified",
               "flagged", "resolved", "edited", "figure", "confirmed", "confirmed by the reviewer", "corrected", "disputed",

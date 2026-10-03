@@ -216,8 +216,10 @@ def _close(a: float, b: float) -> bool:
 
 # ---- reading the workbook's own calculation ---------------------------------------------------------------
 
-_FREF = re.compile(r"(?:'(?P<qs>[^']+)'|(?P<s>[A-Za-z_][\w.]*))?!?\$?(?P<c1>[A-Z]{1,3})\$?(?P<r1>\d+)"
-                   r"(?::\$?(?P<c2>[A-Z]{1,3})\$?(?P<r2>\d+))?")
+# a reference: not inside a number (1E9 is a billion, 2.5E3 two and a half thousand, not cells E9 and E3) or a word,
+# and not a function's name (LOG10( is LOG10, though LOG10 is a cell)
+_FREF = re.compile(r"(?<![\w.$])(?:'(?P<qs>[^']+)'|(?P<s>[A-Za-z_][\w.]*))?!?\$?(?P<c1>[A-Z]{1,3})\$?(?P<r1>\d+)"
+                   r"(?::\$?(?P<c2>[A-Z]{1,3})\$?(?P<r2>\d+))?(?![\w(])")
 _ARG = r"\s*([^,()]+?)\s*"
 _SUMPRODUCT = re.compile(r"SUMPRODUCT\(" + _ARG + "," + _ARG + r"\)", re.I)
 _SUMIFS = re.compile(r"SUMIFS\(" + _ARG + "," + _ARG + "," + _ARG + r"\)", re.I)

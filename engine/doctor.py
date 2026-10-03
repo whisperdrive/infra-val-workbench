@@ -379,7 +379,7 @@ class Doctor:
                 breaks = "workbook"
             elif "prior" in feeds and not same(values["prior"][i], wbv):
                 breaks = "prior"
-            elif "current" in feeds and isinstance(values["current"][i], str) and values["current"][i].startswith("#"):
+            elif "current" in feeds and values["current"][i] in xlruntime.ERR:  # an error (not text like "#/Day")
                 breaks = "current"
             row["breaks_at"] = breaks
             out.append(row)

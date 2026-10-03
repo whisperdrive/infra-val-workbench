@@ -124,6 +124,18 @@ class Workbook:
     def value(self, s, r, c):
         return self.sheet(s).get((r, c))
 
+    def unsaved(self, s, r, c) -> bool:
+        """A formula cell Excel saved no result for (build_map.saved_state: the workbook saved without being
+        calculated): it reads as blank, which isn't a figure. A row map built before those were recorded: a formula
+        with no value (where an empty-text result looks the same)."""
+        try:
+            return self.db.execute("SELECT 1 FROM unsaved WHERE sheet=? AND row=? AND col=?", (s, r, c)).fetchone() \
+                is not None
+        except sqlite3.OperationalError:
+            row = self.db.execute("SELECT formula, value FROM cells WHERE sheet=? AND row=? AND col=?",
+                                  (s, r, c)).fetchone()
+            return bool(row and row[0] and row[1] is None)
+
     def labels(self):
         if self._labels is None:
             self._labels = {(s, r): (lab or "") for s, r, lab in self.db.execute("SELECT sheet, row, label FROM rows")}
@@ -298,6 +310,7 @@ class Session:
         self.derived = {}  # (sheet, row) -> timing rule: a period flag or date row worked out from the period dates
         self.derived_used = {}  # (sheet, row, col) -> the rule, where a value was worked out on the current feed
         self.client_reads = set()  # (sheet, row, col) of last year's model read on the current feed
+        self.unusable = {}  # (sheet, row, col) -> {"model", "cell", "what"}: a client cell read that holds no figure
         self.base_vd = None  # last year's valuation date (serial): the roll's start
         self._pshift = {}
         self.horizon_set = None  # "fixed" / "rolling": the engagement's profile says, not worked out (fixed_horizon)
@@ -324,6 +337,7 @@ class Session:
         self.beyond = {}
         self.derived_used = {}
         self.client_reads = set()
+        self.unusable = {}
         self.moved, self.unmoved, self.kept_stood = {}, {}, {}
         self.other_reads = {}  # (link, sheet, row, col) -> value: another linked workbook's, last year's saved value
         B.overrides.clear()
@@ -334,8 +348,8 @@ class Session:
             B.ext = lambda i, s, r, c: self.ext_cached.get((i, s, r, c))
         elif mode == "prior":
             src = self.prior or self.ov
-            B.feed = lambda s, r, c: src.value(s, r, c) if s in self.client_sheets else self.ov.value(s, r, c)
-            B.ext = lambda i, s, r, c: (self.prior.value(s, r, c) if self.prior and i == self.client_link
+            B.feed = lambda s, r, c: self._saved(src, s, r, c) if s in self.client_sheets else self.ov.value(s, r, c)
+            B.ext = lambda i, s, r, c: (self._saved(self.prior, s, r, c) if self.prior and i == self.client_link
                                         else self.ext_cached.get((i, s, r, c)))
         elif mode == "current":
             if not self.current:
@@ -392,6 +406,13 @@ class Session:
         if worked:  # the dates were worked out before the cut: nothing worked out from them stays
             self.B.reset()
         return cut
+
+    def _saved(self, src: Workbook, s, r, c):
+        """Last year's client cell as its model saved it; a formula it saved no result for is noted (unusable)."""
+        v = src.value(s, r, c)
+        if v is None and src.unsaved(s, r, c):
+            self.unusable[(s, r, c)] = {"model": "prior", "cell": _a1(s, r, c), "what": "no saved value"}
+        return v
 
     def _rolled(self, prior: Workbook, s, r, c):
         """Prior client cell -> the current model's value: the same line item (found by rowfind, wherever it is
@@ -487,6 +508,13 @@ class Session:
                 self.unmatched[(s, r, c)] = f"period {to_date(want).isoformat()} not in the current model"
                 return self._stand_in(prior, s, r, c, want)
         v = cur.value(s2, r2, c2)
+        was = prior.value(s, r, c)
+        # a cell that holds no figure this year where last year's did: a formula Excel saved no result for (the model
+        # saved without being calculated), or one of Excel's errors (an IFERROR would turn it into a figure unseen)
+        if v is None and was is not None and cur.unsaved(s2, r2, c2):
+            self.unusable[(s, r, c)] = {"model": "current", "cell": _a1(s2, r2, c2), "what": "no saved value"}
+        elif isinstance(v, xlruntime.XLError) and isinstance(was, (int, float)) and not isinstance(was, bool):
+            self.unusable[(s, r, c)] = {"model": "current", "cell": _a1(s2, r2, c2), "what": v.code}
         if v is None and prior.value(s, r, c) is not None:
             self.blank[(s, r, c)] = (s2, r2, c2)
             self.unmatched[(s, r, c)] = (f"found at {s2}!r{r2}, but blank there"

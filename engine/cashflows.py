@@ -475,7 +475,9 @@ def checks(sess, summary: dict, where: dict, figs: dict, fl: dict, unit) -> dict
             ex = rm.explain(s_, int(r_))
             if ex.get("stand_in") and ex.get("by", "you") in ("you", "code"):
                 kept.add(row)
-    mine = [x for x in stood if x["row"] in origin and x["row"] not in kept]
+    # a cell with no saved figure this year (a formula never calculated) has a hold of its own saying so
+    unsaved = {(x["row"], x["col"]) for x in (figs.get("feed") or {}).get("unusable") or [] if x["what"] == "no saved value"}
+    mine = [x for x in stood if x["row"] in origin and x["row"] not in kept and (x["row"], x["col"]) not in unsaved]
     if mine and any(abs(x["value"]) > EXACT for x in mine):
         tot = sum(x["value"] for x in mine)
         holds.append(result.hold(summary, "cf-standin", [sorted({x["row"] for x in mine}), len(mine), tot],

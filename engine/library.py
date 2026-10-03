@@ -189,7 +189,8 @@ def _process(fid: int) -> None:
         _update(fid, status="done", step="Done", pct=1.0, processed_at=time.time())
     except Exception as e:
         traceback.print_exc()
-        _update(fid, status="error", step="Failed", error=f"{type(e).__name__}: {e}")
+        # a reason written for a person (a ValueError: a password, the format) as it is; anything else with its kind
+        _update(fid, status="error", step="Failed", error=str(e) if isinstance(e, ValueError) else f"{type(e).__name__}: {e}")
 
 
 def rebuild(fid: int, model: str | None = None) -> dict:

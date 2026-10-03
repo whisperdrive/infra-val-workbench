@@ -788,7 +788,7 @@ def _rebuild_job(eid: int, key: str):
     moved = (summary.get("feeds") or {}).get("prior")
     if moved and not moved.get("same"):
         needs.append({"id": "prior-feed", "stage": "rebuild", "severity": "info",
-                      "title": "Last year's client model gives slightly different values than the overlay saved",
+                      "title": "Last year's client model gives different values than the overlay saved",
                       "detail": "the client file may not be the version the overlay was built on: the bridge shows the "
                                 "difference as its own step", "go": {"step": "result"}})
     status = "blocked" if blocked else "attention" if any(n["severity"] == "check" for n in needs) else "done"
@@ -885,10 +885,11 @@ def _result_job(eid: int, key: str):
     for h in (g or {}).get("holds") or []:  # this year's cash flows against last year's (cashflows.py)
         anchor = ("equityPick" if h["id"].startswith("equity-") else "doctorCard" if h["id"] == "doctor-moved"
                   else "heldCard" if h["id"].startswith("declared") else "compareCard" if h["id"] == "own-inputs"
-                  else "bridgeCard" if h["id"].startswith(("cf-split", "cf-sign")) or h["id"] in ("damaged", "circular", "unknown-fn")
+                  else "bridgeCard" if h["id"].startswith(("cf-split", "cf-sign")) or h["id"] in (
+                      "damaged", "circular", "unknown-fn", "unsaved-current", "errors-current", "calc-incomplete")
                   else "methodsCard" if h["id"] in ("basis-method", "method-unapplied")
                   else "compareCard" if h["id"] in ("basis", "interest", "interest-two", "interest-error")
-                  else "tieCard" if h["id"].startswith(("rebuild-", "tie-"))
+                  else "tieCard" if h["id"].startswith(("rebuild-", "tie-")) or h["id"] in ("unsaved-prior", "errors-prior", "unsaved-overlay")
                   else "datesCard" if h["id"] == "roll-assumed" else "termsCard" if h["id"] == "terms-error"
                   else "linesCard" if h["id"] == "lines-error" else "flowsCard")
         step = "rebuild" if anchor in ("tieCard", "equityPick", "doctorCard") else "workbench" if anchor == "datesCard" else "result"
@@ -954,6 +955,9 @@ def _result_job(eid: int, key: str):
         rows = [x["row"] + (f" ({x['label']})" if x.get("label") else "") for x in
                 g["dcf_missing"] + g["blank_rows"] + g["weak_rows"] + g["timing_open"]]
         zero = [c for c, x in g["by_cell"].items() if not x["zero_roll"]["ok"]]
+        if (res["figures"].get("feed") or {}).get("unusable"):  # no figure there because cells the value reads hold
+            # none (an error, a formula never calculated): the hold saying so explains it
+            zero = [c for c in zero if isinstance(g["by_cell"][c]["zero_roll"]["value"], (int, float))]
         if rows or zero or g.get("date_check") or not needs:
             needs.append({"id": "rows", "stage": "result", "severity": "block",
                           "title": "This year's value is held back: rows to find in this year's model",
@@ -1248,7 +1252,9 @@ KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact"
          ("date", "confirm-date", "A date to confirm"), ("equity", "pick-cells", "Cells to pick"),
          ("rows-models", "retry", "A step to try again"), ("doctor-holds", "check-cells", "Cells to hold"),
          ("doctor-moved", "check-cells", "Cells to hold"), ("circular", "check-cells", "Cells to check"),
-         ("unknown-fn", "check-cells", "Cells to check"), ("declared", "check-input", "A model input to check"),
+         ("unknown-fn", "check-cells", "Cells to check"), ("unsaved-", "recalc-file", "A file to calculate and upload again"),
+         ("errors-", "check-cells", "Cells to check"), ("calc-incomplete", "recalc-file", "A file to calculate and upload again"),
+         ("declared", "check-input", "A model input to check"),
          ("own-inputs", "check-input", "A model input to check"), ("damaged", "check-decisions", "Decisions to make again"), ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),
          ("rate-", "check-input", "A model input to check"), ("growth-", "check-input", "A model input to check"),
          ("franking-", "check-input", "A model input to check"), ("tie-", "check-tie", "A tie to check"),
