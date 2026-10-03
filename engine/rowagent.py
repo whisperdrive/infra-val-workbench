@@ -3,11 +3,13 @@ a person stopping the work.
 
 The gate lists the rows it can't vouch for (result._gaps: the DCF's cash-flow rows not found,
 rows found but blank, rows found only weakly, timing rows that don't follow from the period dates). For each:
-  1. by the numbers, with no model: the rows rowfind has for it and rows whose values are close to last year's
-     in several periods (rowfind.near, which finds a row with no label at all). A candidate that carries last
-     year's numbers (rowfind.check: over the periods both have, a median difference within 15%, the same kind of
-     row, not blank where last year's has values) is taken, the numbers as the reason: forecasts are revised
-     between valuations, not replaced.
+  1. by what it means, with no model: the rows rowfind has for it and rows whose values are close to last year's
+     (rowfind.near). A candidate is taken only where something other than its numbers says it's the same line item
+     (its label or words, its block or place, what it's made of and what it feeds), its numbers are within the
+     band (rowfind.check: over the periods both have, a median difference within 15%, the same kind of row, not
+     blank where last year's has values: a sanity check, never the reason), it isn't a copy of last year's figures
+     (rowfind.suspect_copy), and it's the only such candidate. Closeness of numbers alone never settles a row: a
+     prior-forecast block, another scenario's row or a 100% row are closer to last year's than the revised row.
   2. the rest, by the models (a Reader: the engagement's model and its reviewer): luna gets a dossier on last year's
      row that doesn't lean on its label (sheet, section, the labelled rows around it, a formula, the kind of row,
      its values by period, the rows it reads and that read it) and the candidates with their numbers checked, and
@@ -80,18 +82,67 @@ def candidates(finder, s: str, r: int) -> list[tuple]:
     return uniq
 
 
-def by_numbers(finder, s: str, r: int) -> dict | None:
-    """The candidate that carries last year's numbers best, if one does: {"to", "check", "label"}."""
-    best = None
+MEANING = ("identity", "place", "role")  # the kinds of evidence that say what a row is, not what it says
+
+
+def _families(finder, s: str, r: int, k: tuple, ex: dict) -> set:
+    """The kinds of evidence for candidate k: rowfind's, where it found k or listed it, and its lineage and block."""
+    fam = set(ex.get("agreed") or []) if ex.get("found") == k else set()
+    for a in ex.get("alternatives") or []:
+        if a["row"] == f"{k[0]}!r{k[1]}":
+            fam |= {rowfind.FAMILY[n.split(":")[0]] for n in a.get("evidence") or [] if n.split(":")[0] in rowfind.FAMILY}
+    lin = finder._lineage(s, r, k)
+    if lin and lin[0] >= 0.5:
+        fam.add("role")
+    if any(x[0] == k for x in finder._by_block(s, r)):
+        fam.add("place")
+    lab = rowfind._norm(finder.prior.labels().get((s, r), ""))
+    if lab and rowfind._norm(finder.current.labels().get(k, "")) == lab:
+        fam.add("identity")
+    return fam
+
+
+def by_meaning(finder, s: str, r: int) -> dict | None:
+    """The one candidate that means what last year's row meant, its numbers in the band and not a copy of last year's
+    figures, if there's one: {"to", "check", "label", "agreed"}. None where none is, or more than one is as well
+    supported: the models look."""
+    ex = finder.explain(s, r)
+    ok = []
     for k in candidates(finder, s, r):
         c = finder.check(s, r, k)
-        if c["ok"] and (best is None or (c["median_gap"], -c["periods"]) < (best["check"]["median_gap"], -best["check"]["periods"])):
-            best = {"to": k, "check": c, "label": finder.current.labels().get(k, "")}
-    return best
+        if not c["ok"] or finder.suspect_copy(s, r, k) or finder._kind_clash(s, r, k):
+            continue
+        fam = _families(finder, s, r, k, ex)
+        if fam & set(MEANING):
+            ok.append((len(fam & set(MEANING)), k, c, fam))
+    ok.sort(key=lambda x: (-x[0], x[1]))
+    if ok and (len(ok) == 1 or ok[1][0] < ok[0][0]):
+        n, k, c, fam = ok[0]
+        return {"to": k, "check": c, "label": finder.current.labels().get(k, ""), "agreed": sorted(fam)}
+    if ok or finder.family() >= ovmod.REBUILT:
+        return None
+    # a model rebuilt from the ground up (few of last year's labels left): what a row means can't be read from labels
+    # here, so its numbers and its structure together, where exactly one candidate has both (its numbers in the band,
+    # the same kind of row, not a copy of last year's figures); the model-looks-rebuilt point lists it to confirm
+    try:
+        kinds = finder._structure(finder.prior)["info"], finder._structure(finder.current)["info"]
+    except Exception:
+        return None
+    # the same kind of row, broadly: calculated (a series, a subtotal: one model adds up what another works out), typed,
+    # or one of the kinds a row's values fix (dates, flags, factors, a share, an index) exactly
+    broad = lambda x: "calculated" if x in ("series", "subtotal") else x
+    want = broad(kinds[0].get((s, r), {}).get("kind"))
+    both = [(k, c) for k in candidates(finder, s, r) if (c := finder.check(s, r, k))["ok"]
+            and not finder.suspect_copy(s, r, k) and want and broad(kinds[1].get(k, {}).get("kind")) == want]
+    if len(both) != 1:
+        return None
+    k, c = both[0]
+    return {"to": k, "check": c, "label": finder.current.labels().get(k, ""), "agreed": ["numbers", "structure"],
+            "rebuilt": True}
 
 
 def run(sess, summary: dict, cells: list[str], step=None, reader=None) -> dict:
-    """One pass over the rows the gate is waiting on: by the numbers, then (with a reader) by the models. Session
+    """One pass over the rows the gate is waiting on: by what they mean, then (with a reader) by the models. Session
     work goes through overlay.deep (one thread for every session), a step at a time, and the model calls happen
     outside it, so the page stays responsive while the agents work."""
     step = step or (lambda msg: None)
@@ -103,18 +154,19 @@ def run(sess, summary: dict, cells: list[str], step=None, reader=None) -> dict:
     rows = open_rows(gaps)
     decisions = []
     for i, x in enumerate(rows, 1):
-        step(f"Checking row {i} of {len(rows)} by its numbers: {x['label'] or x['row']}")
+        step(f"Checking row {i} of {len(rows)} by what it means: {x['label'] or x['row']}")
         s, r = x["sheet"], x["r"]
         if finder.pick_by.get((s, r)) == "you":
             continue
-        got = ovmod.deep(by_numbers, finder, s, r)
+        got = ovmod.deep(by_meaning, finder, s, r)
         d = {**x, "decision": None, "how": None, "why": None}
         if got:
             ovmod.deep(finder.pick, s, r, got["to"], "agent")
-            d.update(decision=f"{got['to'][0]}!r{got['to'][1]}", to_label=got["label"], how="numbers",
-                     why=got["check"]["text"], check=got["check"])
+            d.update(decision=f"{got['to'][0]}!r{got['to'][1]}", to_label=got["label"], how="meaning",
+                     why=f"agreed by {', '.join(got['agreed'])}; numbers: {got['check']['text']}", check=got["check"],
+                     agreed=got["agreed"])
         else:
-            d["why"] = "no row of this year's model carries last year's numbers"
+            d["why"] = "no row of this year's model is settled by what it means without the models"
         decisions.append(d)
     todo = [d for d in decisions if not d["decision"]]
     if reader is not None and todo:

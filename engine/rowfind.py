@@ -221,6 +221,36 @@ class RowFinder:
         both = [w for w in mine if w in theirs and mine[w]]
         return len(both) >= 3 and all(abs(theirs[w] - mine[w]) <= EXACT * max(1.0, abs(mine[w])) for w in both)
 
+    def suspect_copy(self, s, r, k) -> str | None:
+        """Why this year's row k looks like a copy of last year's figures rather than this year's line item, or None:
+        last year's forecast exactly, in every period after last year's date, while other rows on last year's
+        row's sheet were revised (a prior-forecast block, a reconciliation of last year's figures). Forecasts are
+        revised between valuations; a whole row of them unchanged, beside rows that were, is a lookalike."""
+        since = getattr(self, "since", None)
+        mine, theirs = self._series(self.prior, s, r), self._series(self.current, *k)
+        fut = [w for w in mine if (since is None or w > since) and w in theirs and mine[w]]
+        same = lambda a, b: abs(a - b) <= EXACT * max(1.0, abs(a))
+        if len(fut) < CHECK_PERIODS or not all(same(mine[w], theirs[w]) for w in fut):
+            return None
+        revised = looked = 0
+        for (sh, rr), lab in sorted(self.prior.labels().items()):
+            if sh != s or rr == r or not lab:
+                continue
+            hit = self.rowmap.match(sh, rr)[0]
+            if not hit:
+                continue
+            a, b = self._series(self.prior, sh, rr), self._series(self.current, sh, hit)
+            both = [w for w in a if (since is None or w > since) and w in b and a[w]]
+            if len(both) >= CHECK_PERIODS:
+                looked += 1
+                revised += any(not same(a[w], b[w]) for w in both)
+            if looked >= 12:
+                break
+        if not revised:
+            return None
+        return (f"last year's forecast exactly in all {len(fut)} periods after last year's date, where {revised} of "
+                f"{looked} other rows on its sheet were revised: a copy of last year's figures?")
+
     def other_shape(self, s, r, k) -> str | None:
         """Why candidate k is another shape than last year's row (formulas against typed values), or None."""
         a, b = self._shape(self.prior, (s, r)), self._shape(self.current, k)

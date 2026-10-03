@@ -1421,6 +1421,62 @@ def case_column_check() -> None:
           "it; a heading differing by its year the same; a heading gone, unmatched)")
 
 
+def meaning_check() -> None:
+    """The row agents' first pick, with no model, is by what a row means, not how close its numbers are: last year's
+    distributions renamed this year (cash to equity) with a revised forecast, and a prior-forecast comparison row
+    holding last year's figures exactly (by formulas, so not a pasted copy): the comparison row is closest, and is
+    passed over as a copy of last year's figures (the rows beside it were revised); the renamed row, made of the same
+    rows and feeding the value, is taken."""
+    import overlay as ov
+    import rowagent
+    import rowfind
+    out = Path(tempfile.mkdtemp(prefix="meaning_"))
+    ends = [date(2026 + k, 6, 30) for k in range(6)]
+
+    def book(name, this):
+        wb = xlsxwriter.Workbook(out / f"{name}.xlsx")
+        dt = wb.add_format({"num_format": "dd-mmm-yy"})
+        ws = wb.add_worksheet("CF")
+        ws.write(1, 1, "Period ending")
+        ws.write(3, 0, "Cash flow")
+        g = 1.05 if this else 1.0
+        rows = {}
+        for i, (lab, base) in enumerate((("Revenue", 100.0), ("Operating costs", -40.0))):
+            ws.write(4 + i, 1, lab)
+            rows[lab] = 5 + i
+        ws.write(6, 1, "Cash to equity" if this else "Distributions")
+        ws.write(8, 1, "Equity value")
+        for k, e in enumerate(ends):
+            c = COL(3 + k)
+            ws.write_datetime(1, 3 + k, e, dt)
+            ws.write_number(4, 3 + k, 100.0 * g * 1.03 ** k)
+            ws.write_number(5, 3 + k, -40.0 * g * 1.03 ** k)
+            ws.write_formula(6, 3 + k, f"={c}5+{c}6", None, 60.0 * g * 1.03 ** k)
+        ws.write_formula(8, 2, "=SUM(D7:I7)", None, 1.0)
+        if this:  # a prior-forecast comparison: last year's figures, by formulas from a sheet of them
+            pf = wb.add_worksheet("Prior")
+            ws.write(11, 0, "Last valuation's forecast")
+            ws.write(12, 1, "Distributions per last valuation")
+            ws.write(13, 1, "Variance")
+            for k in range(6):
+                c = COL(3 + k)
+                pf.write_number(2, 3 + k, 60.0 * 1.03 ** k)
+                ws.write_formula(12, 3 + k, f"=Prior!{c}3", None, 60.0 * 1.03 ** k)
+                ws.write_formula(13, 3 + k, f"={c}7-{c}13", None, 3.0 * 1.03 ** k)
+        wb.close()
+        return ov.Workbook(build_map.main(str(out / f"{name}.xlsx"), str(out / f"db_{name}"))["db"])
+    last, this = book("last", False), book("this", True)
+    f = rowfind.RowFinder(ov.RowMap(last, this), last, this)
+    f.since = ov.serial(date(2025, 6, 30))
+    dist, renamed, copy = ("CF", 7), ("CF", 7), ("CF", 13)
+    assert f.check(*dist, copy)["median_gap"] == 0 and f.check(*dist, renamed)["ok"], (f.check(*dist, copy), f.check(*dist, renamed))
+    assert f.suspect_copy(*dist, copy) and not f.suspect_copy(*dist, renamed), f.suspect_copy(*dist, copy)
+    got = rowagent.by_meaning(f, *dist)
+    assert got and got["to"] == renamed and "role" in got["agreed"], got
+    print("meaning: ok (a renamed, revised row taken by what it's made of and feeds; a prior-forecast row with last "
+          "year's figures exactly, closest by its numbers, passed over as a copy)")
+
+
 if __name__ == "__main__":
     main()
     mid_year_check()
@@ -1442,3 +1498,4 @@ if __name__ == "__main__":
     pairing_check()
     structure_check()
     case_column_check()
+    meaning_check()
