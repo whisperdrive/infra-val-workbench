@@ -197,7 +197,10 @@ reviewer's own session.
   still hold. Was: Acknowledgements of `cf-stale`, `cf-exact`, `cf-tv-nil`, `other-link` and
   `roll-assumed` are keyed without this year's figures, and survive a replaced client model; a confirmed term is keyed
   by row address, so another line at that row enters the value "confirmed by you".
-- **S8. A person's edits to approved facts** (code re-read). The rebuild's fingerprint carries only an edit's value
+- ~~**S8. A person's edits to approved facts**~~ — fixed: the rebuild's and the result's fingerprints carry a person's
+  edit (its range's ends, value, unit, basis), and only where there is one, so an update reruns nothing for unedited
+  facts; the roles' key is the figures they place files by (valuation, date, conclusion), by value, not every fact's
+  approval or page, and an update recognises the older roles key without running anything. Was (code re-read): The rebuild's fingerprint carries only an edit's value
   text; the result's none of it: a growth rate or a rate range edited reruns nothing, and the page calls the result
   current.
 - **S9. The rebuilt-model fallback** takes the only row within the numbers band: a low case beside a central case
@@ -226,7 +229,7 @@ reviewer's own session.
 - The overview and compare views show an earlier result's value while it's being worked out again.
 - Circular references on this year's feed take last year's saved value; an unknown function in a branch not taken
   last year falls through IFERROR silently.
-- Every fact edit reruns the roles' second opinion (cost).
+- ~~Every fact edit reruns the roles' second opinion (cost)~~ — fixed with S8.
 - ~~Model calls don't pass `store=False`~~ — fixed: every call asks Azure to keep nothing.
 - A single figure off the timeline stands in at last year's where its case column's heading is reworded (reviewer).
 

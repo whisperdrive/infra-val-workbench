@@ -101,7 +101,14 @@ def _critical(facts: list[dict]) -> list:
     """The facts the rebuild reads (valuation date, equity value, discount rate): value, texts and decision."""
     keep = ("valuation_date", "equity_value", "equity_value_ex", "equity_value_cum", "discount_rate", "currency_units")
     return sorted([f["key"], f.get("value_text"), f.get("low_text"), f.get("high_text"), f.get("status"),
-                   (f.get("final") or {}).get("value_text")] for f in facts if f["key"] in keep)
+                   (f.get("final") or {}).get("value_text")] + _edited(f) for f in facts if f["key"] in keep)
+
+
+def _edited(f: dict) -> list:
+    """A person's edit of a fact, as the stages read it (its range's ends, its value, its unit, its basis): fingerprinted
+    only where there's one, so a fact nobody edited fingerprints as before."""
+    fin = f.get("final") or {}
+    return [[fin.get(k) for k in ("low_text", "high_text", "value", "unit", "basis")]] if fin else []
 
 
 def _file_state(path: Path) -> str | None:
@@ -139,7 +146,8 @@ def person_picks(picks: dict) -> dict:
             for k, v in picks.items() if not (isinstance(v, dict) and v.get("by") == "agent")}
 
 
-def inputs(eid: int, name: str, snap: dict, holds: bool = True, rows_version: int | None = None) -> str:
+def inputs(eid: int, name: str, snap: dict, holds: bool = True, rows_version: int | None = None,
+           legacy: bool = False) -> str:
     """A fingerprint of what a stage reads: it runs again when this changes, and only then. holds=False: the
     rebuild's without the cells held at Excel's value (the doctor runs once per rebuild of the same files).
     rows_version: the row finder's version to fingerprint with (a check's "what if"), else the one running."""
@@ -151,7 +159,8 @@ def inputs(eid: int, name: str, snap: dict, holds: bool = True, rows_version: in
     ov_dir = wb.OUT / "overlays" / f"e{eid}"
     if name == "roles":
         ack = (wb.acks(eid).get("role-check") or {}).get("key")  # only when there is one: unacknowledged roles hash
-        return _h([wb._roles_key(eid, snap["workbooks"], snap["documents"]),  # as before acknowledging was added
+        rk = (wb._roles_key_v1 if legacy else wb._roles_key)(eid, snap["workbooks"], snap["documents"])
+        return _h([rk,  # as before acknowledging was added
                    [(k, r["id"], r["sheets"]) for k, r in rl.items() if r["confirmed"] and r.get("by") == "you"]]
                   + ([ack] if ack else []))
     rebuild = [roles, built, _critical(snap["facts"]), _file_state(ov_dir / "holds.json") if holds else None,
@@ -165,7 +174,8 @@ def inputs(eid: int, name: str, snap: dict, holds: bool = True, rows_version: in
     if name == "rows":
         return _h(rows)
     res = [rows, equity_pick(eid), (snap.get("profile") or {}).get("fy_end_month"),
-           sorted([f["key"], f.get("value_text"), f.get("status")] for f in snap["facts"]),
+           sorted([f["key"], f.get("value_text"), f.get("status"), (f.get("final") or {}).get("value_text")][:3 + bool(f.get("final"))]
+                  + _edited(f) for f in snap["facts"]),  # with a person's edits
            _file_state(wb.held_file(eid)),  # this year's figures a person set for held inputs
            _file_state(wb.balances_file(eid)),  # and the balances a person keeps at their own date, or not
            _file_state(wb.rate_file(eid)),  # and this year's discount rate
@@ -332,6 +342,9 @@ def tick(eid: int) -> None:
             ready[name] = True
             continue
         key = inputs(eid, name, snap)
+        if name == "roles" and rec["inputs"] and rec["inputs"] != key and rec["inputs"] == inputs(eid, name, snap, legacy=True):
+            _put(eid, name, inputs=key)  # the same inputs, fingerprinted the newer way (an update): nothing to run
+            rec["inputs"] = key
         if rec["inputs"] != key:
             _submit(eid, name, key)
             ready[name] = False

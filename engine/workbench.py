@@ -834,8 +834,21 @@ def busy_doc(d: dict) -> bool:
     return d["status"] in ("queued", "processing") or d["facts_status"] in ("queued", "running")
 
 
-def _roles_key(eid: int, wbs: list[dict], docs: list[dict]) -> str:
-    """What a suggestion depends on: the processed files and the report facts it navigates by."""
+def _roles_key(eid: int, wbs: list[dict], docs: list[dict], ref: list | None = None) -> str:
+    """What a suggestion depends on: the processed files, and the report's figures it places the files by (the
+    valuation ones roles.py matches in the workbooks, the date and the conclusion it checks and shows the second
+    opinion), by their values as a person has them. Not every fact's approval or page: each edit or decision on an
+    unused fact asked the second opinion again."""
+    import roles as rolesmod
+    ref = reference(eid) if ref is None else ref
+    used = sorted([f["key"], f.get("value_text"), f.get("low_text"), f.get("high_text")] for f in ref
+                  if rolesmod.VALUATION_KEYS.search(f.get("key") or "") or f.get("category") in ("identity", "conclusion"))
+    return json.dumps([sorted(w["id"] for w in wbs if w["status"] == "done"),
+                       sorted(d["id"] for d in docs if d["status"] == "done"), bool(ref), used], default=str)
+
+
+def _roles_key_v1(eid: int, wbs: list[dict], docs: list[dict]) -> str:
+    """The roles' key before _roles_key (an update recognises the same inputs: orchestrator.tick)."""
     ref = [(f["id"], f["value_text"], f["page"], f["approved"]) for f in reference(eid)]
     return json.dumps([sorted(w["id"] for w in wbs if w["status"] == "done"),
                        sorted(d["id"] for d in docs if d["status"] == "done"), ref], default=str)

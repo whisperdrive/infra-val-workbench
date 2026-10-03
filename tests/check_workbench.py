@@ -1075,6 +1075,47 @@ def typed_ends_check(first: int) -> None:
           "them pointing at typed figures: paired, held, nothing under them moving; a mid no longer the ends' midpoint holds)")
 
 
+def edits_check(first: int) -> None:
+    """A person's edit of an approved fact is an input: an edited terminal growth rate works the result out again (it
+    reran nothing, the page calling the result current); a second edit of a rate range too, and the rebuild with it.
+    A fact nobody edited fingerprints as before (an update reruns nothing for it). The roles' suggestion depends on the
+    figures it places files by, not on an unused fact's edit or decision (each asked the second opinion again); and an
+    update recognises the roles' inputs fingerprinted the older way, running nothing."""
+    import copy
+    snap = orc._snapshot(first)
+    res0, reb0 = orc.inputs(first, "result", snap), orc.inputs(first, "rebuild", snap)
+
+    def edited(key, **fields):
+        s2 = copy.deepcopy(snap)
+        f = next(f for f in s2["facts"] if f["key"] == key)
+        f["final"] = {**{k: f.get(k) for k in wb.FACT_FIELDS}, **(f.get("final") or {}), **fields}
+        return s2
+    g = edited("terminal_growth_rate", value_text="3.00%", value=0.03)
+    assert orc.inputs(first, "result", g) != res0 and orc.inputs(first, "rebuild", g) == reb0
+    r1 = edited("discount_rate", low_text="8.75%", high_text="8.25%")
+    r2 = edited("discount_rate", low_text="9.75%", high_text="9.25%")
+    assert len({orc.inputs(first, "rebuild", x) for x in (snap, r1, r2)}) == 3
+    # the roles: an unused fact's edit isn't an input; a figure they place the files by is
+    import roles as rolesmod
+    ref = wb.reference(first)
+    unused = next(f for f in ref if not rolesmod.VALUATION_KEYS.search(f["key"]) and f.get("category") not in ("identity", "conclusion"))
+    used = next(f for f in ref if f["key"] == "valuation_date")
+    k0 = wb._roles_key(first, snap["workbooks"], snap["documents"], ref)
+    swap = lambda f, **kw: [{**x, **kw} if x is f else x for x in ref]
+    assert wb._roles_key(first, snap["workbooks"], snap["documents"], swap(unused, value_text="something else", approved=False)) == k0
+    assert wb._roles_key(first, snap["workbooks"], snap["documents"], swap(used, value_text="31 December 2025")) != k0
+    # an update: the roles' inputs recorded the older way are recognised, and nothing runs
+    legacy, now = orc.inputs(first, "roles", snap, legacy=True), orc.inputs(first, "roles", snap)
+    runs = len([h for h in orc.history(first, "roles", limit=200) if h["event"] == "start"])
+    orc._put(first, "roles", inputs=legacy)
+    orc.tick(first)
+    assert orc.stage(first, "roles")["inputs"] == now, orc.stage(first, "roles")
+    time.sleep(1.5)
+    assert len([h for h in orc.history(first, "roles", limit=200) if h["event"] == "start"]) == runs
+    print("edits: ok (an edited growth rate reruns the result, a second edit of a rate range the rebuild; an unused "
+          "fact's edit doesn't ask the roles' second opinion again; the older roles fingerprint recognised, nothing run)")
+
+
 def lapse_check(first: int) -> None:
     """A person's decisions are of the files they were made on: an acknowledgement's key covers the engagement's files,
     so one made before a client model was replaced lapses (said, with its reason, not applied); a confirmed term
@@ -1931,6 +1972,7 @@ def main() -> None:
     methods_check(eid)
     failures_check(eid)
     typed_ends_check(eid)
+    edits_check(eid)
     lapse_check(eid)
     shared_dates_check(eid)
     damaged_check(eid)
