@@ -107,6 +107,8 @@ def by_meaning(finder, s: str, r: int) -> dict | None:
     figures, if there's one: {"to", "check", "label", "agreed"}. None where none is, or more than one is as well
     supported: the models look."""
     ex = finder.explain(s, r)
+    if ex.get("copies_open"):  # copies the label, place and lineage can't tell apart: what it means can't either
+        return None
     ok = []
     for k in candidates(finder, s, r):
         c = finder.check(s, r, k)

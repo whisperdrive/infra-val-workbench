@@ -1596,12 +1596,16 @@ def variants_check() -> None:
     fixed = [n for n in variants.KNOWN_WRONG if n in got and not got[n]["wrong"]]
     assert not new, new
     assert not fixed, f"now right, take them off variants.KNOWN_WRONG: {fixed}"
-    rest = {n: x for n, x in got.items() if n not in variants.KNOWN_WRONG}
+    for n in variants.OPEN_OK:  # nothing in the model says which copy: open, not guessed (and not wrong)
+        assert got[n]["open"] == got[n]["right"] + got[n]["open"] and not got[n]["wrong"], (n, got[n])
+    rest = {n: x for n, x in got.items() if n not in variants.KNOWN_WRONG | variants.OPEN_OK}
     assert sum(x["right"] for x in rest.values()) >= sum(x["right"] + x["open"] for x in rest.values()) - 2, rest
     right = sum(x["right"] for x in got.values())
     total = sum(x["right"] + x["open"] + x["wrong"] for x in got.values())
-    print(f"variants: ok ({right} of {total} rows right across {len(got)} kinds of change; {len(wrong)} wrong, all in "
-          f"the {len(variants.KNOWN_WRONG)} kinds still known to go wrong)")
+    left = sum(got[n]["open"] for n in variants.OPEN_OK)
+    print(f"variants: ok ({right} of {total} rows right across {len(got)} kinds of change; {left} left open where "
+          f"nothing in the model says which copy; {len(wrong)} wrong, all in the {len(variants.KNOWN_WRONG)} kinds still "
+          f"known to go wrong)")
 
 
 def store_check() -> None:

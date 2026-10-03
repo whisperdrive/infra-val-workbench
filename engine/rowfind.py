@@ -54,7 +54,11 @@ LAYOUT = 0.9         # an unlabelled row found at its own row number, on a sheet
 TRACE_DEPTH = 6      # rows apart, at most, an anchor and the row the trace is for
 TRACE_ANCHORS = 6    # the nearest anchors each way
 TRACE_SCAN = 300     # rows looked at for anchors each way, at most
-VERSION = 5          # bump when finding changes: the agents' picks made under another version are dropped and redone
+VERSION = 6          # bump when finding changes: the agents' picks made under another version are dropped and redone
+# the rows a model's own valuation ends in: a copy of a block whose rows reach the row last year's reached is the case
+# the model values (a downside or P90 copy beside it reaches none, or another)
+VALUE_ROW = re.compile(r"\b(npv|net present value|present value|equity value|enterprise value|valuation|irr|dcf)\b", re.I)
+NOT_VALUE_KINDS = ("dates", "factors", "flags", "share", "index")
                      # (4: the trace)
                      # (3: a pasted copy of last year's figures is no candidate)
                      # (2: unlabelled rows followed by the layout, blank rows settled by code)
@@ -748,11 +752,19 @@ class RowFinder:
                 "figures": [round(v, 6) for _w, v in sorted(ser.items())[:4]], "file": wb.path}
 
     def matches(self, card: dict, k: tuple) -> bool:
-        """Whether this year's row k is the row a card describes: its label, heading and kind the same."""
+        """Whether this year's row k is the row a card describes: its label, heading and kind the same; and where its
+        label is in more than one place this year (copies of a block), its place in its block and its figures too: a
+        copy has the same label, heading words and kind."""
         now = self.card(self.current, k)
         same = lambda a, b: _norm(a or "") == _norm(b or "")
-        return same(now["label"], card.get("label")) and same(now["heading"], card.get("heading")) and \
-            (not card.get("kind") or now["kind"] == card.get("kind"))
+        if not (same(now["label"], card.get("label")) and same(now["heading"], card.get("heading"))
+                and (not card.get("kind") or now["kind"] == card.get("kind"))):
+            return False
+        if len(self._index()["by_label"].get(_norm(card.get("label") or ""), [])) < 2:
+            return True
+        a, b = card.get("figures") or [], now["figures"]
+        return (card.get("position") is None or now["position"] == card["position"]) and bool(a) and len(a) == len(b) \
+            and all(abs(x - y) <= 1e-6 * max(1.0, abs(x)) for x, y in zip(a, b))
 
     def refind(self, card: dict) -> tuple[tuple | None, str]:
         """This year's row for a card, in a model that changed since the pick: the same label, heading and kind on the
@@ -803,10 +815,13 @@ class RowFinder:
         return structure.load(wb.path)
 
     def _copies(self, s: str, r: int, res: dict, found: dict) -> None:
-        """Last year's label in more than one copy of a block this year (a downside case inserted above the base, a
-        100% and a share): the label alone can't say which copy is meant. The copy whose heading is last year's
-        block's is taken (and the row found there counts as placed: its block agrees); where the headings don't say,
-        the row found stands only if its lineage agrees (the rows it reads or is read by), else it's left in doubt."""
+        """Last year's label in more than one place this year where it wasn't before (a downside or P90 case inserted
+        above the base, the base renamed, no headings at all), or in copies of a block: the label, the neighbours, the
+        trace and the lineage are the same in every copy, so none of them says which copy is meant. Two things can:
+          the heading   the one whose heading names last year's case, surely and well ahead (structure.which_copy)
+          the value     the one whose rows reach the row of the model's own valuation last year's row reached (the
+                        equity value, the NPV), where exactly one does
+        Else the row is left in doubt (copies_open), for the models or a person: never the first occurrence."""
         import structure
         k = res["found"]
         lab = _norm(self.prior.labels().get((s, r), ""))
@@ -816,43 +831,82 @@ class RowFinder:
             cur, pri = self._structure(self.current), self._structure(self.prior)
         except Exception:
             return
-        if not cur["copies"]:
+        cands = list(self._index()["by_label"].get(lab, []))
+        if len(cands) < 2:
             return
         name = lambda b: f"{b['sheet']}!r{b['first']}:r{b['last']}"
-        same = [(x, b) for x in self._index()["by_label"].get(lab, []) if (b := structure.block_of(cur["blocks"], *x))]
         pairs = {frozenset((c["a"], c["b"])) for c in cur["copies"]}
-        paired = [(x, b) for x, b in same
-                  if any(frozenset((name(b), name(b2))) in pairs for _x2, b2 in same if name(b2) != name(b))]
-        if len(paired) < 2:
-            return
-        cands = [x for x, _ in paired]
-        w = structure.which_copy(pri["blocks"], cur["blocks"], cur["copies"], (s, r), cands)
-        ev = found.get(k) or {}
-        if w["pick"] == k:
-            ev["block"] = (1.0, w["why"])
-            res["evidence"] = [e for e in res["evidence"] if not (e[0] == "trace" and e[1].startswith("but the trace leads to")
-                                                                   and any(e[1].endswith(f"{x[0]}!r{x[1]}") for x in cands))]
-            res["evidence"].append(("block", w["why"] + (": the trace led into the other copy" if len(res["evidence"]) else "")))
-            res["confidence"] = round(max(res["confidence"], CONFIDENT), 2)  # its place agrees with what found it
-            return
-        if w["pick"]:
-            to = w["pick"]
-            found.setdefault(to, {})["block"] = (1.0, w["why"])
-            found[to].setdefault("label", (1.0, "the same label, in the copy headed as last year's block"))
-            res.update(found=to, how="block", confidence=round(max(res["confidence"], CONFIDENT + 0.1), 2), in_place=False,
-                       evidence=[("block", w["why"]), ("label", "the same label, in that copy")],
-                       alternatives=[{"row": f"{k[0]}!r{k[1]}", "label": self.current.labels().get(k, ""), "score": 0.0,
-                                      "evidence": ["found first, in another copy of the block"]}] + res["alternatives"])
-            return
-        if k not in cands:
-            return
-        if any(n in ev and ev[n][0] >= 0.5 for n in ("neighbours", "trace")):
-            res["evidence"].append(("block", "in a block with copies; its lineage agrees with this one"))
+        blocks = {x: structure.block_of(cur["blocks"], *x) for x in cands}
+        paired = any(blocks[a] and blocks[b] and frozenset((name(blocks[a]), name(blocks[b]))) in pairs
+                     for a in cands for b in cands if a != b)
+        if not paired and len(cands) <= self._prior_count(lab):
+            return  # as often as last year (and no copies of a block): the occurrences match in order
+        res["in_place"] = False  # its place may be the copy's: a decider below, or doubt
+        info = cur["info"]
+        heading = lambda x: (blocks.get(x) or {}).get("heading") or info.get(x, {}).get("section") or x[0]
+        mine = structure.block_of(pri["blocks"], s, r)
+        want_bl = [{**mine, "heading": mine.get("heading") or pri["info"].get((s, r), {}).get("section") or s}] if mine \
+            else [{"sheet": s, "rows": [r], "heading": pri["info"].get((s, r), {}).get("section") or s}]
+        w = structure.which_copy(want_bl, cur["blocks"], cur["copies"], (s, r), cands, heading_of=heading)
+        pick, why, how = w["pick"], w["why"], "block"
+        if not pick:
+            v = self._by_value(s, r, cands)
+            if v:
+                pick, why, how = v[0], v[1], "value"
+        if pick:
+            fam = "place" if how == "block" else "role"
+            if pick == k:
+                (found.get(k) or {})[how] = (1.0, why)
+                res["evidence"] = [e for e in res["evidence"] if not (e[0] == "trace" and e[1].startswith("but the trace leads to")
+                                                                       and any(e[1].endswith(f"{x[0]}!r{x[1]}") for x in cands))]
+                res["evidence"].append((how, why))
+                res["confidence"] = round(max(res["confidence"], CONFIDENT), 2)
+            else:
+                found.setdefault(pick, {})[how] = (1.0, why)
+                found[pick].setdefault("label", (1.0, "the same label, in that copy"))
+                res.update(found=pick, how=how, confidence=round(max(res["confidence"], CONFIDENT + 0.1), 2),
+                           evidence=[(how, why), ("label", "the same label, in that copy")],
+                           alternatives=[{"row": f"{k[0]}!r{k[1]}", "label": self.current.labels().get(k, ""), "score": 0.0,
+                                          "evidence": ["found first, in another copy"]}] + res["alternatives"])
+            res["copy_decided"] = fam
             return
         res["confidence"] = min(res["confidence"], round(CONFIDENT - 0.01, 2))
-        res["in_place"] = False
-        res["evidence"].append(("block", "the label is in copies of this block (" + "; ".join(w["ambiguous"][:3])
-                                         + "): which is last year's isn't settled by the label"))
+        res["copies_open"] = [f"{x[0]}!r{x[1]} '{heading(x)}'" for x in cands]
+        res["evidence"].append(("block", f"the label is in {len(cands)} places this year (" + "; ".join(res["copies_open"][:4])
+                                         + "): neither the headings nor the model's own value say which is last year's"))
+
+    def _prior_count(self, lab: str) -> int:
+        """How many of last year's rows have this label, on the sheets this year's are counted on."""
+        if not hasattr(self, "_pcount"):
+            self._pcount = defaultdict(int)
+            for (s_, _r), l_ in self.prior.labels().items():
+                if l_:
+                    self._pcount[_norm(l_)] += 1
+        return self._pcount.get(lab, 0)
+
+    def _by_value(self, s: str, r: int, cands: list[tuple]) -> tuple | None:
+        """The one candidate whose rows reach the same row of the model's own valuation (the equity value, the NPV:
+        by its label) that last year's row reached in last year's model. -> (row, why) or None."""
+        import structure
+        (_p_reads, p_by), (_c_reads, c_by) = self._index()["edges"]
+        plab, clab = self.prior.labels(), self._index()["labels"]
+        try:
+            pinfo, cinfo = self._structure(self.prior)["info"], self._structure(self.current)["info"]
+        except Exception:
+            return None
+
+        def values(start, graph, labels, info):
+            return {_norm(labels.get(x, "")) for x in structure.closure(start, graph) if x != start
+                    and VALUE_ROW.search(labels.get(x, "") or "") and info.get(x, {}).get("kind") not in NOT_VALUE_KINDS}
+        then = values((s, r), p_by, plab, pinfo) - {""}
+        if not then:
+            return None  # last year's row reached no valuation of the model's own: nothing to go by
+        hits = [(x, then & values(x, c_by, clab, cinfo)) for x in cands]
+        hits = [(x, v) for x, v in hits if v]
+        if len(hits) != 1:
+            return None
+        x, v = hits[0]
+        return x, f"the copy whose rows reach the model's own {sorted(v)[0]}, as last year's row did"
 
     def blank(self, s: str, r: int) -> bool:
         """Last year's row has nothing to find: no label, no number other than 0, no formulas."""

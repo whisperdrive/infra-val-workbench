@@ -107,7 +107,10 @@ takes it from there:
    headed as last year's is taken), its lineage (what it's made of and what it feeds, two steps out), its kind, and
    its numbers as a sanity band, never the selector (the closest rows to last year's are often a prior-forecast block,
    another case or the 100% row). A row settles where kinds of evidence agree (who it is, where it is, what it does,
-   its numbers); each row says which agreed. The row agents' first pass takes a candidate only where something other
+   its numbers); each row says which agreed. A label in more places this year than last (a downside or P90 case
+   inserted, the base renamed, no headings) is settled only by a heading naming last year's case or by the copy whose
+   rows reach the model's own valuation, as last year's did; otherwise it's left for the models or you, never the first
+   copy. The row agents' first pass takes a candidate only where something other
    than its numbers says it's the same line item and it isn't a copy of last year's figures; in a model rebuilt from
    the ground up, its numbers and structure together where exactly one candidate has both. Then the models: asked
    whether a row means the same, given its card, its lineage, its role in the valuation (the overlay rows reading it,

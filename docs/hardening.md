@@ -89,10 +89,11 @@ cards found again in a corrected model; a person's picks logged, anonymised, for
 High: a wrong value can still reach the result unflagged.
 
 1. ~~Row agents settle "by the numbers" on the candidate nearest last year's~~ — done: by meaning, numbers a band.
-2. **Same-label matching when a block is inserted** — re-opened by the second review (S1 below): done only where the
-   right copy's heading repeats last year's heading words. Case columns: done.
-3. **Row picks keyed by address, not by file** — re-opened in part (S1): a card is kept at its address when its label,
-   heading and kind match, without comparing its figures or position. Held figures: done.
+2. ~~Same-label matching when a block is inserted~~ — done (S1 below): a label in more places this year than last, or
+   in copies of a block, is settled only by a heading naming last year's case, or by what the model's own valuation
+   reads; else it's left in doubt. Case columns: done.
+3. ~~Row picks keyed by address, not by file~~ — done: where its label is in copies, a card also needs its place in its
+   block and its figures to match. Held figures: done.
 4. **A mid-period valuation date** keeps the whole straddling period (half a year's cash flow already earned). Point
    to check with the elapsed fraction; a proration method.
 5. **A distribution declared at this year's date in the client model** that the overlay doesn't deduct.
@@ -130,7 +131,15 @@ reviewer's own session.
 
 ### A wrong value through on ordinary inputs, unflagged
 
-- **S1. A copy of a block settled on the wrong copy** (re-run). A downside or P90 case inserted above the base, the
+- ~~**S1. A copy of a block settled on the wrong copy**~~ — fixed, but for one case. A label in more places this year
+  than last (or in copies of a block) is settled by a heading naming last year's case, surely and well ahead (case
+  words decide; words every copy shares never do; a heading naming another case rules a copy out), else by the copy
+  whose rows reach the row of the model's own valuation last year's row reached (the equity value, the NPV), else it's
+  left in doubt for the models or a person; the agents' first pass leaves it too; a pick card in copies needs its place
+  and figures. Measured: the review's copy cases right; copies nothing tells apart left open; the pack's 134 rows
+  unchanged; the reproduction (a downside 0.93× above the base) now held, not 10.6% low. **Left:** the same number of
+  copies both years, run together under no heading, swapped this year, no valuation row of the model's own, and
+  figures too close to tell: still matched by their order. Was (re-run): A downside or P90 case inserted above the base, the
   base's heading renamed ("Management forecast" shares "case" with "Downside case"), no headings, or the base moved to
   another sheet: every row settled on the copy at confidence 1.0, identity, place and role all agreeing; this year's
   value 10.6% low, the zero roll inside the silent band. `structure.which_copy` takes any heading sharing a word;

@@ -188,26 +188,54 @@ def _words(text: str) -> set:
     return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) > 2}
 
 
-def which_copy(prior_bl: list[dict], cur_bl: list[dict], cur_copies: list[dict], row: tuple, cands: list[tuple]) -> dict:
-    """Where last year's row has a label this year's model has in more than one copy of a block (a base and a
-    downside case inserted above it, say), which copy is meant: the one whose heading is last year's block's, and
-    the row at the same place in it. {"pick" (sheet, row) or None, "why", "ambiguous" (the copies)}."""
+# A heading's words that name a case: two copies of a block are told apart by these, never by words every copy shares
+CASE_WORDS = {"base", "downside", "upside", "low", "high", "central", "mid", "middle", "p10", "p25", "p50", "p75", "p90",
+              "real", "nominal", "management", "bear", "bull", "stress", "stressed", "pessimistic", "optimistic", "lender",
+              "lenders", "sponsor", "budget", "actual", "actuals", "prior", "previous", "original", "revised", "sensitivity"}
+GENERIC = {"case", "cases", "scenario", "scenarios", "forecast", "forecasts", "cash", "flow", "flows", "model", "the",
+           "and", "for", "summary", "projections", "projection"}
+FLOOR, MARGIN = 0.75, 0.5  # a copy is picked by its heading only this sure, and this far ahead of the next
+
+
+def heading_fit(want: str, got: str) -> float | None:
+    """How surely a heading names the same case as last year's: 1 the same, 0 another case, between where the words
+    say partly, None where neither says anything (both empty or only generic words)."""
+    a, b = _words(want), _words(got)
+    if not a and not b:
+        return None
+    if a and a == b:
+        return 1.0
+    ca, cb = a & CASE_WORDS, b & CASE_WORDS
+    if ca or cb:
+        if ca and cb:
+            return 1.0 if ca == cb else 0.5 if ca & cb else 0.0
+        return 0.0 if cb else 0.3  # another case named here; or last year's case unnamed here (a generic heading)
+    ra, rb = a - GENERIC, b - GENERIC
+    if not ra or not rb:
+        return None
+    return len(ra & rb) / len(ra | rb)
+
+
+def which_copy(prior_bl: list[dict], cur_bl: list[dict], cur_copies: list[dict], row: tuple, cands: list[tuple],
+               heading_of=None) -> dict:
+    """Where last year's row's label is in more than one place this year (a downside case inserted above the base, a
+    P90 beside a P50), which is meant by the headings: the one whose heading names last year's case, surely and well
+    ahead of the others. Words every copy shares ("case", "cash flow") never decide; a heading naming another case
+    rules a copy out. heading_of(k): a candidate's heading (default its block's). {"pick" (sheet, row) or None, "why",
+    "ambiguous" (the candidates and their headings)}."""
     mine = block_of(prior_bl, *row)
-    blocks = [(k, block_of(cur_bl, *k)) for k in cands]
-    blocks = [(k, b) for k, b in blocks if b]
-    names = {f"{b['sheet']}!r{b['first']}:r{b['last']}" for _, b in blocks}
-    copied = [c for c in cur_copies if c["a"] in names and c["b"] in names]
-    if len(blocks) < 2 or not copied:
+    want = (mine or {}).get("heading") or ""
+    head = heading_of or (lambda k: (block_of(cur_bl, *k) or {}).get("heading") or "")
+    scored = sorted(((heading_fit(want, head(k)), k) for k in cands), key=lambda x: (-(x[0] or 0.0), x[1]))
+    listed = [f"{k[0]}!r{k[1]} '{head(k)}'" for _f, k in scored]
+    if len(scored) < 2:
         return {"pick": None, "why": "no copies among the candidates", "ambiguous": []}
-    want = _words(mine["heading"]) if mine else set()
-    scored = sorted(((len(want & _words(b["heading"])) / max(1, len(want | _words(b["heading"]))), k, b) for k, b in blocks),
-                    key=lambda x: -x[0])
-    best = scored[0]
-    if best[0] > 0 and (len(scored) == 1 or best[0] > scored[1][0]):
-        return {"pick": best[1], "why": f"the copy headed '{best[2]['heading']}', as last year's block was "
-                                        f"('{mine['heading'] if mine else ''}')", "ambiguous": []}
-    return {"pick": None, "why": "copies of the block with headings that don't say which is last year's",
-            "ambiguous": [f"{b['sheet']}!r{b['first']}:r{b['last']} '{b['heading']}'" for _, k, b in scored]}
+    best, nxt = scored[0][0] or 0.0, scored[1][0] or 0.0
+    if best >= FLOOR and best - nxt >= MARGIN:
+        k = scored[0][1]
+        return {"pick": k, "why": f"the copy headed '{head(k)}', as last year's block was ('{want}')", "ambiguous": []}
+    return {"pick": None, "why": "copies whose headings don't say which is last year's"
+            + (f" ('{want}')" if want else ""), "ambiguous": listed}
 
 
 VERSION = 1  # the structure's rules: tables written by older rules are worked out again (in memory)

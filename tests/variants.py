@@ -26,17 +26,20 @@ import build_map  # noqa: E402
 ENDS = [date(2026 + k, 6, 30) for k in range(8)]
 # kinds of change the row tools still settle wrongly (the second review, 3 October 2026; docs/hardening.md S1, S9):
 # taken off as each is fixed, so the measure stays honest and a new wrong row anywhere else fails the check
-KNOWN_WRONG = {"downside above, base renamed", "downside above, no headings", "P90 above, base as P50",
-               "rebuilt, low case beside a revised central", "costs and tax merged"}
+KNOWN_WRONG = {"rebuilt, low case beside a revised central", "costs and tax merged"}
+# kinds where leaving the rows open (for the models or a person) is the right answer: nothing in the model says which
+OPEN_OK = {"downside above, no headings, no value row", "downside above, base renamed, the value reads both",
+           "copies swapped, no headings, no value row"}
 LINES = (("Revenue", 100.0), ("Operating costs", -40.0), ("Tax paid", -15.0))  # then Distributions, their sum
 
 
 def _book(path: Path, sheet="CF", blocks=(("Base case", 1.0, None),), prior_block=False, order=None, drop=None,
-          merge=None) -> dict:
+          merge=None, value="base") -> dict:
     """A client model: blocks of lines under headings, each ending in Distributions (the sum), and an Equity value
     reading the base case's. blocks: (key, growth on last year's, labels {line: label} or None[, heading shown (None:
     no heading; default the key)[, sheet (default the model's sheet)]]). merge: (line, line, label): the two lines as
-    one. -> {(key, line): (sheet, row)} (1-based)."""
+    one. value: the Equity value reads the base case's distributions ("base"), every block's ("both"), or there's none
+    (None). -> {(key, line): (sheet, row)} (1-based)."""
     wb = xlsxwriter.Workbook(path)
     dt = wb.add_format({"num_format": "dd-mmm-yy"})
     sheets, next_row = {}, {}
@@ -79,10 +82,13 @@ def _book(path: Path, sheet="CF", blocks=(("Base case", 1.0, None),), prior_bloc
         where[(key, "Distributions")] = (on, dr + 1)
         next_row[on] = dr + 2
     ws, r = sheets[sheet], next_row[sheet]
-    bs, bd = where[("Base case", "Distributions")]
-    ref = "" if bs == sheet else f"'{bs}'!"
-    ws.write(r, 1, "Equity value")
-    ws.write_formula(r, 2, f"=SUM({ref}D{bd}:{ref}{COL(3 + len(ENDS) - 1)}{bd})", None, 1.0)
+    reads = [where[(b[0], "Distributions")] for b in blocks if value == "both" or b[0] == "Base case"] if value else []
+    if reads:
+        refs = ",".join(f"{'' if bs == sheet else repr(bs).replace(chr(34), chr(39))+'!'}D{bd}:"
+                        f"{'' if bs == sheet else repr(bs).replace(chr(34), chr(39))+'!'}{COL(3 + len(ENDS) - 1)}{bd}"
+                        for bs, bd in reads)
+        ws.write(r, 1, "Equity value")
+        ws.write_formula(r, 2, f"=SUM({refs})", None, 1.0)
     if prior_block:  # last year's figures, by formulas from a sheet of them: a prior-forecast comparison
         pf = wb.add_worksheet("Prior")
         ws.write(r + 2, 0, "Last valuation's forecast")
@@ -126,16 +132,34 @@ def pairs(out: Path) -> list[dict]:
             ("Base case", 1.20, {**renames, "Revenue": "Sales"}, "Central"))}),
         ("costs and tax merged", {"blocks": (("Base case", 1.04, None),),
                                   "merge": ("Operating costs", "Tax paid", "Operating costs and tax")}),
+        # copies nothing in the model tells apart (no heading names a case; no value, or every copy feeds it): left
+        # open for the models or a person, never the first copy (OPEN_OK)
+        ("downside above, no headings, no value row", {"blocks": (("Downside case", 0.93, None, None),
+                                                                   ("Base case", 1.04, None, None)), "value": None}),
+        ("downside above, base renamed, the value reads both", {"blocks": (
+            ("Downside case", 0.93, None), ("Base case", 1.04, None, "Management forecast")), "value": "both"}),
+        # the copies both years, swapped this year, with nothing to tell them apart: the figures say the first
+        # occurrence isn't last year's, so open (where they couldn't, it would still be matched by order: see S1)
+        ("copies swapped, no headings, no value row", {"blocks": (("Downside case", 0.93, None, None),
+                                                                   ("Base case", 1.04, None, None)), "value": None,
+                                                        "last": {"blocks": (("Base case", 1.0, None, None),
+                                                                            ("Downside case", 0.9, None, None)),
+                                                                 "value": None}}),
     ]
     out_pairs = []
     for name, kw in specs:
-        slug = name.replace(" ", "_").replace("-", "_")
+        slug = "".join(c if c.isalnum() else "_" for c in name)
+        kw = dict(kw)
+        lw, ldb = last_where, last
+        if "last" in kw:  # a last year's model of its own
+            lw = _book(out / f"last_{slug}.xlsx", **kw.pop("last"))
+            ldb = build_map.main(str(out / f"last_{slug}.xlsx"), str(out / f"db_last_{slug}"))["db"]
         where = _book(out / f"{slug}.xlsx", **kw)
         db = build_map.main(str(out / f"{slug}.xlsx"), str(out / f"db_{slug}"))["db"]
         truth = {}
-        for (heading, line), k in last_where.items():
-            truth[k] = where.get(("Base case", line))  # None where this year's model has no such row (merged, dropped)
-        out_pairs.append({"name": name, "last": last, "this": db, "truth": truth})
+        for (key, line), k in lw.items():
+            truth[k] = where.get((key, line))  # None where this year's model has no such row (merged, dropped)
+        out_pairs.append({"name": name, "last": ldb, "this": db, "truth": truth})
     return out_pairs
 
 
