@@ -214,6 +214,44 @@ class RowMap:
 
 # ---- a live session -----------------------------------------------------------------------------------------
 
+HEAD_ROWS = 15  # rows above a single figure looked at for its column's heading
+
+
+def _heading(wb: Workbook, s: str, r: int, c: int) -> tuple[str, int] | None:
+    """The text heading a figure's column above it (the nearest text cell up the column, within HEAD_ROWS): a
+    case's name over a column of inputs. (text, its row), or None."""
+    vals = wb.sheet(s)
+    for rr in range(r - 1, max(0, r - HEAD_ROWS), -1):
+        v = vals.get((rr, c))
+        if isinstance(v, str) and v.strip() and not re.match(r"^\d{4}-\d{2}-\d{2}", v):
+            return v.strip(), rr
+    return None
+
+
+def case_column(prior: Workbook, cur: Workbook, s: str, r: int, c: int, s2: str, r2: int) -> tuple[int | None, str]:
+    """This year's column for a single figure last year read in column c: c, unless the column's heading changed (a
+    case column inserted before it): then the column in this year's heading row with last year's heading, or None
+    where there's none. -> (column or None, why)."""
+    was = _heading(prior, s, r, c)
+    if not was:
+        return c, ""
+    # a heading compared without its years and period markers ("FY25 inputs" is "FY26 inputs"), word for word
+    norm = lambda x: re.sub(r"[^a-z]+", " ", re.sub(r"\b(?:fy|cy|h[12]|q[1-4])?\s*'?\d{2,4}\b", " ", x.lower())).strip()
+    now = _heading(cur, s2, r2, c)
+    if now and norm(now[0]) == norm(was[0]):
+        return c, ""
+    row = now[1] if now else None
+    vals = cur.sheet(s2)
+    rows = [row] if row else range(r2 - 1, max(0, r2 - HEAD_ROWS), -1)
+    for rr in rows:
+        hits = [cc for (r_, cc), v in vals.items() if r_ == rr and isinstance(v, str) and norm(v) == norm(was[0])]
+        if len(hits) == 1:
+            return hits[0], (f"the column headed '{was[0]}' (column {c} last year, {hits[0]} this year: "
+                             f"'{now[0] if now else ''}' is in column {c} now)")
+    return None, f"the column's heading was '{was[0]}', it's '{now[0] if now else 'nothing'}' this year, and no column " \
+                 f"is headed '{was[0]}'"
+
+
 class Session:
     """A compiled overlay wired to its inputs and a feed. All evaluation goes through deep()."""
 
@@ -373,6 +411,15 @@ class Session:
             return self._stand_in(prior, s, r, c, want)
         s2, r2 = hit
         c2 = c
+        if want is None and not (len(tl_p) > 1 and c > max(tl_p)):
+            # a single figure, not on the timeline: from the column whose heading is last year's (a case column
+            # inserted before it moves it), not the same column letter
+            c2, why = case_column(prior, cur, s, r, c, s2, r2)
+            if c2 is None:
+                self.unmatched[(s, r, c)] = why
+                return self._stand_in(prior, s, r, c, want)
+            if c2 != c:
+                self.derived_used[(s, r, c)] = why
         if want is None and len(tl_p) > 1 and c > max(tl_p):
             # to the right of last year's timeline: no period last year to roll, so not this year's same column (another
             # period there, counted twice); as last year had it, nothing

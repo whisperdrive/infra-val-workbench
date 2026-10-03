@@ -38,6 +38,9 @@ EXACT = 1e-9
 SAME_SHEET = 0.35     # a sheet of the same name is the same sheet only if it shares this much of its labels
 RENAMED_SHEET = 0.5   # a sheet of another name is a renamed one if it shares this much
 RENAMED_TIE = 0.05    # ... and the next as like it within this: neither is taken (which one is a person's to say)
+LINEAGE_CANDS = 12    # candidates whose lineage is compared with last year's row's, at most
+# kinds of row that are what they are by their values: a row of one of these isn't a row of another kind
+FIXED_KINDS = {"dates", "flags", "factors", "share", "index"}
 # the kinds of evidence: who a row is (its label, its words), where it is (a banner reading it, its block, the same
 # place), what it does (what it reads and what reads it, a trace through them), its numbers (last year's history)
 FAMILY = {"label": "identity", "words": "identity", "banner": "place", "block": "place", "neighbours": "role",
@@ -519,7 +522,7 @@ class RowFinder:
         return new, gone
 
     WEIGHTS = {"label": 0.3, "history": 0.35, "words": 0.2, "neighbours": 0.15, "banner": 0.25, "trace": 0.5,
-               "shape": 0.0, "block": 0.3}
+               "shape": 0.0, "block": 0.3, "lineage": 0.2}
 
     def explain(self, s: str, r: int) -> dict:
         """{found: (sheet, row) or None, how, evidence: [(strategy, text)], confidence, alternatives}."""
@@ -537,7 +540,8 @@ class RowFinder:
             return res
         found = defaultdict(dict)
         for name, fn in (("label", self._by_label), ("history", self._by_history), ("words", self._by_words),
-                         ("neighbours", self._by_neighbours), ("banner", self._by_banner), ("trace", self._by_trace)):
+                         ("neighbours", self._by_neighbours), ("banner", self._by_banner), ("trace", self._by_trace),
+                         ("block", self._by_block)):
             try:
                 for k, score, text in fn(s, r):
                     if k and (k not in found or name not in found[k] or found[k][name][0] < score):
@@ -553,6 +557,10 @@ class RowFinder:
                 h = self._history(mine, k)
                 if h and h[2]:
                     ev["history"] = (h[0], h[1])
+        for k, ev in list(found.items())[:LINEAGE_CANDS]:  # what each candidate is made of and feeds, two steps out
+            lin = self._lineage(s, r, k)
+            if lin and lin[0] >= 0.5:
+                ev["lineage"] = lin
         ranked = []
         home = self.sheet_for(s)
         odd = set()
@@ -565,7 +573,7 @@ class RowFinder:
                          for n, (sc, _) in ev.items())
             # the same label where it was, and last year's numbers in the periods both have: nothing beats that
             sure = "label" in ev and ev["label"][0] >= 1.0 and "history" in ev
-            why = self.other_shape(s, r, k)
+            why = self.other_shape(s, r, k) or self._kind_clash(s, r, k)
             if why:  # another kind of row: its evidence counts for less, and alone it isn't enough
                 ev["shape"] = (0.0, why)
                 total -= 0.2
@@ -625,6 +633,69 @@ class RowFinder:
                                                      "to find, so its blanks stand in")])
         self._cache[key] = res
         return res
+
+    def _by_block(self, s, r) -> list[tuple]:
+        """The row under last year's label in this year's block headed as last year's was (its heading's words);
+        an unlabelled row at its place in a block of the same size."""
+        import structure
+        try:
+            cur, pri = self._structure(self.current), self._structure(self.prior)
+        except Exception:
+            return []
+        mine = structure.block_of(pri["blocks"], s, r)
+        want = structure._words(mine["heading"]) if mine else set()
+        if not want:
+            return []
+        lab = _norm(self.prior.labels().get((s, r), ""))
+        clab = self._index()["labels"]
+        i = mine["rows"].index(r)
+        out = []
+        for b in cur["blocks"]:
+            if self.only is not None and b["sheet"] not in self.only:
+                continue
+            got = structure._words(b["heading"])
+            j = len(want & got) / max(1, len(want | got))
+            if j < 0.5:
+                continue
+            if lab:
+                same = [x for x in b["rows"] if _norm(clab.get((b["sheet"], x), "")) == lab]
+                if len(same) == 1:
+                    out.append(((b["sheet"], same[0]), round(j, 2), f"under its label in the block headed '{b['heading']}', "
+                                                                    f"as last year's ('{mine['heading']}')"))
+            elif len(b["rows"]) == len(mine["rows"]):
+                out.append(((b["sheet"], b["rows"][i]), round(0.6 * j, 2), f"at its place in the block headed "
+                                                                           f"'{b['heading']}', as last year's"))
+        return sorted(out, key=lambda x: (-x[1], x[0]))[:3]
+
+    def _lineage(self, s, r, k) -> tuple | None:
+        """How alike last year's row and this year's row k are by what they're made of and what they feed, two steps
+        out each way (the rows' labels): (score, text), or None where last year's row reads and feeds nothing."""
+        (p_reads, p_by), (c_reads, c_by) = self._index()["edges"]
+        plab, clab = self.prior.labels(), self._index()["labels"]
+
+        def out(graph, start, labels):
+            one = set(graph.get(start, ()))
+            two = {y for x in one for y in graph.get(x, ())} - {start}
+            return {_norm(labels.get(x, "")) for x in one | two} - {""}
+        sides = [(out(p_reads, (s, r), plab), out(c_reads, k, clab)), (out(p_by, (s, r), plab), out(c_by, k, clab))]
+        parts = [_jaccard(a, b) for a, b in sides if a]
+        if not parts:
+            return None
+        score = round(sum(parts) / len(parts), 3)
+        (ua, ub), (da, db) = sides
+        return score, (f"made of {', '.join(sorted(ua & ub)[:4]) or 'nothing alike'}; feeds "
+                       f"{', '.join(sorted(da & db)[:4]) or 'nothing alike'} (two steps out)")
+
+    def _kind_clash(self, s, r, k) -> str | None:
+        """Another kind of row by its values: a row of dates, flags, factors, a share or an index isn't a cash flow."""
+        try:
+            a = self._structure(self.prior)["info"].get((s, r), {}).get("kind")
+            b = self._structure(self.current)["info"].get(k, {}).get("kind")
+        except Exception:
+            return None
+        if a and b and a != b and (a in FIXED_KINDS or b in FIXED_KINDS):
+            return f"last year's row is {a}, this one {b}: another kind of row"
+        return None
 
     def _structure(self, wb):
         import structure

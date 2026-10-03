@@ -1390,6 +1390,37 @@ def structure_check() -> None:
           "the row finder takes the base case's rows, revised, where the label alone took the downside's)")
 
 
+def case_column_check() -> None:
+    """A single figure (not on the timeline) read from the column headed as last year: a case column inserted before
+    it moves it; a heading that differs only by its year is the same; a heading gone is unmatched, not read."""
+    import overlay as ov
+    out = Path(tempfile.mkdtemp(prefix="cases_"))
+
+    def book(name, heads):
+        wb = xlsxwriter.Workbook(out / f"{name}.xlsx")
+        ws = wb.add_worksheet("Inputs")
+        for i, h in enumerate(heads):
+            ws.write(2, 2 + i, h)
+        for r, lab in ((4, "Tax rate"), (5, "CPI")):
+            ws.write(r, 1, lab)
+            for i, h in enumerate(heads):
+                ws.write_number(r, 2 + i, {"Base": 0.30, "Management case": 0.25, "FY26 base": 0.30}.get(h, 0.3) if r == 4 else 0.025)
+        wb.close()
+        return ov.Workbook(build_map.main(str(out / f"{name}.xlsx"), str(out / f"db_{name}"))["db"])
+    last = book("last", ["Base"])
+    moved = book("moved", ["Management case", "Base"])
+    yearly = book("yearly", ["FY26 base"])
+    gone = book("gone", ["Management case"])
+    last2 = book("last2", ["FY25 base"])
+    assert ov.case_column(last, moved, "Inputs", 5, 3, "Inputs", 5)[0] == 4  # column C last year, D this year
+    assert ov.case_column(last2, yearly, "Inputs", 5, 3, "Inputs", 5) == (3, "")
+    c, why = ov.case_column(last, gone, "Inputs", 5, 3, "Inputs", 5)
+    assert c is None and "Base" in why, (c, why)
+    assert ov.case_column(last, last, "Inputs", 5, 3, "Inputs", 5) == (3, "")
+    print("case column: ok (a single figure read from the column headed as last year's, a case column inserted before "
+          "it; a heading differing by its year the same; a heading gone, unmatched)")
+
+
 if __name__ == "__main__":
     main()
     mid_year_check()
@@ -1410,3 +1441,4 @@ if __name__ == "__main__":
     basis_check()
     pairing_check()
     structure_check()
+    case_column_check()
