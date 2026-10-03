@@ -101,6 +101,14 @@ takes it from there:
    them, and come off the forecast's present value. The split is in the
    units most of the report's figures tie in (discountings in thousands under an equity value in millions, at 100%
    under a share of it).
+
+   The equity value's cells are paired only from cells that work it out: where the report's figures are found only
+   typed in (a low and a high pasted from a sensitivity run, data-table cells), the value is held, the typed cells
+   named. Cells that don't match Excel go to the doctor (`doctor.py`): what each can't do (a function Python lacks, a
+   name, a formula it can't compile), and which read nothing that changes between the years (the client model, an
+   assumption, the dates the roll moves, this year's rate, the inputs you set, the forecast's end). Holding those at
+   the value Excel saved is your decision, on the Rebuild page; a held cell whose inputs move on this year's figures
+   holds the value.
 6. **Rolls forward onto this year's client model.** Rows are found by a set of tools, cheap ones first, the next when
    they disagree or can't settle a row: the address (a model whose structure is unchanged), the label, the row's block
    and its heading (`structure.py`: a downside case inserted above the base is a copy of the base block, and the copy
@@ -108,16 +116,22 @@ takes it from there:
    its numbers as a sanity band, never the selector (the closest rows to last year's are often a prior-forecast block,
    another case or the 100% row). A row settles where kinds of evidence agree (who it is, where it is, what it does,
    its numbers); each row says which agreed. A label in more places this year than last (a downside or P90 case
-   inserted, the base renamed, no headings) is settled only by a heading naming last year's case or by the copy whose
-   rows reach the model's own valuation, as last year's did; otherwise it's left for the models or you, never the first
-   copy. The row agents' first pass takes a candidate only where something other
-   than its numbers says it's the same line item and it isn't a copy of last year's figures; in a model rebuilt from
-   the ground up, its numbers and structure together where exactly one candidate has both. Then the models: asked
+   inserted, the base renamed, no headings) is settled only by a heading naming last year's case (on one copy only,
+   or well ahead of the others), by the copy whose rows reach the model's own valuation, as last year's did, by the
+   periods (the annual copy, not a quarterly one beside it) or, with as many copies as last year, by the sheet last
+   year's became; otherwise it's left for the models or you, never the first copy. Pasted copies of last year's
+   figures, rows of another shape or kind and mirrors of another candidate aren't candidates; a row holding last
+   year's forecast exactly beside revised ones can't be picked; and a copy other than the one the label finds first
+   is taken only with last year's numbers within the band. The row agents' first pass takes a candidate only where
+   something other than its numbers says it's the same line item and it isn't a copy of last year's figures; in a
+   model rebuilt from the ground up, its numbers and structure together where exactly one candidate has both (a label
+   in more than one place there only as the copy reaching the model's own valuation). Then the models: asked
    whether a row means the same, given its card, its lineage, its role in the valuation (the overlay rows reading it,
    its path to the equity value), the searcher's trail and what's been learned about this year's model (notes kept
    for every row and the next run; shown on the Result page with each row the agents decided, how and why, under
    "What the row agents did"). Each pick keeps a card of the row it chose and is found again from it when the
-   client sends a corrected model; one that can't be is set aside, not applied to another row. A single figure off
+   client sends a corrected model (a label in copies by its place among them and their count, else by its figures);
+   one that can't be is set aside, not applied to another row. A single figure off
    the timeline is read from the column headed as last year's (a case column inserted before it). Your picks are
    logged, without a word of the client's, to learn how often each combination of evidence is right (`evidence.py`).
    `tests/variants.py` measures the tools on synthetic pairs of models with known answers. The trace starts from the rows both models clearly share (the same label, last year's
@@ -210,9 +224,16 @@ takes it from there:
    client model, checked first against last year's: the row of last year's model that holds last year's figure at
    last year's valuation date (its label agreeing) is the row read in this year's model at this year's date. A
    suggestion is only applied when you use it, or type your own figure; the bridge then has a step of its own for it.
-   A balance the overlay reads from the client model at last year's valuation date (one column of a row: a net debt,
-   a cash balance) is read at this year's date, also on a fixed horizon where the periods keep their dates; the
-   cash-flow split counts its move, and a point to check lists it.
+   A balance the overlay reads from the client model at last year's valuation date (one column of a row, outside the
+   overlay's own periods: a net debt, a cash balance) is read at this year's date, also on a fixed horizon where the
+   periods keep their dates; the cash-flow split counts its move, and a point to check lists it. One read up to a year
+   before last year's date (the latest actuals, a half-year's) is read as far before this year's; one read after it
+   isn't moved, a point to check; a cash-flow row read once more at the date by a cell of its own (a distribution
+   declared at the date) has only that read moved; a balance labelled as at a named date (a financial close, a
+   completion) stays at it, a point to check. Each moved balance is set against last year's model's forecast of it
+   for this year's date: 10% off is a point to check, 50% holds (a wrong row, a placeholder, a sign). Where this
+   year's model has no column at the date, last year's figure stands in, and holds. On the cash-flow card you can keep
+   any balance at its own date, or read a kept one at this year's.
    Your figure is kept with the input it's for (its label and last year's figure, and the overlay it was set on): if
    a corrected overlay moves the input, it's found again where exactly one input has both, and said so; otherwise
    it's set aside, a point to check, never applied to whatever the old cell now holds.
@@ -243,10 +264,18 @@ takes it from there:
    valued (the report's `interest_valued`) is checked against the share the overlay applies, and the basis of the
    overlay cell (ex or cum, from its label or formula) against the report's. The overlay's value not rounding to the
    report's, the rebuild more than 0.1% from what Excel saved, the roll's months assumed, another linked workbook read
-   at last year's figures, and roles you confirmed that fail the checks hold too.
+   at last year's figures, and roles you confirmed that fail the checks hold too. So do: a discounting turning the
+   other way this year (a row's sign convention changed); a distribution this year's model declares at this year's
+   date that the overlay doesn't deduct; an end of the equity value typed in, left at last year's to the cent while
+   this year's model changed, or a mid no longer the ends' midpoint where it was last year; a method you prefer that
+   couldn't be worked out; a circular reference met on the way to this year's value (Python takes the value Excel
+   saved there, last year's) or a function Python lacks (#NAME?, which an IFERROR turns into a figure); and a check
+   that couldn't run. A valuation date inside a period, the overlay's own sheets differing in this year's model, and
+   a report figure printed to so few digits that a cell well off it would still tie are points to check.
 
    **A hold can be acknowledged with a reason**: the value then goes through, the check stays listed with the reason,
-   and the workpaper's Review sheet records it with those still open. If the figures it found change, it holds again.
+   and the workpaper's Review sheet records it with those still open. If the figures it found change, it holds again;
+   so it does where a file it was made on is replaced (the acknowledgement lapses, and the check says so, with why).
    The Result page has **the models side by side** (`specs.py`): the report, the overlay as saved, the rebuild, both
    client models and this year, row by row, last year's flagged where they don't agree. What's checked and what's left
    to harden: `docs/hardening.md`.
@@ -278,6 +307,16 @@ on. Code, not the prompt, keeps it from going round in circles:
 - gpt-sol decides an issue once per set of inputs, sees what was tried before, then hands it to a person.
 - A person's action changes the inputs, so the stages it affects run again by themselves.
 
+**Your decisions** (acknowledgements, row picks, figures for inputs held at last year's, this year's rate and dates,
+the method, confirmed terms, the equity cells, cells held at Excel's value, balances kept or read) are each
+engagement's own, in `out/overlays/e<id>/`, written through `store.py`: one writer at a time, so two made at once
+both land; written whole, so a crash leaves the old file or the new, never half of one; and a damaged file is moved
+aside, never read as empty, with the value held until you've looked. Each is kept with the files it was made on: an
+acknowledgement lapses when one of the engagement's files is replaced, and a term you confirmed applies while its
+file and label are the same. The agents' picks and dates and gpt-sol's equity cells never replace yours. A workbook
+several engagements share has its valuation date confirmed in each, not once for all; an edit to an approved fact is
+an input, so what reads it runs again.
+
 ## The page
 
 A strip at the top of every page shows the seven stages on a track, each with what it found, and the mascot at the
@@ -296,9 +335,14 @@ the Run page.
   terminal growth and franking utilisation, each with its page and image check) and how much was checked; a fact that
   needs you opens in full; every fact and table is folded below.
 - **Rebuild**: the tie to the report and the model inputs sourced and checked; the reconciliation, the assumptions
-  and the Python module folded, each with its result on the fold.
+  and the Python module folded, each with its result on the fold; other cells to pick for last year's equity value;
+  and, where cells don't match Excel, the doctor's findings, with the cells it found safe to hold at Excel's value for
+  you to hold or release.
 - **Result**: the value bridge (low, mid, high), this year's discount rate (last year's until you set it), the
-  methods (and the one you prefer), the inputs held at last year's, the terms added or gone in this year's model
+  methods (and the one you prefer), the inputs held at last year's, the balances read at the valuation date (each
+  moved, kept or standing in, to keep at its date or read at this year's), what the row agents did (each row, how and
+  why, and their notes on this year's model), the checks you've acknowledged with your reasons, the terms added or
+  gone in this year's model
   (each to confirm where it moves the value), the cash-flow lines the overlay doesn't read, the
   client model's scenario next to last year's (and when each model was saved), the cash-flow chart, the review, and
   how the files link up (the map) folded. A review point names the years and the bridge step it's about (checked
@@ -311,9 +355,11 @@ the Run page.
 **All engagements** is where the app opens (and the logo, the top of the engagement list, or the ⋯ menu come back to
 it). It lists every engagement: where it is
 (finished, needs you, running, waiting, no files yet), what's for you, and its equity value, last year per the report
-to this year, the mid. A click opens one; tick two to compare them side by side: the equity value, the inputs and the
-dates, the bridges step by step (the mid, the same steps matched; a dash where one hasn't a step) and this year's cash
-flows. Differences aren't worked out between engagements in different units.
+to this year, the mid; a result being worked out again, or worked out on earlier inputs, shows no value for this
+year, and says why (three files are all of them where the overlay is inside a client model). A click opens one; tick
+two to compare them side by side: the equity value, the inputs and the dates, the bridges step by step (the mid, the
+same steps matched; a dash where one hasn't a step) and this year's cash flows. Differences aren't worked out between
+engagements in different units, and an earlier result is marked as one.
 
 **Export diagnostics (anonymised)**, in the ⋯ menu, describes a run for diagnosis without a word of the client's:
 counts, yes / no, ratios, dates and the app's own words. Each model's shape (its timelines by frequency: monthly,
@@ -353,9 +399,12 @@ Your firm's logo goes in the git-ignored `brand/` folder, and the mascot shows w
 
 ```
 uv run python tests/make_pack.py        # a synthetic pack: fictional names and numbers, both overlay layouts
-uv run python tests/check_workbench.py  # the whole run on it, every model call stubbed; the orchestrator's rules
+uv run python tests/check_workbench.py  # the whole run on it, every model call stubbed; the orchestrator's rules;
+                                        # your decisions kept, lapsing with their files and never lost
 uv run python tests/check_trace.py      # reading a DCF back from its factors (flags, loose conventions); the roll;
-                                        # the growth rate and the utilisation traced up to the equity value
+                                        # the growth rate and the utilisation traced up to the equity value;
+                                        # balances at the valuation date; copies and the row tools on the synthetic
+                                        # pairs in tests/variants.py; the doctor; the store
 uv run python tests/check_xlruntime.py  # Excel functions in the Python runtime
 ```
 
@@ -378,6 +427,12 @@ uv run python tests/check_xlruntime.py  # Excel functions in the Python runtime
   - `structure.py`: rows' kinds, blocks and their copies, a row's lineage, from the workbook's shapes.
   - `lineage.py`: what drives the value: every input under it, by what it does, with its effect.
   - `evidence.py`: what the row tools agreed on, and whether they were right, from a person's picks.
+  - `rowagent.py`: the row agents: each row the gate can't vouch for, by what it means first, then the models, with
+    notes on this year's model kept for the next run.
+  - `doctor.py`: why a cell comes out wrong in Python, and which can be held at the value Excel saved.
+  - `store.py`: your decisions on disk: one writer at a time, written whole, a damaged file moved aside and the value
+    held.
+  - `diagnostics.py`: the anonymised export.
   - `scenarios.py`: the scenario each client model was saved on, this year's next to last year's, and when each was
     saved.
   - `workpaper.py`: the Excel workpaper, built in memory from the engagement's result.

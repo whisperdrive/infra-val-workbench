@@ -271,6 +271,13 @@ Four reviewers went over S1 to S13 as fixed, reproducing on synthetic workbooks.
 fixed: a job for a deleted engagement doesn't run, and nothing is written for one. Folders deleted with errors ignored; charts and fonts from public CDNs; the diagnostics' version pattern too broad;
 low ≤ high not checked after the roll; `time` and `new-terms` holds shown as "a note"; the review prompt's wording.
 
+### To watch on the first real run
+
+- The circular-reference and unknown-function holds (`circular`, `unknown-fn`) are quiet on the synthetic packs; how
+  often they fire on real models isn't known. Only the overlay's formulas are worked out (the client models' cells come
+  in as the values Excel saved), so a loop in a client model (debt sizing, interest on cash) can't trip them; but an
+  overlay with an iterative loop of its own holds the value in every engagement using it until someone acknowledges it.
+
 ### What would make it harder to get wrong
 1. ~~One store for decisions~~ — done (S6, S7): locked, atomic, a damaged file a blocking need; decisions keyed on the
    files they were made on, lapsing when one is replaced.
