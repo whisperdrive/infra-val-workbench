@@ -7,7 +7,11 @@ workings, a separate workbook or sheets inside the client model) and this year's
 takes it from there:
 
 1. **Reads the files.** The report is read from its text layer, with no model calls, and every table region on it is
-   cropped to an image. The workbooks each get a row map, their external links, and their target and valuation date.
+   cropped to an image. The workbooks each get a row map, their external links, and their target and valuation date,
+   and what the saved file says of its own results: formulas saved with no result (a workbook saved without being
+   calculated, not a result of empty text), Excel's errors, and whether its last calculation finished. Every cell is
+   read, however small the size a sheet declares; an encrypted file, a document renamed as a workbook and Strict Open
+   XML are refused, saying what to do.
 2. **Reads the key tables from their images.** A text layer can scramble a table (columns, merged headings) and has
    nothing for one pasted as a picture:
    - the tables most likely to hold the key figures, and the pictures beside them, are read from their images;
@@ -108,7 +112,12 @@ takes it from there:
    name, a formula it can't compile), and which read nothing that changes between the years (the client model, an
    assumption, the dates the roll moves, this year's rate, the inputs you set, the forecast's end). Holding those at
    the value Excel saved is your decision, on the Rebuild page; a held cell whose inputs move on this year's figures
-   holds the value.
+   holds the value. A rebuild that gives an error where Excel saved a figure (a reference deleted, a name that refers
+   to nothing, a function Python lacks) holds, naming the cell the error starts at. A row whose cells read another
+   row holding the report's figures (a report table carrying the summary, a rounding) gives way to the row it reads;
+   two rows as likely, or only some of the report's figures in the overlay, ask for a pick with the candidates, and
+   the other basis is never taken to cover it. A CHOOSE on a typed selector (a scenario's) is followed to the case
+   it picks, in the trace, the inputs and the recompute.
 6. **Rolls forward onto this year's client model.** Rows are found by a set of tools, cheap ones first, the next when
    they disagree or can't settle a row: the address (a model whose structure is unchanged), the label, the row's block
    and its heading (`structure.py`: a downside case inserted above the base is a copy of the base block, and the copy
@@ -232,7 +241,12 @@ takes it from there:
    declared at the date) has only that read moved; a balance labelled as at a named date (a financial close, a
    completion) stays at it, a point to check. Each moved balance is set against last year's model's forecast of it
    for this year's date: 10% off is a point to check, 50% holds (a wrong row, a placeholder, a sign). Where this
-   year's model has no column at the date, last year's figure stands in, and holds. On the cash-flow card you can keep
+   year's model has no column at the date, last year's figure stands in, and holds. A client figure right of last
+   year's timeline (the model's own terminal value, a total) is read from as far right of this year's timeline where
+   that column is headed as last year's was, else last year's stands in and holds. Periods dated by their first day
+   in one model and by their last in the other are matched. A row the value reads that this year's model has as typed
+   figures where last year's worked them out, equal to last year's in place or one period off, holds as a pasted
+   copy. On the cash-flow card you can keep
    any balance at its own date, or read a kept one at this year's.
    Your figure is kept with the input it's for (its label and last year's figure, and the overlay it was set on): if
    a corrected overlay moves the input, it's found again where exactly one input has both, and said so; otherwise
@@ -270,8 +284,13 @@ takes it from there:
    this year's model changed, or a mid no longer the ends' midpoint where it was last year; a method you prefer that
    couldn't be worked out; a circular reference met on the way to this year's value (Python takes the value Excel
    saved there, last year's) or a function Python lacks (#NAME?, which an IFERROR turns into a figure); and a check
-   that couldn't run. A valuation date inside a period, the overlay's own sheets differing in this year's model, and
-   a report figure printed to so few digits that a cell well off it would still tie are points to check.
+   that couldn't run; cells the value reads with no saved figure this year (a model saved uncalculated) or one of
+   Excel's errors where last year's had a figure. A valuation date inside a period, the overlay's own sheets
+   differing in this year's model, a report figure printed to so few digits that a cell well off it would still tie, a
+   workbook whose last calculation didn't finish, last year's model or the overlay saved uncalculated, an input the
+   report states that nothing under the value reads, and an input of the valuation's own that moves with this year's
+   client model (a growth rate that is the client's CPI) are points to check. A terminal value added after the
+   discounting (its present value a term of its own) splits with the discountings.
 
    **A hold can be acknowledged with a reason**: the value then goes through, the check stays listed with the reason,
    and the workpaper's Review sheet records it with those still open. If the figures it found change, it holds again;

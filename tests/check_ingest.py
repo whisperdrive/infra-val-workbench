@@ -6,6 +6,8 @@ the file refused with a reason); never a different figure in silence, never a cr
   references   a number in scientific notation (1E9, 2.5E-3) isn't a cell, nor a function's name (LOG10() however
                like a cell it looks; a figure typed into a formula is read with its exponent
   choose       a CHOOSE whose selector is typed in (a scenario's) reads the case it picks, not the others
+  beyond       a client figure right of the timeline (the model's own terminal value) read from as far right of this
+               year's timeline only where that column is headed as last year's was; another column there holds
   saved state  what the sheet XML says that the values reader can't: formulas saved with no result (a workbook saved
                without being calculated; not a formula whose result is empty text), Excel's own errors, the last
                calculation's settings (one that didn't finish), and every cell however small the size the sheet
@@ -165,6 +167,84 @@ def choose_check() -> None:
     got = valuation.reads(db, cells=[("Inputs", 8, 3)])
     assert "Inputs!C4" in got and "Inputs!D4" not in got and "Inputs!E4" not in got, sorted(got)
     print("choose: ok (a typed selector's CHOOSE read as the case it picks; one worked out by a formula left whole)")
+
+
+def beyond_check() -> None:
+    """A client figure right of last year's timeline (the model's own terminal value, two columns past its last period),
+    read by the overlay: this year it's read as far right of this year's timeline where that column is headed as last
+    year's was, and where this year's model has another column there (a check inserted before it), last year's figure
+    stands in and the value holds, never another column's figure in silence."""
+    import overlay as ov
+    import result
+    import xlcompile
+    from xlsxwriter.utility import xl_col_to_name as col_
+    vd, new, rate = date(2025, 6, 30), date(2026, 6, 30), 0.08
+
+    def run(inserted: bool):
+        out = Path(tempfile.mkdtemp(prefix="beyond_"))
+        paths = {}
+        for which in ("prior", "current"):
+            wbk = xlsxwriter.Workbook(out / f"{which}.xlsx")
+            dt = wbk.add_format({"num_format": "dd-mmm-yy"})
+            cl = wbk.add_worksheet("Client")
+            cl.write(2, 1, "Period ending")
+            cl.write(9, 1, "Cash flow")
+            y0 = 2026 if which == "prior" else 2027
+            for k in range(6):
+                cl.write_datetime(2, 3 + k, date(y0 + k, 6, 30), dt)
+                cl.write_number(9, 3 + k, 100.0 + 10 * k + (5 if which == "current" else 0))
+            tv_col = 10 + (1 if inserted and which == "current" else 0)  # K, or L past a check column in K
+            if inserted and which == "current":
+                cl.write(2, 10, "Check")
+                cl.write_number(9, 10, 1.0)
+            cl.write(2, tv_col, "Terminal value")
+            cl.write_number(9, tv_col, 1000.0 if which == "prior" else 1100.0)
+            if which == "prior":
+                va = wbk.add_worksheet("Val")
+                va.write(3, 1, "Valuation date")
+                va.write_datetime(3, 2, vd, dt)
+                va.write(4, 1, "Discount rate")
+                va.write_number(4, 2, rate)
+                va.write(5, 1, "Period ending")
+                va.write(9, 1, "Cash flow")
+                va.write(12, 1, "Discount factor")
+                va.write(13, 1, "Present value")
+                total = 0.0
+                for k in range(6):
+                    c, e = col_(3 + k), date(2026 + k, 6, 30)
+                    f = 1 / (1 + rate) ** ((e - vd).days / 365)
+                    va.write_formula(f"{c}6", f"=Client!{c}3", dt, (e - date(1899, 12, 30)).days)
+                    va.write_formula(f"{c}10", f"=Client!{c}10", None, 100.0 + 10 * k)
+                    va.write_formula(f"{c}13", f"=1/(1+$C$5)^(({c}6-$C$4)/365)", None, f)
+                    va.write_formula(f"{c}14", f"={c}10*{c}13", None, (100.0 + 10 * k) * f)
+                    total += (100.0 + 10 * k) * f
+                last_f = 1 / (1 + rate) ** ((date(2031, 6, 30) - vd).days / 365)
+                va.write(17, 1, "Equity value")
+                va.write_formula("C18", "=SUM(D14:I14)+Client!$K$10*I13", None, total + 1000.0 * last_f)
+            wbk.close()
+            paths[which] = build_map.main(str(out / f"{which}.xlsx"), str(out / f"db_{which}"))["db"]
+        db = paths["prior"]
+        src, _ = xlcompile.compile_overlay(db, ["Val"])
+        (out / "overlay.py").write_text(src)
+        sess = ov.Session(str(out / "overlay.py"), db, ["Val"], None, paths["current"], None, ["Client"])
+        roll = ov.plan_roll(sess, None, {"sheets": ["Val"]}, True, vd.isoformat(), None, new.isoformat())
+        roll.update(ov.date_cells(db, [{"cell": "Val!C18"}], ["Val"], None))
+        summary = {"wiring": {"overlay": {"db_path": db}, "current": {"db_path": paths["current"]}}, "sheets": ["Val"],
+                   "roll": roll, "held_values": {}, "outputs": [{"cell": "Val!C18", "label": "Equity value"}],
+                   "balance_decisions": {}}
+        figs = ov.deep(result.figures, sess, summary, ["Val!C18"])
+        gate = result._gate_holds(summary, {"texts": {}}, {"low": "Val!C18", "high": "Val!C18", "scale": 1, "sign": 1},
+                                  figs, lambda x: x)
+        return figs, gate
+    figs, gate = run(False)
+    assert not figs["feed"]["beyond_stood"] and "beyond-standin" not in [h["id"] for h in gate], figs["feed"]
+    moved = figs["this_year"]["Val!C18"]
+    figs2, gate2 = run(True)
+    assert [x["cell"] for x in figs2["feed"]["beyond_stood"]] == ["Client!K10"], figs2["feed"]
+    assert ("beyond-standin", "block") in [(h["id"], h["severity"]) for h in gate2], gate2
+    assert abs(figs2["this_year"]["Val!C18"] - moved) > 1.0  # (last year's 1,000 stands in for this year's 1,100)
+    print("beyond: ok (a figure right of the timeline read where this year's column is headed as last year's; another "
+          "column there holds the value, last year's figure standing in, said so)")
 
 
 def saved_state_check() -> None:
@@ -590,6 +670,7 @@ if __name__ == "__main__":
         sys.exit()
     references_check()
     choose_check()
+    beyond_check()
     saved_state_check()
     containers_check()
     pack_check()

@@ -805,7 +805,8 @@ def quiet_check(eid: int) -> None:
     overlay's own sheet in this year's model, a typed equity end, a doctor's hold (a false point teaches a person to
     look past them)."""
     loud = ("cf-midperiod", "declared", "cf-flip", "balance-off", "tie-loose", "own-inputs", "equity-", "doctor-",
-            "method-unapplied", "basis-method", "damaged", "circular", "unknown-fn")
+            "method-unapplied", "basis-method", "damaged", "circular", "unknown-fn", "pasted", "beyond-standin",
+            "unsaved-", "errors-", "calc-incomplete", "rebuild-error-", "assumption-moved")
     got = [n["id"] for n in orc.view(eid)["needs"] if n["id"].startswith(loud)]
     assert not got, got
     print("quiet: ok (the ordinary pack raises none of the checks for what it doesn't have)")

@@ -221,7 +221,8 @@ def _reads(db, m: dict) -> set[str]:
     """The cells a match's cell reads directly ("Sheet!A1"): its formula's references."""
     if db is None:
         return set()
-    row = db.execute("SELECT formula FROM cells WHERE sheet=? AND addr=?", (m["sheet"], m["addr"])).fetchone()
+    k = ov.parse_a1(f"{m['sheet']}!{m['addr']}")  # (by row and column: the cells table's index)
+    row = db.execute("SELECT formula FROM cells WHERE sheet=? AND row=? AND col=?", k).fetchone()
     out = set()
     for x in dcf._FREF.finditer(re.sub(r'"[^"]*"', "", (row[0] or "") if row else "")):
         r = dcf._ref(x[0], m["sheet"])

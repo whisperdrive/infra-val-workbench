@@ -277,6 +277,19 @@ low ≤ high not checked after the roll; `time` and `new-terms` holds shown as "
   often they fire on real models isn't known. Only the overlay's formulas are worked out (the client models' cells come
   in as the values Excel saved), so a loop in a client model (debt sizing, interest on cash) can't trip them; but an
   overlay with an iterative loop of its own holds the value in every engagement using it until someone acknowledges it.
+- The rules added for the shapes above, each with a side that could fire falsely on a real model:
+  - a pasted copy (`pasted`): a row typed this year that genuinely equals last year's in three or more periods (a fixed
+    schedule a client retyped) holds until acknowledged;
+  - an input that moves with the client model (`assumption-moved`): an input linked to the client model on purpose
+    (the growth rate as the client's CPI) is a point every year it moves;
+  - a lookup's table: an exact XLOOKUP, VLOOKUP or INDEX/MATCH whose pick the saved values don't settle keeps every
+    cell of its table as an input held at last year's (the noise this was meant to remove);
+  - the equity cells: a row reading another row holding the report's figures gives way to it; a presentation row
+    that adds something real to the row it reads, yet still rounds to the report's figure, would be passed over;
+  - a figure right of the timeline: read from this year's column where the two columns' headings agree (both blank
+    counts); two blank headings over different things would map in silence;
+  - the row maps built before these: their models have no record of formulas saved with no result, of how they were
+    calculated, or the whole labels: those checks appear only for models read (or rebuilt) after this version.
 
 ### What would make it harder to get wrong
 1. ~~One store for decisions~~ — done (S6, S7): locked, atomic, a damaged file a blocking need; decisions keyed on the
@@ -313,8 +326,8 @@ tables read as saved. Every cell is read, however small the size a sheet declare
 
 **Structure.** Hidden and very hidden sheets, and hidden rows, are found and used (their state isn't shown on the
 page). The overlay as a separate linked workbook, as the adviser's tabs behind a divider in a copy of the client model
-(a divider is recognised once the adviser's names are set; one in a style the names don't cover isn't, though the roles came out
-right without it), as one added sheet, or as sheets with plain names: roles and values right; a valuation date alone no longer files the client's inputs sheet as the overlay's (it froze a
+(a divider is recognised once the adviser's names are set; one in a style the names don't cover isn't, though the
+roles came out right without it), as one added sheet, or as sheets with plain names: roles and values right; a valuation date alone no longer files the client's inputs sheet as the overlay's (it froze a
 client-linked assumption at last year's in that form, so the same overlay gave two values). Sheets renamed and rows
 moved between years are found again. Odd sheet names (spaces, brackets, an apostrophe, leading digits, "<END>") and an
 add-in's sheets read as normal; hidden sheets with no formulas no longer make this year's model look rebuilt. A row the

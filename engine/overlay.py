@@ -75,6 +75,17 @@ def _ro(path) -> sqlite3.Connection:
     return rodb.connect(path, check_same_thread=False)
 
 
+def _same_head(a, b) -> bool:
+    """Two columns' headers say the same: both blank, the same words, or both figures (dates past a timeline)."""
+    t = lambda v: re.sub(r"\s+", " ", v).strip().lower() if isinstance(v, str) else v
+    a, b = t(a), t(b)
+    if a in (None, "") and b in (None, ""):
+        return True
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool) and not isinstance(b, bool):
+        return True
+    return isinstance(a, str) and a == b
+
+
 def _plen(tl: dict) -> int | None:
     """A timeline's period in months (the commonest step between its dates)."""
     ds = sorted(tl.values())
@@ -530,6 +541,11 @@ class Session:
             was = prior.value(s, r, c)
             tl_c = cur.timeline(s2)
             c3 = max(tl_c) + (c - max(tl_p)) if len(tl_c) > 1 else None
+            # the same column only where it's headed as last year's was (both blank, the same words, or dates): a
+            # column inserted there ("Check") isn't the terminal value moved along
+            if c3 is not None and not _same_head(prior.value(s, prior.header_row(s) or 0, c),
+                                                 cur.value(s2, cur.header_row(s2) or 0, c3)):
+                c3 = None
             v3 = cur.value(s2, r2, c3) if c3 is not None else None
             if v3 is not None or not isinstance(was, (int, float)) or isinstance(was, bool) or not was:
                 self.beyond[(s, r, c)] = "past last year's timeline"
