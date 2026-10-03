@@ -736,6 +736,18 @@ def slots_check() -> None:
           "overlay's tabs and the client's sheets named from the suggestion, the checks pass, nothing to acknowledge)")
 
 
+def quiet_check(eid: int) -> None:
+    """The ordinary pack raises none of the checks for what it doesn't have: a mid-period date, a declared distribution
+    the overlay doesn't deduct, a discounting turning the other way, a balance far from its forecast, a loose tie, the
+    overlay's own sheet in this year's model, a typed equity end, a doctor's hold (a false point teaches a person to
+    look past them)."""
+    loud = ("cf-midperiod", "declared", "cf-flip", "balance-off", "tie-loose", "own-inputs", "equity-", "doctor-",
+            "method-unapplied", "basis-method", "damaged")
+    got = [n["id"] for n in orc.view(eid)["needs"] if n["id"].startswith(loud)]
+    assert not got, got
+    print("quiet: ok (the ordinary pack raises none of the checks for what it doesn't have)")
+
+
 def overview_check(eid: int) -> None:
     """The list of every engagement: where each is, and the value the result page shows."""
     e = wb.create("Asset A, nothing yet")
@@ -2012,6 +2024,7 @@ def main() -> None:
     library.start()
     orc.start()
     eid = run_check()
+    quiet_check(eid)
     workpaper_check(eid)
     overview_check(eid)
     diagnostics_check(eid)
@@ -2040,6 +2053,7 @@ def main() -> None:
     dates_check()
     place_check()
     other = run_check(PACK_B, "Asset A, FY26 (overlay inside)")
+    quiet_check(other)
     a, b = (wb.get(x)["result"]["values"]["this_year"]["mid"] for x in (eid, other))
     assert abs(a - b) < 1e-6, f"the same files give different values in the two layouts: {a} vs {b}"
     # a client row's role in the valuation, for the agents, in both layouts: the overlay rows reading it, its path

@@ -248,9 +248,13 @@ def checks(sess, summary: dict, where: dict, figs: dict, fl: dict, unit) -> dict
         if not vd1 or vd1[:10] in ends:
             continue
         before, after = [e for e in ends if e < vd1[:10]], [e for e in ends if e > vd1[:10]]
-        if before and after:
+        d = lambda x: date.fromisoformat(x[:10])
+        if not before and len(after) >= 2:  # this year's model starts after the period's start: its length from the next
+            months = round((d(after[1]) - d(after[0])).days / 30.44)
+            before = [ov.to_date(ov.add_months(ov.serial(d(after[0])), -months)).isoformat()]
+        # (a date within a few days of the period's start is its start: a calendar's end of month, not mid-period)
+        if before and after and (d(vd1) - d(before[-1])).days > 3 and (d(after[0]) - d(vd1)).days > 3:
             e0, e1 = before[-1], after[0]
-            d = lambda x: date.fromisoformat(x[:10])
             frac = (d(vd1) - d(e0)).days / max(1, (d(e1) - d(e0)).days)
             p = c["this"]["periods"][e1]
             holds.append(result.hold(summary, f"cf-midperiod-{c['cell']}", [c["cell"], vd1[:10], e1],
