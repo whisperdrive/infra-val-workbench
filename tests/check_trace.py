@@ -1453,7 +1453,8 @@ def basis_check() -> None:
 def pairing_check() -> None:
     """The report's low and high paired to the overlay's cells: an enterprise value or a sensitivity row holding the
     same figures isn't the equity value; two rows as likely are left for gpt-sol or a person, not the order they're
-    listed in; a low above the high isn't a pair. A range printed high first is read the right way round."""
+    listed in; a low above the high isn't a pair; typed figures aren't either. A range printed high first is read the
+    right way round."""
     import keyfacts
     import result
     m = lambda part, sheet, row, label, value, score=3.0, lm=True, f=True: {
@@ -1469,6 +1470,11 @@ def pairing_check() -> None:
     assert result._pair(eq + twin) is None  # two rows as likely: a pick, not the listing order
     flip = [m("low", "Sum", 9, "Equity value", 2100.0), m("high", "Sum", 9, "Equity value", 1900.0)]
     assert result._pair(flip) is None
+    # the report's figures typed in (pasted, an Excel data table's results), labelled as the equity value: not paired,
+    # as this year's model can't move them; said so (_typed_pair) where the value is worked out from other cells
+    typed = [m("low", "Sum", 9, "Equity value", 1900.0, f=False), m("high", "Sum", 9, "Equity value", 2100.0, f=False)]
+    assert result._pair(typed) is None and result._typed_pair(typed) == ["Sum!C9", "Sum!E9"]
+    assert result._pair(typed + eq[:0] + [m("low", "Calc", 4, "Equity value", 1900.0), m("high", "Calc", 4, "Equity value", 2100.0)])["low"] == "Calc!C4"
     facts = [{"id": 1, "key": "equity_value", "status": "approved", "low_text": "A$2,100m", "high_text": "A$1,900m",
               "value_text": "", "basis": "ex-distribution"}]
     h = keyfacts.conclusion(facts, "")

@@ -163,7 +163,11 @@ reviewer's own session.
   date's column) still deducts last year's 200, not this year's 180: 18% off, no hold. The same overlay written with
   INDEX/MATCH rolls right and is held by `cf-split`, which measures movement: the stale read passes, the right one is
   held.
-- **S3. Equity ends typed in** (re-run). A low and high pasted from a sensitivity run (or data-table cells, which load
+- ~~**S3. Equity ends typed in**~~ — fixed: the pairing takes only cells that work the value out; where the report's
+  figures are found only typed in, the value is held saying so (it's worked out from other cells, the typed ones named);
+  for an engagement paired before (its rebuild doesn't pair again on an update), a typed end holds; an end left at
+  last year's to the cent while this year's model changed holds; the overlay's mid no longer the ends' midpoint where
+  it was last year holds; the equity cells aren't listed as inputs held at last year's. Was (re-run): A low and high pasted from a sensitivity run (or data-table cells, which load
   as constants) tie to the report and pass as reliable; this year's value is last year's to the cent, with only two
   "held at last year's" notes, which also push the real held inputs off the list.
 - **S4. The doctor's holds applied without a person** (code re-read; reviewer reproduced). A top-level OFFSET, or an

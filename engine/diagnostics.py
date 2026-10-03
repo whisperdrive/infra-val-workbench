@@ -49,7 +49,9 @@ def _vocabulary() -> set[str]:
                                                           "rebuild-low", "rebuild-high", "tie-low", "tie-high", "roll-assumed",
                                                           "terms-error", "lines-error", "other-link", "role-check",
                                                           "basis-method", "interest-error", "damaged", "rows-models",
-                                                          "balance-moved", "balance-unmoved", "balance-after", "balance-kept", "balances"}
+                                                          "balance-moved", "balance-unmoved", "balance-after", "balance-kept", "balances",
+                                                          "equity-typed", "equity-typed-low", "equity-typed-high", "equity-unmoved-low",
+                                                          "equity-unmoved-high", "equity-mid"}
     words |= {"waiting", "queued", "running", "done", "attention", "blocked", "failed", "error", "pending", "approved",
               "rejected", "agreed", "escalated", "withdrawn", "open", "ready", "processing", "unread", "verified",
               "flagged", "resolved", "edited", "figure", "confirmed", "confirmed by the reviewer", "corrected", "disputed",

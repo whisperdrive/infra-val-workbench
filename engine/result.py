@@ -112,10 +112,16 @@ def locate(summary: dict, head: dict) -> dict | None:
         tries = [(head["basis"], head["texts"])]
         if head.get("other"):
             tries.append((head["other"]["basis"], head["other"]["texts"]))
+        typed = None  # the report's figures typed in the overlay (pasted): passed over, and said so
         for k, (basis, texts) in enumerate(tries):
             ms = linkmap.match_fact(_fact_for(texts, head.get("units")), nums, labels, set(), limit=200)["matches"]
             got = _pair(ms)
+            if not got and typed is None:
+                t = _typed_pair(ms)
+                typed = {"cells": t, "basis": basis} if t else None
             if got:
+                if typed:
+                    got["typed"] = typed
                 got["basis"] = basis
                 got["cell_basis"], got["cell_basis_why"] = cell_basis(db, got["low"])
                 got["how"] = (got["how"] + (f"; the report's {head['basis'] or 'ex'}-distribution figure isn't in the overlay, "
@@ -165,6 +171,17 @@ NOT_EQUITY = re.compile(r"enterprise|\bev\b|sensitiv|scenario|\bcase\b|upside|do
                         r"\bnet debt\b", re.I)
 
 
+def _typed_pair(ms: list[dict]) -> list[str] | None:
+    """The report's low and high as typed figures on one row labelled as the equity value (pasted, an Excel data
+    table's results): not paired (_pair), but said so where the value is worked out from other cells."""
+    ok = lambda m, part: m["part"] == part and not m["formula"] and m["label_match"] and not NOT_EQUITY.search(m.get("label") or "")
+    for a in (m for m in ms if ok(m, "low")):
+        for b in (m for m in ms if ok(m, "high")):
+            if (a["sheet"], a["row"]) == (b["sheet"], b["row"]):
+                return [f"{a['sheet']}!{a['addr']}", f"{b['sheet']}!{b['addr']}"]
+    return None
+
+
 def _pair(ms: list[dict]) -> dict | None:
     cell = lambda m: f"{m['sheet']}!{m['addr']}"
     lows, highs, mids = ([m for m in ms if m["part"] == p] for p in ("low", "high", "value"))
@@ -173,8 +190,9 @@ def _pair(ms: list[dict]) -> dict | None:
         for b in highs:
             if (a["sheet"], a["row"], a["scale"], a["sign"]) != (b["sheet"], b["row"], b["scale"], b["sign"]):
                 continue
-            if NOT_EQUITY.search(a.get("label") or "") or not (a["label_match"] or (a["formula"] and b["formula"])):
-                continue  # a row that isn't the equity value, or one nothing says is it
+            if NOT_EQUITY.search(a.get("label") or "") or not (a["formula"] and b["formula"]):
+                continue  # a row that isn't the equity value; or typed figures (pasted, an Excel data table's results),
+                # which this year's model can't move: the report's figure typed in ties without working anything out
             if isinstance(a.get("value"), (int, float)) and isinstance(b.get("value"), (int, float)) and \
                     a["value"] * (a["sign"] or 1) > b["value"] * (b["sign"] or 1) + 1e-9:
                 continue  # the low above the high: not this range's cells
@@ -189,7 +207,7 @@ def _pair(ms: list[dict]) -> dict | None:
         mid = next((cell(m) for m in mids if (m["sheet"], m["row"]) == (a["sheet"], a["row"])), None)
         return {"low": cell(a), "high": cell(b), "mid": mid, "scale": a["scale"], "sign": a["sign"], "label": a["label"],
                 "how": f"low and high on one row ({a['label'] or a['sheet']})"}
-    located = lambda xs: sorted((m for m in xs if m["located"] and not NOT_EQUITY.search(m.get("label") or "")),
+    located = lambda xs: sorted((m for m in xs if m["located"] and m["formula"] and not NOT_EQUITY.search(m.get("label") or "")),
                                 key=lambda m: -m["score"])
     lo, hi = located(lows), located(highs)
     ordered = lambda a, b: not (isinstance(a.get("value"), (int, float)) and isinstance(b.get("value"), (int, float))
@@ -1479,7 +1497,10 @@ def held_list(sess, summary: dict, where: dict, figs: dict) -> list[dict]:
     roll, set_ = figs.get("roll") or {}, summary.get("held_values") or {}
     prior_vd = (summary.get("roll") or {}).get("prior_valuation_date")
     out = []
+    own = {where.get(e) for e in ("low", "high", "mid")}
     for it in items:
+        if it["cell"] in own:  # the equity value itself typed in: its own hold (_equity_holds), not an input to set
+            continue
         mine = set_.get(it["cell"]) or {}
         out.append({**it, "suggestion": held.suggest(sess, it, prior_vd, roll.get("valuation_date")),
                     "this_year": mine.get("value"), "by": mine.get("by"), "from": mine.get("from"),
@@ -1599,6 +1620,52 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
     return out
 
 
+def _equity_holds(summary: dict, where: dict, figs: dict, rows: dict | None) -> list[dict]:
+    """Last year's equity cells as this year's value: each worked out, not typed (pasted, or an Excel data table's
+    result: this year's model can't move it); not left exactly at last year's while this year's model changed; and,
+    where the row has the overlay's own mid, the mid still the low and high's midpoint this year where it was last
+    year's (the ends moving with the value). Each holds; a person can acknowledge."""
+    out = []
+    if where.get("typed"):  # the report's figures found only typed in: the value is worked out from other cells
+        t = where["typed"]
+        cells = where["low"] if where["low"] == where.get("high") else f"{where['low']} and {where['high']}"
+        out.append(hold(summary, "equity-typed", [t["cells"], where.get("low"), where.get("high")],
+                        f"The report's {t['basis']}-distribution figures are typed in the overlay ({', '.join(t['cells'])})",
+                        f"typed in (pasted, or an Excel data table's results), so they can't be rolled forward; the value is "
+                        f"worked out from {cells} instead ({where.get('how')}). Check that's last year's value, pick other "
+                        "cells (Rebuild, the equity cells), or acknowledge why it's right"))
+    ends = list(dict.fromkeys((where.get(e), e) for e in ("low", "high") if where.get(e)))
+    last, now = figs.get("rebuilt") or {}, figs.get("this_year") or {}
+    num = lambda v: isinstance(v, float)
+    with rodb.connect(summary["wiring"]["overlay"]["db_path"]) as db:
+        for cell, e in ends:
+            s, r, c = ov.parse_a1(cell)
+            got = db.execute("SELECT formula FROM cells WHERE sheet=? AND row=? AND col=?", (s, r, c)).fetchone()
+            if not got or not got[0]:
+                out.append(hold(summary, f"equity-typed-{e}", [cell, last.get(cell)],
+                                f"Last year's {e} ({cell}) is a typed figure, not worked out",
+                                f"{cell} holds a figure typed in (pasted, or an Excel data table's result): this year's "
+                                f"model can't move it, so this year's {e} would be last year's. Pick the cells that work "
+                                "the value out (Rebuild, the equity cells), or acknowledge why it's right"))
+            elif num(last.get(cell)) and num(now.get(cell)) and (rows or {}).get("changed") and \
+                    abs(now[cell] - last[cell]) <= 1e-12 * max(1.0, abs(last[cell])):
+                out.append(hold(summary, f"equity-unmoved-{e}", [cell, last[cell], (rows or {}).get("changed")],
+                                f"This year's {e} is last year's to the cent while this year's model changed",
+                                f"{cell}: {last[cell]:,.2f} both years, though {rows['changed']} row(s) the value reads were "
+                                "revised: nothing under it reads this year's model. Pick the cells that work the value "
+                                "out, or acknowledge why it's right"))
+    mid, lo, hi = where.get("mid"), where.get("low"), where.get("high")
+    if mid and mid not in (lo, hi) and all(num(x.get(k)) for x in (last, now) for k in (mid, lo, hi)):
+        tol = lambda a, b: abs(a - b) <= 1e-6 * max(1.0, abs(b))
+        if tol(last[mid], (last[lo] + last[hi]) / 2) and not tol(now[mid], (now[lo] + now[hi]) / 2):
+            out.append(hold(summary, "equity-mid", [mid, now[mid], now[lo], now[hi]],
+                            "This year's low and high don't move with the overlay's mid",
+                            f"last year {mid} was the midpoint of {lo} and {hi}; this year it's {now[mid]:,.2f} against a "
+                            f"midpoint of {(now[lo] + now[hi]) / 2:,.2f}: the ends aren't worked out from the model the mid "
+                            "is. Pick the cells that work the value out, or acknowledge why it's right"))
+    return out
+
+
 def _flows_public(fl: dict, unit) -> dict:
     """The cash-flow layer as the page and the workpaper show it: per discounting, its form, and per period the cash
     flow last year and this year (the report's units), without the trace trees."""
@@ -1673,7 +1740,8 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
             f"{type(ex).__name__}: {ex}: the share of the cash flows the overlay values (100% or the interest held) "
             "wasn't compared with the report's")]}
     held_inputs = ov.deep(held_list, sess, summary, where, figs)
-    cfc["holds"] = cfc["holds"] + inter["holds"] + basis_holds + _gate_holds(summary, head, where, figs, unit)
+    cfc["holds"] = cfc["holds"] + inter["holds"] + basis_holds + _gate_holds(summary, head, where, figs, unit) \
+        + (_equity_holds(summary, where, figs, cfc.get("rows")) if figs.get("this_year") else [])
     if figs.get("gaps") is not None:
         figs["gaps"]["holds"] = cfc["holds"]
         if holding(cfc["holds"]):

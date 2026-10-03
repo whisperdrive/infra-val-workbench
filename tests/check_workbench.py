@@ -1007,6 +1007,61 @@ def failures_check(eid: int) -> None:
           "method can't be worked out holds rather than going out ex; each can be acknowledged)")
 
 
+def typed_ends_check(first: int) -> None:
+    """Last year's equity cells as this year's value: a typed figure (pasted, an Excel data table's result) can't be
+    rolled forward, so it holds; an end left exactly at last year's while this year's model changed holds; the overlay's
+    mid no longer the ends' midpoint this year holds. And end to end, the pack with the low and high pasted (the mid
+    working the value out): the typed cells aren't paired, the value is held saying so, and the equity cells aren't
+    listed as inputs held at last year's."""
+    import make_pack
+    import result
+    import xlsxwriter
+    sess, summary = wb.overlay_session(first)
+    where = wb.get(first)["result"]["where"]
+    lo, hi = where["low"], where["high"]
+    holds = lambda w, f, rows: {h["id"]: h for h in result._equity_holds(summary, w, f, rows)}
+    h = holds(where, {"rebuilt": {lo: 100.0, hi: 120.0}, "this_year": {lo: 100.0, hi: 130.0}}, {"changed": 3})
+    assert set(h) == {"equity-unmoved-low"} and h["equity-unmoved-low"]["severity"] == "block", h
+    assert not holds(where, {"rebuilt": {lo: 100.0, hi: 120.0}, "this_year": {lo: 100.0, hi: 130.0}}, {"changed": 0})
+    w2 = {**where, "mid": "Summary!Z99"}
+    h = holds(w2, {"rebuilt": {lo: 100.0, hi: 120.0, "Summary!Z99": 110.0},
+                   "this_year": {lo: 101.0, hi: 121.0, "Summary!Z99": 125.0}}, {"changed": 3})
+    assert set(h) == {"equity-mid"}, h
+    # the pack with the ex-distribution low and high pasted as figures, its mid working the value out
+    out = Path(tempfile.mkdtemp(prefix="pasted_"))
+    orig = xlsxwriter.worksheet.Worksheet.write_formula
+
+    def pasted(self, row, col=None, *args, **kw):
+        if isinstance(row, str) and self.name == "Summary" and row in ("C9", "E9", "D9"):
+            formula, fmt, value = (list((col,) + args) + [None, None, None])[:3]
+            return self.write_number(row, value, fmt) if row != "D9" else orig(self, row, "=D7+D8", fmt, value)
+        return orig(self, row, col, *args, **kw)
+    keep = make_pack.OUT, make_pack.ROOT
+    xlsxwriter.worksheet.Worksheet.write_formula, make_pack.OUT, make_pack.ROOT = pasted, out, out
+    try:
+        make_pack.main()
+    finally:
+        xlsxwriter.worksheet.Worksheet.write_formula, (make_pack.OUT, make_pack.ROOT) = orig, keep
+    e = wb.create("Asset A, FY26 (ends pasted)")
+    eid = e["id"]
+    confirm_insurance(eid)
+    for name in PACK_A:
+        tmp = Path(tempfile.mkdtemp()) / name
+        shutil.copy(out / name, tmp)
+        wb.add_upload(eid, tmp, name, library.sha256_file(tmp))
+    v = wait(eid, lambda v: status(v)["result"] in (*orc.SETTLED, "blocked", "failed") and not v["busy"], "the result", 600)
+    res = wb.get(eid)["result"] or {}
+    w = res.get("where") or {}
+    assert w.get("low") not in ("Summary!C9", "Summary!E9") and w.get("high") not in ("Summary!C9", "Summary!E9"), w
+    need = next((n for n in v["needs"] if n["id"] == "equity-typed"), None)
+    assert need and need["severity"] == "block" and "Summary!C9" in need["title"] and need["go"]["anchor"] == "equityPick", v["needs"]
+    assert res["values"]["this_year"] is None, res["values"]
+    assert not [x for x in res.get("held") or [] if x["cell"] in ("Summary!C9", "Summary!E9", "Summary!D9")], res.get("held")
+    wb.delete(eid)
+    print("typed ends: ok (a typed end, an end left at last year's while the model changed, and a mid no longer the "
+          "ends' midpoint each hold; the pack with its low and high pasted: not paired, held saying so, not held inputs)")
+
+
 def damaged_check(eid: int) -> None:
     """A file of a person's decisions damaged (a crash mid-save before saves were made whole, an edit by hand): never
     read as empty in silence. It's moved aside and kept, and the value holds until the person has made the decisions
@@ -1804,6 +1859,7 @@ def main() -> None:
     rate_check(eid)
     methods_check(eid)
     failures_check(eid)
+    typed_ends_check(eid)
     damaged_check(eid)
     rows_context_check(eid)
     gating_check(eid)

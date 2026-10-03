@@ -855,13 +855,14 @@ def _result_job(eid: int, key: str):
     g = res["figures"].get("gaps")
     dc = (g or {}).get("date_cells") or {}
     for h in (g or {}).get("holds") or []:  # this year's cash flows against last year's (cashflows.py)
-        anchor = ("bridgeCard" if h["id"].startswith(("cf-split", "cf-sign")) or h["id"] == "damaged"
+        anchor = ("equityPick" if h["id"].startswith("equity-")
+                  else "bridgeCard" if h["id"].startswith(("cf-split", "cf-sign")) or h["id"] == "damaged"
                   else "methodsCard" if h["id"] == "basis-method"
                   else "compareCard" if h["id"] in ("basis", "interest", "interest-two", "interest-error")
                   else "tieCard" if h["id"].startswith(("rebuild-", "tie-"))
                   else "datesCard" if h["id"] == "roll-assumed" else "termsCard" if h["id"] == "terms-error"
                   else "linesCard" if h["id"] == "lines-error" else "flowsCard")
-        step = "rebuild" if anchor == "tieCard" else "workbench" if anchor == "datesCard" else "result"
+        step = "rebuild" if anchor in ("tieCard", "equityPick") else "workbench" if anchor == "datesCard" else "result"
         needs.append(_need_of(h, {"step": step, "anchor": anchor}))
     for i, x in enumerate((g or {}).get("pick_notes") or []):  # picks in a model that changed since they were made
         if x.get("now"):
