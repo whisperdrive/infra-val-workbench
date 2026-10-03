@@ -102,24 +102,37 @@ def kind_of(vals: list, n_formula: int, n_const: int, pattern: str | None) -> st
     return "inputs"
 
 
+SCAN = 40  # columns read to the right of the labels on a sheet with no timeline
+
+
 def rows(db_path: str) -> dict:
-    """{(sheet, row): {"label", "section", "kind", "shape", "n_formula", "n_const", "units"}} for every line item."""
+    """{(sheet, row): {"label", "section", "kind", "shape", "n_formula", "n_const", "units"}} for every line item.
+    Each sheet's cells are read along its timeline only (or the first SCAN columns right of its labels), not the
+    whole workbook at once."""
     out = {}
     with _ro(db_path) as db:
         layouts = {s: json.loads(l or "{}") for s, l in db.execute("SELECT sheet, layout FROM sheets")}
-        vals = defaultdict(dict)
-        for s, r, c, v in db.execute("SELECT sheet, row, col, value FROM cells"):
-            vals[(s, r)][c] = v
+        items = defaultdict(list)
         for s, r, section, label, units, nf, nc, pats in db.execute(
                 "SELECT sheet, row, section, label, units, n_formula, n_const, patterns FROM rows ORDER BY sheet, row"):
+            items[s].append((r, section, label, units, nf, nc, pats))
+        for s, its in items.items():
             lay = layouts.get(s) or {}
-            row_vals = vals.get((s, r), {})
             a, b = lay.get("tl_first"), lay.get("tl_last")
-            ordered = [row_vals[c] for c in sorted(row_vals) if (a is None or b is None or a <= c <= b)
-                       and c != lay.get("label_col") and c != lay.get("units_col")]
-            out[(s, r)] = {"label": label or "", "section": section or "", "units": units or "",
-                           "n_formula": nf or 0, "n_const": nc or 0, "shape": shape(pats),
-                           "kind": kind_of(ordered, nf or 0, nc or 0, pats)}
+            if a is None or b is None:
+                a = (lay.get("label_col") or 1) + 1
+                b = a + SCAN
+            skip = {lay.get("label_col"), lay.get("units_col")}
+            vals = defaultdict(dict)
+            for r, c, v in db.execute("SELECT row, col, value FROM cells WHERE sheet=? AND col BETWEEN ? AND ?", (s, a, b)):
+                if c not in skip:
+                    vals[r][c] = v
+            for r, section, label, units, nf, nc, pats in its:
+                row_vals = vals.get(r, {})
+                ordered = [row_vals[c] for c in sorted(row_vals)]
+                out[(s, r)] = {"label": label or "", "section": section or "", "units": units or "",
+                               "n_formula": nf or 0, "n_const": nc or 0, "shape": shape(pats),
+                               "kind": kind_of(ordered, nf or 0, nc or 0, pats)}
     return out
 
 
@@ -195,6 +208,76 @@ def which_copy(prior_bl: list[dict], cur_bl: list[dict], cur_copies: list[dict],
                                         f"('{mine['heading'] if mine else ''}')", "ambiguous": []}
     return {"pick": None, "why": "copies of the block with headings that don't say which is last year's",
             "ambiguous": [f"{b['sheet']}!r{b['first']}:r{b['last']} '{b['heading']}'" for _, k, b in scored]}
+
+
+VERSION = 1  # the structure's rules: tables written by older rules are worked out again (in memory)
+_CACHE: dict = {}
+
+
+def build(db_path: str) -> dict:
+    """The structure worked out and written into the model.db (struct_rows, struct_blocks, struct_copies,
+    struct_meta), at the end of the workbook's build, while nothing else reads it. -> counts."""
+    info = rows(db_path)
+    bl = blocks(info)
+    cp = copies(bl)
+    with sqlite3.connect(db_path) as db:
+        db.executescript("""
+            DROP TABLE IF EXISTS struct_rows; DROP TABLE IF EXISTS struct_blocks; DROP TABLE IF EXISTS struct_copies;
+            DROP TABLE IF EXISTS struct_meta;
+            CREATE TABLE struct_rows(sheet TEXT, row INT, kind TEXT, shape TEXT, block INT);
+            CREATE TABLE struct_blocks(id INT, sheet TEXT, heading TEXT, first INT, last INT, rows TEXT, signature TEXT,
+                                       labels TEXT);
+            CREATE TABLE struct_copies(a TEXT, b TEXT, a_heading TEXT, b_heading TEXT, similar REAL, n INT);
+            CREATE TABLE struct_meta(key TEXT, value TEXT);
+        """)
+        where = {(b["sheet"], r): i for i, b in enumerate(bl) for r in b["rows"]}
+        db.executemany("INSERT INTO struct_rows VALUES (?,?,?,?,?)",
+                       [(s, r, x["kind"], x["shape"], where.get((s, r))) for (s, r), x in info.items()])
+        db.executemany("INSERT INTO struct_blocks VALUES (?,?,?,?,?,?,?,?)",
+                       [(i, b["sheet"], b["heading"], b["first"], b["last"], json.dumps(b["rows"]),
+                         json.dumps(b["signature"]), json.dumps(b["labels"])) for i, b in enumerate(bl)])
+        db.executemany("INSERT INTO struct_copies VALUES (?,?,?,?,?,?)",
+                       [(c["a"], c["b"], c["a_heading"], c["b_heading"], c["similar"], c["rows"]) for c in cp])
+        db.execute("INSERT INTO struct_meta VALUES ('version', ?)", (str(VERSION),))
+    return {"rows": len(info), "blocks": len(bl), "copies": len(cp)}
+
+
+def load(db_path: str) -> dict:
+    """{"info", "blocks", "copies"} for a model.db: from its tables where the build wrote them by these rules, else
+    worked out in memory (an older database isn't written to while others read it). Cached by path and time."""
+    import os
+    key = (db_path, os.path.getmtime(db_path))
+    if key in _CACHE:
+        return _CACHE[key]
+    got = None
+    try:
+        with _ro(db_path) as db:
+            have = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "struct_meta" in have and (db.execute("SELECT value FROM struct_meta WHERE key='version'").fetchone()
+                                          or [None])[0] == str(VERSION):
+                labels = {(s, r): (sec or "", lab or "", u or "", nf or 0, nc or 0) for s, r, sec, lab, u, nf, nc in
+                          db.execute("SELECT sheet, row, section, label, units, n_formula, n_const FROM rows")}
+                info = {}
+                for s, r, kind, sh, _b in db.execute("SELECT sheet, row, kind, shape, block FROM struct_rows"):
+                    sec, lab, u, nf, nc = labels.get((s, r), ("", "", "", 0, 0))
+                    info[(s, r)] = {"label": lab, "section": sec, "units": u, "n_formula": nf, "n_const": nc,
+                                    "shape": sh, "kind": kind}
+                bl = [{"sheet": s, "heading": h, "first": f, "last": l, "rows": json.loads(rs), "signature": json.loads(sg),
+                       "labels": json.loads(lb)} for _i, s, h, f, l, rs, sg, lb in
+                      db.execute("SELECT * FROM struct_blocks ORDER BY id")]
+                cp = [{"a": a, "b": b, "a_heading": ah, "b_heading": bh, "similar": sim, "rows": n}
+                      for a, b, ah, bh, sim, n in db.execute("SELECT * FROM struct_copies")]
+                got = {"info": info, "blocks": bl, "copies": cp}
+    except sqlite3.Error:
+        got = None
+    if got is None:
+        info = rows(db_path)
+        bl = blocks(info)
+        got = {"info": info, "blocks": bl, "copies": copies(bl)}
+    if len(_CACHE) > 32:
+        _CACHE.clear()
+    _CACHE[key] = got
+    return got
 
 
 def edges(db_path: str) -> tuple[dict, dict]:

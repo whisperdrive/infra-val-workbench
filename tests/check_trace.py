@@ -1313,7 +1313,7 @@ def structure_check() -> None:
     its heading, where last year's model had one block and this year's inserts a downside case above it; a row's
     lineage down to the value it feeds."""
     import structure
-    def model(path, downside):
+    def model(path, downside, revised=1.0):
         wb = xlsxwriter.Workbook(path)
         dt = wb.add_format({"num_format": "dd-mmm-yy"})
         ws = wb.add_worksheet("CF")
@@ -1322,7 +1322,7 @@ def structure_check() -> None:
             ws.write_datetime(1, 3 + k, date(2026 + k, 6, 30), dt)
         r = 3
         rows = {}
-        for case, bump in ((("Downside case", 0.9),) if downside else ()) + (("Base case", 1.0),):
+        for case, bump in ((("Downside case", 0.9),) if downside else ()) + (("Base case", revised),):
             ws.write(r, 0, case)
             r += 1
             top = r
@@ -1371,9 +1371,23 @@ def structure_check() -> None:
     eq = ("CF", f1 + 6)
     seen = structure.closure(("CF", rows1["Base case"] + 1), structure.edges(this)[1])
     assert eq in seen and ("CF", rows1["Downside case"] + 1) not in seen and L["downstream"] >= 1, (seen, L)
+    # the row finder: this year's base case revised (no figure the same as last year's), the downside case inserted
+    # above it: the label's first occurrence and its place are the downside's; the copy headed as last year's is taken
+    import overlay as ov
+    import rowfind
+    model(out / "revised.xlsx", True, revised=1.05)
+    rev = build_map.main(str(out / "revised.xlsx"), str(out / "db_revised"))["db"]
+    lw, tw = ov.Workbook(last), ov.Workbook(rev)
+    f = rowfind.RowFinder(ov.RowMap(lw, tw), lw, tw)
+    for lab, r0 in (("Distributions", rows0["Base case"] + 1), ("Revenue", rows0["Base case"] - 2)):
+        ex = f.explain("CF", r0)
+        want = ("CF", (rows1["Base case"] + 1) - (rows0["Base case"] + 1 - r0))
+        assert ex["found"] == want and f.confident("CF", r0) and "place" in ex["agreed"] and \
+            any(n == "block" for n, _ in ex["evidence"]), (lab, ex["found"], want, ex["evidence"])
     print("structure: ok (rows' kinds: dates, factors, a share, an index, flags, a subtotal; a downside case inserted "
           "above the base found as a copy of it; last year's row chosen in the base case by its heading, where its "
-          "label's first occurrence is the downside's; the base case's distributions reach the value, the downside's don't)")
+          "label's first occurrence is the downside's; the base case's distributions reach the value, the downside's don't; "
+          "the row finder takes the base case's rows, revised, where the label alone took the downside's)")
 
 
 if __name__ == "__main__":

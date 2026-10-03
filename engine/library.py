@@ -173,6 +173,12 @@ def _process(fid: int) -> None:
         _update(fid, step="Reading external links", pct=0.81)
         import extlinks  # now, while nothing else reads this model.db: later they'd be written under readers' feet
         extlinks.build(f["source_path"], f["db_path"])
+        _update(fid, step="Reading its structure", pct=0.815)
+        try:  # rows' kinds, blocks and their copies (structure.py), in the same window; worked out later if not
+            import structure
+            structure.build(f["db_path"])
+        except Exception:
+            traceback.print_exc()
 
         model = f.get("model") or SUMMARY_MODEL  # the model selected on the page that uploaded it
         _update(fid, step=f"Identifying target and valuation date ({model})", pct=0.82)

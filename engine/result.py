@@ -47,7 +47,7 @@ FLOW_WORDS = re.compile(r"equity|injection|contribution|distribution|dividend|ca
 NOT_A_FLOW = re.compile(r"cost of|return on|\birr\b|\brates?\b|ratio|%|gearing|\bbeta\b|premium|multiple|yield|"
                         r"margin|\bflags?\b|factor", re.I)
 PV_WORDS = re.compile(r"\bn?pv\b|present value|discounted", re.I)
-VERSION = 2  # the result's rules: a result worked out by older rules is worked out again (the stage's inputs)
+VERSION = 3  # the result's rules: a result worked out by older rules is worked out again (the stage's inputs)
 
 
 def fingerprint(obj) -> str:

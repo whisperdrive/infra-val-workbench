@@ -38,6 +38,10 @@ EXACT = 1e-9
 SAME_SHEET = 0.35     # a sheet of the same name is the same sheet only if it shares this much of its labels
 RENAMED_SHEET = 0.5   # a sheet of another name is a renamed one if it shares this much
 RENAMED_TIE = 0.05    # ... and the next as like it within this: neither is taken (which one is a person's to say)
+# the kinds of evidence: who a row is (its label, its words), where it is (a banner reading it, its block, the same
+# place), what it does (what it reads and what reads it, a trace through them), its numbers (last year's history)
+FAMILY = {"label": "identity", "words": "identity", "banner": "place", "block": "place", "neighbours": "role",
+          "trace": "role", "lineage": "role", "history": "numbers"}
 CONFIDENT = 0.5      # a row found with less than this needs a person's look before its figures are this year's
 CHECK_GAP = 0.15     # a row carries last year's numbers when its median difference from them is within this
 CHECK_PERIODS = 3    # ... over at least this many periods side by side
@@ -47,7 +51,7 @@ LAYOUT = 0.9         # an unlabelled row found at its own row number, on a sheet
 TRACE_DEPTH = 6      # rows apart, at most, an anchor and the row the trace is for
 TRACE_ANCHORS = 6    # the nearest anchors each way
 TRACE_SCAN = 300     # rows looked at for anchors each way, at most
-VERSION = 4          # bump when finding changes: the agents' picks made under another version are dropped and redone
+VERSION = 5          # bump when finding changes: the agents' picks made under another version are dropped and redone
                      # (4: the trace)
                      # (3: a pasted copy of last year's figures is no candidate)
                      # (2: unlabelled rows followed by the layout, blank rows settled by code)
@@ -515,7 +519,7 @@ class RowFinder:
         return new, gone
 
     WEIGHTS = {"label": 0.3, "history": 0.35, "words": 0.2, "neighbours": 0.15, "banner": 0.25, "trace": 0.5,
-               "shape": 0.0}
+               "shape": 0.0, "block": 0.3}
 
     def explain(self, s: str, r: int) -> dict:
         """{found: (sheet, row) or None, how, evidence: [(strategy, text)], confidence, alternatives}."""
@@ -610,12 +614,73 @@ class RowFinder:
             res["confidence"] = min(res["confidence"], round(CONFIDENT - 0.01, 2))
             res["in_place"] = False
             res["evidence"].append(("trace", f"but the trace leads to {led[1][0]}!r{led[1][1]}"))
+        if res["found"]:  # copies of its block: which copy, by its heading (the trace may lead into the other copy)
+            self._copies(s, r, res, found)
+        if res["found"]:  # the kinds of evidence that agree on it: who it is, where it is, what it does, its numbers
+            ev = found.get(res["found"]) or {}
+            res["agreed"] = sorted({FAMILY[n] for n in ev if n in FAMILY} | ({"place"} if res["in_place"] else set()))
         if not (res["found"] and (res["confidence"] >= CONFIDENT or res["in_place"])) and self.blank(s, r):
             res.update(found=None, how="nothing to find", confidence=1.0, in_place=False, stand_in=True, blank=True,
                        by="code", evidence=[("code", "last year's row has no label, no numbers and no formulas: nothing "
                                                      "to find, so its blanks stand in")])
         self._cache[key] = res
         return res
+
+    def _structure(self, wb):
+        import structure
+        return structure.load(wb.path)
+
+    def _copies(self, s: str, r: int, res: dict, found: dict) -> None:
+        """Last year's label in more than one copy of a block this year (a downside case inserted above the base, a
+        100% and a share): the label alone can't say which copy is meant. The copy whose heading is last year's
+        block's is taken (and the row found there counts as placed: its block agrees); where the headings don't say,
+        the row found stands only if its lineage agrees (the rows it reads or is read by), else it's left in doubt."""
+        import structure
+        k = res["found"]
+        lab = _norm(self.prior.labels().get((s, r), ""))
+        if not lab:
+            return
+        try:
+            cur, pri = self._structure(self.current), self._structure(self.prior)
+        except Exception:
+            return
+        if not cur["copies"]:
+            return
+        name = lambda b: f"{b['sheet']}!r{b['first']}:r{b['last']}"
+        same = [(x, b) for x in self._index()["by_label"].get(lab, []) if (b := structure.block_of(cur["blocks"], *x))]
+        pairs = {frozenset((c["a"], c["b"])) for c in cur["copies"]}
+        paired = [(x, b) for x, b in same
+                  if any(frozenset((name(b), name(b2))) in pairs for _x2, b2 in same if name(b2) != name(b))]
+        if len(paired) < 2:
+            return
+        cands = [x for x, _ in paired]
+        w = structure.which_copy(pri["blocks"], cur["blocks"], cur["copies"], (s, r), cands)
+        ev = found.get(k) or {}
+        if w["pick"] == k:
+            ev["block"] = (1.0, w["why"])
+            res["evidence"] = [e for e in res["evidence"] if not (e[0] == "trace" and e[1].startswith("but the trace leads to")
+                                                                   and any(e[1].endswith(f"{x[0]}!r{x[1]}") for x in cands))]
+            res["evidence"].append(("block", w["why"] + (": the trace led into the other copy" if len(res["evidence"]) else "")))
+            res["confidence"] = round(max(res["confidence"], CONFIDENT), 2)  # its place agrees with what found it
+            return
+        if w["pick"]:
+            to = w["pick"]
+            found.setdefault(to, {})["block"] = (1.0, w["why"])
+            found[to].setdefault("label", (1.0, "the same label, in the copy headed as last year's block"))
+            res.update(found=to, how="block", confidence=round(max(res["confidence"], CONFIDENT + 0.1), 2), in_place=False,
+                       evidence=[("block", w["why"]), ("label", "the same label, in that copy")],
+                       alternatives=[{"row": f"{k[0]}!r{k[1]}", "label": self.current.labels().get(k, ""), "score": 0.0,
+                                      "evidence": ["found first, in another copy of the block"]}] + res["alternatives"])
+            return
+        if k not in cands:
+            return
+        if any(n in ev and ev[n][0] >= 0.5 for n in ("neighbours", "trace")):
+            res["evidence"].append(("block", "in a block with copies; its lineage agrees with this one"))
+            return
+        res["confidence"] = min(res["confidence"], round(CONFIDENT - 0.01, 2))
+        res["in_place"] = False
+        res["evidence"].append(("block", "the label is in copies of this block (" + "; ".join(w["ambiguous"][:3])
+                                         + "): which is last year's isn't settled by the label"))
 
     def blank(self, s: str, r: int) -> bool:
         """Last year's row has nothing to find: no label, no number other than 0, no formulas."""
