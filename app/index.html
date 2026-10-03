@@ -1536,7 +1536,8 @@ function assumptionsCard(R) {
     return `<div><h3 style="font-size:14px;margin:0 0 6px">${end === "low" ? "The low" : "The high"} <span class="mono small muted">${esc(R.where[end])}</span></h3><dl class="kv">
       <dt>Discount rate</dt><dd>${vPct(A.rate)} <span class="small muted">${esc(A.rate_source || "")}</span>${A.rate_sighted ? "" : ` <span class="pill warn">not sourced</span>`}</dd>
       <dt>Valuation date</dt><dd>${esc(A.valuation_date)} <span class="small muted">${esc(A.valuation_date_source || "")}${A.valuation_date_sourced === false ? " (found by its label: the factors don't read it)" : ""}</span></dd>
-      <dt>Discounting</dt><dd>${A.loose ? `<span class="muted">${esc(A.loose)}</span>` : `${esc(TIMING[A.timing] || A.timing)}, ${esc(DAYCOUNT[A.day_count] || A.day_count)}`}</dd>
+      <dt>Discounting</dt><dd>${A.form ? `<b>${esc(A.form.function)}</b> · ` : ""}${A.loose ? `<span class="muted">${esc(A.loose)}</span>` : `${esc(TIMING[A.timing] || A.timing)}, ${esc(DAYCOUNT[A.day_count] || A.day_count)}`}${A.period_rate != null ? ` <span class="small muted">(${A.period_months}-monthly periods at ${vPct(A.period_rate)} a period: ${vPct(A.rate)} a year)</span>` : ""}
+        ${A.form ? `<div class="small">${A.form.recomputed ? `<span class="pill ok">${esc(A.form.rolled)}</span>` : `<span class="pill warn" title="The app can't work out its factors on another date: the overlay's own formulas roll it, and the cash-flow checks look at what they do">${esc(A.form.rolled)}</span>`}</div>` : ""}</dd>
       <dt>Cut-off</dt><dd>${esc(A.terminal_date || "none")}</dd>
       <dt>Forecast</dt><dd>${A.periods} periods, ${esc(A.first_period)} to ${esc(A.last_period)}</dd>
       <dt>Cash flows (undiscounted)</dt><dd>${vN(A.undiscounted)}${A.parts?.length ? ` <span class="small muted">(${esc(A.parts.join(" + "))})</span>` : ""}</dd>

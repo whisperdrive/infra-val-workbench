@@ -25,6 +25,7 @@ import re
 from collections import Counter
 from datetime import date
 
+import cashflows
 import dcf
 import dcftrace
 import forward
@@ -248,23 +249,28 @@ def time_check(sess, summary: dict, cells: list[str]) -> dict | None:
     row_of = lambda rng: (lambda x: (x[0], x[1]))(dcf._row_range(db, rng)) if rng else None
     # the discountings under the figures, and another output's of the rows their formulas read (a sum of the present
     # values the figure adds up with a SUMIF): not a discounting of its own elsewhere (a value bridge's)
-    cores = {(c["cell"], c["call"]): c for _, cs in traced for c in cs}
+    # every discounting under the figures, those whose convention the app doesn't recompute too: their factors are
+    # read as the overlay works them out on each feed, at the rate their formulas read (annualised)
+    cores = {(c["cell"], c["call"]): c for t, _ in traced for c in dcftrace.cores(t)}
     for c in ov._cores(db, summary.get("outputs") or []):
         if c.get("inputs") and row_of(c.get("pv_row") or c.get("factor_row")) in read:
             cores.setdefault((c["cell"], c["call"]), c)
     plan = []
     for c in cores.values():
-        i = c.get("inputs")
-        if not i or c.get("kind") in ("xnpv", "npv") or not (c.get("pv_row") or c.get("factor_row")):
+        i, loose = c.get("inputs"), c.get("loose") or {}
+        if c.get("kind") in ("xnpv", "npv") or not (c.get("pv_row") or c.get("factor_row")) or not (i or loose):
             continue
         try:
-            rate = dcf.resolve(db, i["rate"])[0]
+            rate = dcf.resolve(db, i["rate"])[0] if i else loose.get("rate_value")
+            cfs = i["cashflow"] if i else [c["cashflow"]] if c.get("cashflow") else []
+            if not cfs:
+                continue
             if c.get("pv_row"):
                 terms = [[dcf._row_range(db, c["pv_row"])]]
             else:
                 rows = [dcf._row_range(db, c["factor_row"])] + [dcf._row_range(db, m) for m in c.get("mask") or []]
-                terms = [[dcf._row_range(db, cf)] + rows for cf in i["cashflow"]]
-            flows = [dcf._row_range(db, cf) for cf in i["cashflow"]]
+                terms = [[dcf._row_range(db, cf)] + rows for cf in cfs]
+            flows = [dcf._row_range(db, cf) for cf in cfs]
         except (ValueError, KeyError):
             continue
         if isinstance(rate, (int, float)) and not isinstance(rate, bool):
@@ -327,7 +333,7 @@ def time_check(sess, summary: dict, cells: list[str]) -> dict | None:
         implied = ratio ** (1 / t) - 1
         out.append({"cell": c["cell"], "label": c.get("cashflow_label") or None, "periods": len(pairs),
                     "rate": rate, "ratio": ratio, "implied": implied, "off": implied - rate,
-                    "ok": abs(implied - rate) <= TIME_CHECK})
+                    "ok": abs(implied - rate) <= TIME_CHECK, "loose": not c.get("inputs")})
     return {"t": t, "discountings": out, "measured": len(out), "ok": all(x["ok"] for x in out) if out else None,
             "hold": any(abs(x["off"]) > TIME_HOLD for x in out),
             "why": None if out else "no discounting under the figures has a present value after the new date to measure"}
@@ -782,6 +788,9 @@ def this_year_rate(summary: dict, asm: dict, facts: list[dict]) -> dict | None:
         x = ends.get(e) or {}
         if not x.get("sourced"):
             why.append(f"the {e} end's discount rate isn't sourced to a cell")
+            continue
+        if x.get("ok") is False:  # last year's rate there doesn't check out against the report: not the cell to set
+            why.append(f"the {e} end's discount rate ({x['cell']}) doesn't check out against the report's")
             continue
         was[e] = x["value"]
         for c in x.get("cells") or [x["cell"]]:
@@ -1310,6 +1319,7 @@ def assumptions(summary: dict, where: dict) -> dict:
             tv = [p for p in (c.get("parts") or []) if TV_WORDS.search(p.get("label") or "")]
             m = c.get("method") or {}
             rows.append({"cell": c["cell"], "kind": c.get("kind"), "label": c.get("cashflow_label"), **ov._brief(r),
+                         "form": cashflows.form(c),
                          "rate_source": c["inputs"].get("rate") if isinstance(c["inputs"].get("rate"), str) else
                          m.get("rate_note") or "a constant",
                          "rate_sighted": m.get("rate_source"), "rate_note": m.get("rate_note"),
@@ -1325,6 +1335,7 @@ def assumptions(summary: dict, where: dict) -> dict:
             # a convention the app doesn't recompute: its rate and date as its formulas read them, nothing recomputed
             rate = dcf._num(dcf._cell(db, *dcf._ref(L["rate"], "")[:3])) if L.get("rate") else L.get("rate_value")
             rows.append({"cell": c["cell"], "kind": c.get("kind"), "label": c.get("cashflow_label"), "rate": rate,
+                         "form": cashflows.form(c), "period_months": L.get("period_months"), "period_rate": L.get("period_rate"),
                          "pv": c.get("pv"), "total": c.get("pv"), "anchor": None, "valuation_date": L.get("valuation_date_value"),
                          "timing": None, "day_count": None, "terminal_date": None, "bridge": [], "periods": c.get("periods"),
                          "first_period": c.get("first_period"), "last_period": c.get("last_period"),

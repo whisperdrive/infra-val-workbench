@@ -29,7 +29,7 @@ SIGN_MIN = 0.005      # the cash flows' change, as a share of last year's value,
 MIN_PERIODS = 2       # periods both years have after the new date, at least, to call the cash flows the same
 # the checks' ids (the diagnostics may carry them: they're the app's words)
 IDS = ("cf-stale", "cf-same", "cf-exact", "cf-split-low", "cf-split-high", "cf-sign-low", "cf-sign-high", "cf-tv-nil",
-       "cf-short", "cf-horizon", "cf-standin", "cf-error")
+       "cf-short", "cf-horizon", "cf-standin", "cf-error", "cf-uncut", "cf-untimed", "cf-xnpv", "cf-ondate")
 KINDS = ("sumproduct", "pv row", "xnpv", "npv", "unknown")
 
 
@@ -56,6 +56,38 @@ def _run(pdb, inputs: dict, vd=None) -> dict:
     if vd:
         kw["valuation_date"] = vd
     return dcf.compute(pdb, **kw, fix=False)
+
+
+def _raw(sess, summary: dict, db, c: dict, feed: str) -> dict:
+    """A discounting the app doesn't recompute (XNPV, NPV, factors of its own), on this year's feed as the overlay
+    works it out: {period end ISO: {"cf", "factor"}} (the factor None where it can't be read: an XNPV's or an NPV's
+    is its function's), and an XNPV's first date."""
+    import result
+    look = {"cashflow": [c["cashflow"]], "mask": c.get("mask"), "dates": c.get("dates")}
+    extra = c.get("factor_row") or c.get("pv_row")
+    need = ov._dcf_cells(db, {**look, "cashflow": [c["cashflow"]] + ([extra] if extra else [])})
+    pdb = result._patched(sess, summary, db, feed, need)
+    fl, ends = ov._flows(pdb, look)
+    fac = {}
+    if extra:
+        s, r, cols = dcf._row_range(pdb, extra)
+        cs = dcf._row_range(pdb, c["cashflow"])[2]
+        vals = dict(pdb.execute("SELECT col, value FROM cells WHERE sheet=? AND row=? AND col BETWEEN ? AND ?",
+                                (s, r, cols[0], cols[-1])))
+        for k, col in enumerate(cs):
+            v = dcf._num(vals.get(cols[k])) if k < len(cols) else None
+            if v is not None:
+                fac[col] = v / fl[col] if c.get("pv_row") and fl.get(col) else v if not c.get("pv_row") else None
+    out = {e.isoformat(): {"cf": fl.get(col, 0.0), "factor": fac.get(col)} for col, e in ends.items() if isinstance(e, date)}
+    first = None
+    if c.get("kind") == "xnpv" and c.get("dates"):
+        s, r, cols = dcf._row_range(pdb, c["dates"])
+        ds = [dcf._as_date(v) or ov.to_date(v) if isinstance(v, (int, float)) else dcf._as_date(v) for (v,) in
+              pdb.execute("SELECT value FROM cells WHERE sheet=? AND row=? AND col BETWEEN ? AND ? ORDER BY col",
+                          (s, r, cols[0], cols[-1]))]
+        ds = [d for d in ds if isinstance(d, date)]
+        first = ds[0].isoformat() if ds else None
+    return {"periods": out, "first_date": first}
 
 
 def layer(sess, summary: dict, where: dict, figs: dict) -> dict:
@@ -85,7 +117,12 @@ def layer(sess, summary: dict, where: dict, figs: dict) -> dict:
             cores.append(entry)
             if not c.get("inputs"):
                 entry["why"] = ("its convention isn't one the app recomputes: its rate and date are read from its formulas"
-                                if c.get("loose") else "the app can't read its cash flows period by period")
+                                if c.get("loose") else "the app can't recompute it period by period")
+                if this_feed and c.get("cashflow"):  # this year's cash flows and factors as the overlay works them out
+                    try:
+                        entry["raw"] = _raw(sess, summary, db, c, this_feed)
+                    except (ValueError, ZeroDivisionError, OverflowError) as e:
+                        entry["raw_why"] = str(e)
                 continue
             inputs = c["inputs"]
             discrete, left_out = result._discrete_rows(c)
@@ -221,6 +258,47 @@ def checks(sess, summary: dict, where: dict, figs: dict, fl: dict, unit) -> dict
                                      "revised, so a revision would move it. Exactly the same value means the revisions "
                                      "aren't reaching it"))
             break
+
+    # a discounting the app doesn't cut off or recompute (XNPV, NPV, factors of its own): the overlay's own formulas
+    # roll it, so they're checked here: an XNPV counting from this year's date, nothing on or before the new date still
+    # discounted, and its time measured where it can be
+    timed = {x["cell"]: x for x in ((figs.get("time") or {}).get("discountings") or [])}
+    for c in fl["cores"]:
+        if (c.get("form") or {}).get("recomputed") or not vd1:
+            continue
+        raw, fn = c.get("raw") or {}, (c.get("form") or {}).get("function") or "a discounting"
+        ps = raw.get("periods") or {}
+        past = {e: p for e, p in ps.items() if e <= vd1[:10] and abs(p["cf"]) > EXACT
+                and (p["factor"] is None or abs(p["factor"]) > EXACT)}
+        if c.get("kind") == "xnpv":
+            first = raw.get("first_date")
+            if first and first != vd1[:10]:
+                holds.append(result.hold(summary, f"cf-xnpv-{c['cell']}", [c["cell"], first, vd1],
+                                         f"The XNPV at {c['cell']} counts from {first}, not this year's valuation date",
+                                         f"XNPV discounts every cash flow from the first date in its range: on this year's "
+                                         f"model that's {first}, so this year's value is discounted to it, not to {vd1}", check="cf-xnpv"))
+            elif first and abs((ps.get(first) or {}).get("cf") or 0.0) > EXACT:
+                holds.append(result.hold(summary, f"cf-ondate-{c['cell']}", [c["cell"], ps[first]["cf"]],
+                                         f"The XNPV at {c['cell']} takes the cash flow on this year's valuation date in "
+                                         "whole", f"{unit(ps[first]['cf']):,.1f} on {first}, undiscounted: in the value as "
+                                         "at the date (cum-distribution), where the default cuts the period ending on it",
+                                         severity="check", check="cf-ondate"))
+            continue
+        if past:
+            tot = sum(p["cf"] for p in past.values())
+            holds.append(result.hold(summary, f"cf-uncut-{c['cell']}", [c["cell"], sorted(past), tot],
+                                     f"{fn} at {c['cell']} still discounts {len(past)} period(s) ending on or before "
+                                     "this year's valuation date",
+                                     f"{', '.join(sorted(past)[:4])}: {unit(tot):,.1f} in total, in this year's value. The "
+                                     f"app can't cut this discounting off ({(c.get('form') or {}).get('convention', 'its own')}), and its own "
+                                     "formulas don't: the past is in this year's value (or, for the period ending on the "
+                                     "date, it's cum-distribution on purpose: say so)", check="cf-uncut"))
+        elif c["cell"] not in timed:
+            holds.append(result.hold(summary, f"cf-untimed-{c['cell']}", [c["cell"], fn],
+                                     f"{fn} at {c['cell']}: the roll's time isn't measured",
+                                     f"the app can't work out its factors on another date ({(c.get('form') or {}).get('convention', 'its own')}), "
+                                     "so that the roll moves it on by its rate is a person's to check",
+                                     severity="check", check="cf-untimed"))
 
     # the new-forecast step, split: revisions, periods added and dropped, the terminal value, what's left
     v0s, before = figs.get("rebuilt") or {}, (figs.get("this_year_held") or figs.get("this_year_last_rate")

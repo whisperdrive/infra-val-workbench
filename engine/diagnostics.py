@@ -347,7 +347,8 @@ def _flows(res: dict) -> dict:
                        "periods": len(((c.get("this") or c.get("last") or {}).get("periods")) or {}),
                        "why": bool(c.get("why"))} for c in fl.get("cores") or []],
             "error": bool(fl.get("error")),
-            "checks": [{"id": h["id"], "severity": h["severity"], "acked": bool(h.get("acked"))} for h in holds],
+            "checks": [{"id": h.get("check") or h["id"], "severity": h["severity"], "acked": bool(h.get("acked"))}
+                       for h in holds],
             "split": {e: ({k: share(v, s.get("step")) for k, v in s.items() if k not in ("step", "share_outside")}
                           | {"outside_of_value": s.get("share_outside")}) if not s.get("why") else {"why": True}
                       for e, s in (fc.get("split") or {}).items()},

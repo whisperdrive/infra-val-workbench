@@ -981,7 +981,9 @@ def flows_check() -> None:
     def run(now, this_vals, tv_this=None, beyond=None, ratio=1.02, stood=()):
         sess = SimpleNamespace(rowmap=Rows(now, beyond))
         fl = {"vd0": "2025-06-30", "vd1": "2026-06-30", "trees": {},
-              "cores": [{"cell": "Val!C20", "label": "Distributions", "form": {"function": "SUMPRODUCT"}, "ends": ["low"],
+              "cores": [{"cell": "Val!C20", "label": "Distributions", "form": {"function": "SUMPRODUCT", "recomputed": True,
+                                                                         "convention": "end of period, actual/actual"},
+                         "ends": ["low"],
                          "tv_rows": ["Terminal value"], "last": {"periods": per(last, {"2030-06-30": 1500.0})},
                          "this": {"periods": per(this_vals, tv_this)}}]}
         figs = {"gaps": {"by_cell": {"Val!C20": {"zero_roll": {"ratio": ratio}}}, "dcf_origins": ["CF!r10"],
@@ -1017,6 +1019,134 @@ def flows_check() -> None:
           "than the overlay reads and last year's figures standing in hold; an acknowledgement lets one through)")
 
 
+def loose_roll_check() -> None:
+    """A discounting whose factors don't fit a convention the app recomputes, on a fixed horizon rolled a year: typed
+    period counters (1, 2, ...) that don't move, so every cash flow is discounted a year too far, are found by the
+    time check (now measured on such factors too, at the rate their formulas read) and hold; factors that read the
+    date (YEARFRAC, its default basis) roll right but keep the period ending on the new date at a factor of 1: held as
+    uncut. Quarterly factors built from an annual rate are read at the annual rate, its cell sourced."""
+    import cashflows
+    import overlay as ov
+    import result
+    import xlcompile
+    from xlruntime import serial
+    vd, new, rate = date(2025, 6, 30), date(2026, 6, 30), 0.085
+    ends = [date(2024 + k, 6, 30) for k in range(12)]
+    flows = {"prior": [0.0 if e <= vd else 100.0 + 5 * k for k, e in enumerate(ends)],
+             "current": [0.0 if e <= vd else 104.0 + 5 * k for k, e in enumerate(ends)]}
+
+    def build(mode):
+        out = Path(tempfile.mkdtemp(prefix=f"loose_{mode}_"))
+        paths = {}
+        for which in ("prior", "current"):
+            wb = xlsxwriter.Workbook(out / f"{which}.xlsx")
+            dt = wb.add_format({"num_format": "dd-mmm-yy"})
+            cl = wb.add_worksheet("Client")
+            cl.write(5, 1, "Period ending")
+            cl.write(9, 1, "Distributions to equity")
+            for k, e in enumerate(ends):
+                cl.write_datetime(5, 3 + k, e, dt)
+                cl.write_number(9, 3 + k, flows[which][k])
+            if which == "prior":
+                va = wb.add_worksheet("Val")
+                va.write(3, 1, "Valuation date")
+                va.write_datetime(3, 2, vd, dt)
+                va.write(4, 1, "Discount rate")
+                va.write_number(4, 2, rate)
+                for r, label in ((5, "Period ending"), (6, "Discount period"), (9, "Cash flow"), (12, "Discount factor"),
+                                 (13, "Present value"), (15, "Equity value")):
+                    va.write(r, 1, label)
+                total, n = 0.0, 0
+                for k, e in enumerate(ends):
+                    c = COL(3 + k)
+                    n = n + 1 if e > vd else 0
+                    if mode == "counter":
+                        va.write_number(6, 3 + k, n)
+                        f = 1 / (1 + rate) ** n if n else 0.0
+                        va.write_formula(f"{c}13", f"=IF({c}7>0,1/(1+$C$5)^{c}7,0)", None, f)
+                    else:
+                        a, b = (vd, e) if e >= vd else (e, vd)
+                        d1, d2 = min(a.day, 30), b.day
+                        d2 = 30 if (d2 == 31 and d1 >= 30) else d2
+                        tt = ((b.year - a.year) * 360 + (b.month - a.month) * 30 + (d2 - d1)) / 360
+                        f = 1 / (1 + rate) ** tt
+                        va.write_formula(f"{c}13", f"=1/(1+$C$5)^YEARFRAC($C$4,{c}6)", None, f)
+                    total += flows["prior"][k] * f
+                    va.write_formula(f"{c}6", f"=Client!{c}6", dt, (e - date(1899, 12, 30)).days)
+                    va.write_formula(f"{c}10", f"=Client!{c}10", None, flows["prior"][k])
+                    va.write_formula(f"{c}14", f"={c}10*{c}13", None, flows["prior"][k] * f)
+                va.write_formula("C16", f"=SUM(D14:{COL(3 + len(ends) - 1)}14)", None, total)
+            wb.close()
+            paths[which] = build_map.main(str(out / f"{which}.xlsx"), str(out / f"db_{which}"))["db"]
+        db = paths["prior"]
+        src, _ = xlcompile.compile_overlay(db, ["Val"])
+        (out / "overlay_mod.py").write_text(src)
+        sess = ov.Session(str(out / "overlay_mod.py"), db, ["Val"], None, paths["current"], None, ["Client"])
+        roll = ov.plan_roll(sess, None, {"sheets": ["Val"]}, True, vd.isoformat(), None, new.isoformat())
+        roll.update(ov.date_cells(db, [{"cell": "Val!C16"}], ["Val"], None))
+        roll.setdefault("current_valuation_date", new.isoformat())
+        sess.cutoffs = [(*ov.parse_a1(c), serial(date.fromisoformat(d)), *[ov.parse_a1(x) for x in at])
+                        for c, d, *at in roll["cutoff"]]
+        summary = {"wiring": {"overlay": {"db_path": db}}, "sheets": ["Val"], "roll": roll, "held_values": {},
+                   "outputs": [{"cell": "Val!C16"}], "acks": {}}
+        return sess, summary
+
+    got = {}
+    for mode in ("counter", "days"):
+        sess, summary = build(mode)
+        tc = ov.deep(result.time_check, sess, summary, ["Val!C16"])
+        figs = {"feeds": {"rebuilt": "workbook"}, "roll": {"valuation_date": new.isoformat()}, "this_year": {"Val!C16": 1.0},
+                "time": tc, "gaps": {}}
+        fl = ov.deep(cashflows.layer, sess, summary, {"low": "Val!C16", "high": "Val!C16"}, figs)
+        assert fl["cores"] and not fl["cores"][0]["form"]["recomputed"], fl["cores"]
+        sess.rowmap = None
+        cf = cashflows.checks(sess, summary, {"low": "Val!C16", "high": "Val!C16"}, figs, fl, lambda v: v)
+        got[mode] = (tc, {h.get("check") or h["id"]: h for h in cf["holds"]})
+    tc, h = got["counter"]
+    assert tc["hold"] and tc["discountings"][0]["loose"] and abs(tc["discountings"][0]["off"] + rate) < 1e-6, tc
+    tc, h = got["days"]
+    assert tc["ok"] and h["cf-uncut"]["severity"] == "block" and "2026-06-30" in h["cf-uncut"]["detail"], (tc, h)
+    # quarterly factors 1 / (1 + q) ^ quarter, q worked out from the annual rate in a cell of its own: the step between
+    # quarters is a quarter's rate, read at the annual rate and sourced to the annual input, not the quarter's cell
+    out = Path(tempfile.mkdtemp(prefix="quarters_"))
+    r, q = 0.08, 1.08 ** 0.25 - 1
+    qends, y, m = [], 2024, 9
+    for _ in range(16):
+        qends.append(date(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1))
+        y, m = (y + 1, 3) if m == 12 else (y, m + 3)
+    wb = xlsxwriter.Workbook(out / "q.xlsx")
+    dt = wb.add_format({"num_format": "dd-mmm-yy"})
+    inp = wb.add_worksheet("Inputs")
+    inp.write(3, 0, "Valuation date")
+    inp.write_datetime(3, 2, date(2024, 6, 30), dt)
+    inp.write(4, 0, "Discount rate")
+    inp.write_number(4, 2, r)
+    inp.write(6, 0, "Quarterly discount rate")
+    inp.write_formula("C7", "=(1+C5)^(1/4)-1", None, q)
+    fs = wb.add_worksheet("Flows")
+    for rr, lab in ((2, "Period ending"), (3, "Quarter"), (9, "Cash flow"), (12, "Discount factor"), (13, "Present value"),
+                    (15, "Equity value")):
+        fs.write(rr, 1, lab)
+    tot = 0.0
+    for k, e in enumerate(qends):
+        c, f, cf = COL(3 + k), 1 / (1 + q) ** (k + 1), 25.0 + k
+        fs.write_datetime(2, 3 + k, e, dt)
+        fs.write_number(3, 3 + k, k + 1)
+        fs.write_number(9, 3 + k, cf)
+        fs.write_formula(f"{c}13", f"=1/(1+Inputs!$C$7)^{c}4", None, f)
+        fs.write_formula(f"{c}14", f"={c}10*{c}13", None, cf * f)
+        tot += cf * f
+    fs.write_formula("C16", f"=SUM(D14:{COL(3 + 15)}14)", None, tot)
+    wb.close()
+    qdb = sqlite3.connect(build_map.main(str(out / "q.xlsx"), str(out / "db"))["db"])
+    loose = next(c for c in dcftrace.cores(dcftrace.trace(qdb, "Flows!C16")) if c.get("loose"))["loose"]
+    assert loose["rate"] == "Inputs!C5" and abs(loose["rate_value"] - r) < 1e-6 and loose["period_months"] == 3 and \
+        abs(loose["period_rate"] - q) < 1e-6, loose
+    print("loose roll: ok (typed period counters that don't move: the time check measures 0% a year against 8.5%, "
+          "held; factors that read the date roll right but keep the period ending on the new date: held as uncut; "
+          "a quarter's rate read at the annual rate, sourced to the annual input)")
+
+
 if __name__ == "__main__":
     main()
     mid_year_check()
@@ -1032,3 +1162,4 @@ if __name__ == "__main__":
     multiple_check()
     forward_check()
     flows_check()
+    loose_roll_check()

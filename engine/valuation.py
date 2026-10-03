@@ -384,6 +384,14 @@ def loose_factors(db, cols: list[int], theirs: dict, sheet: str, dates: str | No
         near = sorted((abs(v - guess), v) for ref in common if (v := dcf._num(walks[0][ref]["value"])) is not None
                       and 0 < v < 0.5 and abs(v - guess) <= 0.0025)
         rate = near[0][1] if near and (len(near) == 1 or near[1][0] > near[0][0] or near[1][1] == near[0][1]) else None
+    # the step is a period's: shorter periods than a year (quarters, halves) step by a period's rate, so it's annualised
+    # before the cell holding it is looked for (an annual input the period's rate is worked out from), never taken as
+    # a year's rate as it stands
+    gaps = [(ends[b] - ends[a]).days for a, b in zip(live, live[1:])]
+    months = round(statistics.median(gaps) / 30.4375) if gaps else 12
+    per_period = rate
+    if rate is not None and 0 < months < 11:
+        rate = (1 + rate) ** (12 / months) - 1
     src = source_rate(db, walks, rate) if walks and rate is not None else None
     first = ends[live[0]]
     # a date every walk reads (a fixed cell, not one period's own start), before the first period they discount
@@ -393,6 +401,7 @@ def loose_factors(db, cols: list[int], theirs: dict, sheet: str, dates: str | No
         return None
     return {"rate": src["cell"] if src else None, "rate_value": rate, "rate_source": src,
             "rate_cells": rate_inputs(walks, rate) if src else [],
+            "period_months": months, "period_rate": per_period if months < 11 else None,
             "valuation_date": dated[-1][1] if dated else None,
             "valuation_date_value": dated[-1][0].isoformat() if dated else None,
             "note": "the factors' convention isn't one the app recomputes: the rate and the valuation date are the cells "
