@@ -1789,11 +1789,11 @@ function agentsCard() {
 // This year's cash flows against last year's, discounting by discounting (cashflows.py): how each is built and whether
 // the app cuts it off and time-checks it on the roll, the bridge's new-forecast step split into what moved, the checks.
 function flowsCard(R) {
-  const F = R.flows; if (!F?.cores?.length) return F?.error ? `<div class="card" id="flowsCard"><h2>This year's cash flows against last year's</h2><p class="small muted">The comparison couldn't run: ${esc(F.error)}</p>${cardNeeds(id => id.startsWith("cf-"))}</div>` : "";
+  const F = R.flows; if (!F?.cores?.length) return F?.error ? `<div class="card" id="flowsCard"><h2>This year's cash flows against last year's</h2><p class="small muted">The comparison couldn't run: ${esc(F.error)}</p>${cardNeeds(id => id.startsWith("cf-") || id.startsWith("balance-"))}</div>` : "";
   const S = R.flow_checks?.split || {}, end = state.bridgeEnd;
   const both = S.low && S.high && !S.low.why && !S.high.why;
   const sp = end === "mid" ? (both ? Object.fromEntries(Object.keys(S.low).map(k => [k, S.low[k] == null || S.high[k] == null ? null : (S.low[k] + S.high[k]) / 2])) : null) : S[end];
-  const ns = (E.run?.needs || []).filter(n => n.id.startsWith("cf-")), open = ns.filter(n => n.severity !== "info");
+  const ns = (E.run?.needs || []).filter(n => n.id.startsWith("cf-") || n.id.startsWith("balance-")), open = ns.filter(n => n.severity !== "info");
   const pillH = open.some(n => n.severity === "block") ? `<span class="pill bad">held</span>` : open.length ? `<span class="pill warn">${open.length} to check</span>` : `<span class="pill ok">this year's model reaches the value</span>`;
   const core = c => `<tr><td><b>${esc(c.label || c.cell)}</b> <span class="mono small muted">${esc(c.cell)}</span>${c.why ? `<div class="small muted">${esc(c.why)}</div>` : ""}</td>
     <td>${esc(c.form?.function || "")}</td><td class="small">${esc(c.form?.convention || "")}</td>

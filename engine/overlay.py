@@ -423,10 +423,13 @@ class Session:
             target, by = want, None
             if self.balances_at_last:
                 target = old
-            elif round(tl_p[c]) == round(old) and round(want) != round(new_vd):
-                target, by = new_vd, "the app"
+            elif round(tl_p[c]) == round(old):  # the column last year's date's: moved by the periods, else by the app
+                if round(want) != round(new_vd):
+                    target, by = new_vd, "the app"
+                elif round(new_vd) != round(old):
+                    by = "the periods"
             elif round(want) == round(new_vd) and round(new_vd) != round(old):
-                by = "the overlay's own date"
+                by = "the overlay's own date"  # the overlay picked another column itself (INDEX/MATCH on its date)
             c3 = cur.column_of(s2, target)
             if c3 is None:
                 # no column at this year's date: left at last year's date (a plain reference), or last year's forecast

@@ -1035,7 +1035,7 @@ def balances_check() -> None:
     from xlsxwriter.utility import xl_col_to_name as col_
     vd, new, rate = date(2025, 6, 30), date(2026, 6, 30), 0.09
 
-    def run(ref: str, current_ends=None):
+    def run(ref: str, current_ends=None, to=None):
         out = Path(tempfile.mkdtemp(prefix="balances_"))
         ends = {w: [date(2025 + k, 6, 30) for k in range(10)] for w in ("prior", "current")}
         if current_ends:
@@ -1085,7 +1085,7 @@ def balances_check() -> None:
         src, _ = xlcompile.compile_overlay(db, ["Val"])
         (out / "overlay.py").write_text(src)
         sess = ov.Session(str(out / "overlay.py"), db, ["Val"], None, paths["current"], None, ["Client"])
-        roll = ov.plan_roll(sess, None, {"sheets": ["Val"]}, True, vd.isoformat(), None, new.isoformat())
+        roll = ov.plan_roll(sess, None, {"sheets": ["Val"]}, True, vd.isoformat(), None, (to or new).isoformat())
         roll.update(ov.date_cells(db, [{"cell": "Val!C18"}], ["Val"], None))
         sess.cutoffs = [(*ov.parse_a1(c), serial(date.fromisoformat(d)), *[ov.parse_a1(x) for x in at]) for c, d, *at in roll["cutoff"]]
         summary = {"wiring": {"overlay": {"db_path": db}, "current": {"db_path": paths["current"]}}, "sheets": ["Val"],
@@ -1107,11 +1107,22 @@ def balances_check() -> None:
         sp = cfc["split"]["low"]
         assert abs(sp["balances"] - 20.0) < 1e-9 and abs(sp["outside"]) < 1e-9, sp
         assert not [h for h in cfc["holds"] if h["id"].startswith("cf-split")], cfc["holds"]
-        assert [h["id"] for h in gate if h["id"].startswith("balance")] == ["balance-moved"], gate
+        assert [(h["id"], h["severity"]) for h in gate if h["id"].startswith("balance")] == \
+            [("balance-moved", "check" if how == "the app" else "info")], gate
         if ref == "plain":
             v_plain = v
         else:
             assert abs(v - v_plain) < 1e-9, (v, v_plain)
+    # a rolling horizon (this year's model a year further on): the plain reference moves with the periods, as before;
+    # the same value, a note, not a point to check
+    roll, figs, cfc, gate = run("plain", current_ends=[date(2026 + k, 6, 30) for k in range(10)])
+    bal = figs["feed"]["balances"]["moved"]
+    # (this year's model a year on: its first column, 30 June 2026, holds 200 here)
+    assert not roll["fixed_horizon"] and bal and bal[0]["by"] == "the periods" and bal[0]["this"] == 200.0, (roll, bal)
+    assert [(h["id"], h["severity"]) for h in gate if h["id"].startswith("balance")] == [("balance-moved", "info")], gate
+    # a three-month roll on an annual model: no column at the new date, so the balance can't be this year's: held
+    roll, figs, cfc, gate = run("plain", to=date(2025, 9, 30))
+    assert roll["months"] == 3 and "balance-unmoved" in {h["id"] for h in gate}, (roll["months"], [h["id"] for h in gate])
     # this year's model without a column at this year's date (half-yearly dates that skip it): held at last year's
     skip = [date(2025, 6, 30)] + [date(2026, 12, 31) + (date(2027, 12, 31) - date(2026, 12, 31)) * k for k in range(9)]
     roll, figs, cfc, gate = run("plain", current_ends=skip)

@@ -1528,14 +1528,18 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
     bal = ((figs.get("feed") or {}).get("balances")) or {}
     if bal.get("moved"):  # balances read at the valuation date, read at this year's date: a person sees the move
         fmt = lambda v: f"{v:,.1f}" if isinstance(v, float) else "–"
+        app = any(x.get("by") == "the app" for x in bal["moved"])  # moved by the app: new, a point to check; else a note
         out.append(hold(summary, "balance-moved", [[x["row"], x["col"], x["this"]] for x in bal["moved"]],
                         f"{len(bal['moved'])} balance(s) the overlay reads at the valuation date, read at this year's date",
                         "; ".join(f"{x['label'] or x['row']}: {fmt(x['last'])} at {x['from']} → {fmt(x['this'])} at "
                                   f"{x['to']} ({x['now']}"
-                                  + (", moved by the app: the overlay reads it by a plain reference" if x.get("by") == "the app"
-                                     else ", read by the overlay's own date") + ")" for x in bal["moved"][:6])
+                                  + {"the app": ", moved by the app: the overlay reads it by a plain reference, which the "
+                                                "periods don't move (a fixed horizon)",
+                                     "the periods": ", moved with the periods"}.get(x.get("by"), ", read by the overlay's own "
+                                                                                                 "date") + ")"
+                                  for x in bal["moved"][:6])
                         + ". In the client models' units. Last year the overlay read each in one column, last year's "
-                          "valuation date's; this year's value reads this year's", severity="check"))
+                          "valuation date's; this year's value reads this year's", severity="check" if app else "info"))
     if bal.get("unmoved"):
         out.append(hold(summary, "balance-unmoved", [[x["row"], x["col"]] for x in bal["unmoved"]],
                         f"{len(bal['unmoved'])} balance(s) the overlay reads at the valuation date stay at last year's",
