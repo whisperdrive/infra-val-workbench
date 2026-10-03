@@ -210,6 +210,9 @@ takes it from there:
    client model, checked first against last year's: the row of last year's model that holds last year's figure at
    last year's valuation date (its label agreeing) is the row read in this year's model at this year's date. A
    suggestion is only applied when you use it, or type your own figure; the bridge then has a step of its own for it.
+   A balance the overlay reads from the client model at last year's valuation date (one column of a row: a net debt,
+   a cash balance) is read at this year's date, also on a fixed horizon where the periods keep their dates; the
+   cash-flow split counts its move, and a point to check lists it.
    Your figure is kept with the input it's for (its label and last year's figure, and the overlay it was set on): if
    a corrected overlay moves the input, it's found again where exactly one input has both, and said so; otherwise
    it's set aside, a point to check, never applied to whatever the old cell now holds.

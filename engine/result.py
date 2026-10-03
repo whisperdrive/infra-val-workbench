@@ -214,6 +214,23 @@ def _read(sess, summary: dict, feed: str, cells: list[tuple], vd: str | None = N
     return dict(zip(cells, sess.values(cells))), roll, defaults, months
 
 
+def _balances(sess) -> dict:
+    """The balances read at the valuation date on the current feed (overlay.balance_cells): those moved to this year's
+    date, with last year's figure and this year's (in the client models' units), and those that couldn't be."""
+    pri, cur = sess.prior or sess.ov, sess.current
+    labels = pri.labels()
+    iso = lambda v: ov.to_date(v).isoformat()
+    num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    lastcol = lambda s_, r_: next((c for c, d in pri.timeline(s_).items() if round(d) == round(sess.base_vd)), None)
+    moved = [{"row": f"{s_}!r{r_}", "col": c_, "label": labels.get((s_, r_), ""), "from": iso(a), "to": iso(b),
+              "now": f"{s2}!r{r2}", "last": num(pri.value(s_, r_, lastcol(s_, r_) or c_)), "this": num(cur.value(s2, r2, c3)),
+              "by": _by}
+             for (s_, r_, c_), (a, b, s2, r2, c3, _by) in sorted(getattr(sess, "moved", {}).items())]
+    unmoved = [{"row": f"{s_}!r{r_}", "col": c_, "label": labels.get((s_, r_), ""), "why": why,
+                "last": num(pri.value(s_, r_, c_))} for (s_, r_, c_), why in sorted(getattr(sess, "unmoved", {}).items())]
+    return {"moved": moved, "unmoved": unmoved}
+
+
 def _other_links(reads: dict) -> dict:
     """The cells this year's value read from workbooks linked other than the client model's: {link: {"cells",
     "nonzero"}} (each at last year's saved value, not fed from anything this year)."""
@@ -250,7 +267,8 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
         out["feed"] = {"stood_in": [{"row": f"{s_}!r{r_}", "col": c_, "value": float(v)}
                                     for (s_, r_, c_), v in sess.stood_in.items() if isinstance(v, (int, float))],
                        "beyond": [{"row": f"{s_}!r{r_}", "col": c_, "why": str(w)} for (s_, r_, c_), w in sess.beyond.items()],
-                       "other_links": _other_links(getattr(sess, "other_reads", {}))}
+                       "other_links": _other_links(getattr(sess, "other_reads", {})),
+                       "balances": _balances(sess)}
         out["cut_off"] = len(sess.cut)  # the discountings' periods before the new date, cut off on this year's feed
         if summary.get("rate_values"):
             got, _, _, _ = _read(sess, summary, "current", keys, rates=False)  # at last year's rate: the rate's own step
@@ -259,6 +277,15 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
             # the inputs a person set left at last year's, and the rate too: the roll-forward's steps end here
             got, _, _, _ = _read(sess, summary, "current", keys, held=False, rates=False)
             out["this_year_held"] = {c: ov._show(got[k]) for c, k in zip(cells, keys)}
+        if out["feed"]["balances"]["moved"]:
+            # the balances left at last year's date (and the inputs and the rate as above): what their move adds to the
+            # new-forecast step, outside the discountings (cashflows.py's split)
+            sess.balances_at_last = True
+            try:
+                got, _, _, _ = _read(sess, summary, "current", keys, held=False, rates=False)
+            finally:
+                sess.balances_at_last = False
+            out["this_year_unmoved"] = {c: ov._show(got[k]) for c, k in zip(cells, keys)}
         if out["roll"]:
             tl = sess.rolled_timeline(out["roll"]["months"] or 0)
             firsts = sorted(tl.values())
@@ -1498,6 +1525,23 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
                         "This year's value reads another linked workbook at last year's figures",
                         f"{said}. Only the client model's link is fed from this year's model; these cells keep the values "
                         "Excel saved last year. Map them to this year's file, or say why they don't change"))
+    bal = ((figs.get("feed") or {}).get("balances")) or {}
+    if bal.get("moved"):  # balances read at the valuation date, read at this year's date: a person sees the move
+        fmt = lambda v: f"{v:,.1f}" if isinstance(v, float) else "–"
+        out.append(hold(summary, "balance-moved", [[x["row"], x["col"], x["this"]] for x in bal["moved"]],
+                        f"{len(bal['moved'])} balance(s) the overlay reads at the valuation date, read at this year's date",
+                        "; ".join(f"{x['label'] or x['row']}: {fmt(x['last'])} at {x['from']} → {fmt(x['this'])} at "
+                                  f"{x['to']} ({x['now']}"
+                                  + (", moved by the app: the overlay reads it by a plain reference" if x.get("by") == "the app"
+                                     else ", read by the overlay's own date") + ")" for x in bal["moved"][:6])
+                        + ". In the client models' units. Last year the overlay read each in one column, last year's "
+                          "valuation date's; this year's value reads this year's", severity="check"))
+    if bal.get("unmoved"):
+        out.append(hold(summary, "balance-unmoved", [[x["row"], x["col"]] for x in bal["unmoved"]],
+                        f"{len(bal['unmoved'])} balance(s) the overlay reads at the valuation date stay at last year's",
+                        "; ".join(f"{x['label'] or x['row']}: {x['why']}" for x in bal["unmoved"][:6])
+                        + ". This year's value would deduct (or add) last year's figure: find this year's, or say why "
+                          "last year's is right"))
     bad = summary.get("damaged") or []  # a file of a person's decisions that didn't parse, moved aside (store.py)
     if bad:
         names = ", ".join(dict.fromkeys(x["file"] for x in bad))

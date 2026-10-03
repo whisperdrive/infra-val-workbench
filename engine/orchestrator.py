@@ -1228,7 +1228,7 @@ KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact"
          ("rebuild-", "check-rebuild", "A rebuild to check"), ("roll-assumed", "check-date", "A date to check"),
          ("terms-error", "check-terms", "Terms to check"), ("lines-error", "check-lines", "Cash-flow lines to check"),
          ("other-link", "check-links", "A linked workbook to check"), ("role-check", "check-roles", "The roles to check"),
-         ("tv-base-", "check-input", "A model input to check"), ("pick-lost-", "find-rows", "A row to pick again"),
+         ("tv-base-", "check-input", "A model input to check"), ("balance-", "check-input", "A model input to check"), ("pick-lost-", "find-rows", "A row to pick again"),
          ("pick-moved-", "note", "A pick found again"))
 
 

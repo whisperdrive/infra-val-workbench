@@ -1020,6 +1020,108 @@ def flows_check() -> None:
           "than the overlay reads and last year's figures standing in hold; an acknowledgement lets one through)")
 
 
+def balances_check() -> None:
+    """A balance the overlay reads at last year's valuation date (net debt from the client model's balance row), on a
+    fixed horizon (the periods keep their dates both years): this year's value deducts this year's balance at this
+    year's date, whether the overlay reads it by a plain reference (moved by the app) or by its own date (INDEX/MATCH
+    on the valuation date); the new-forecast step's split counts the move as the balances', not something unexplained
+    outside the discountings (which held the right roll and passed the wrong one); a point to check lists the move;
+    and where this year's model has no column at this year's date, the balance stays at last year's and holds."""
+    import cashflows
+    import overlay as ov
+    import result
+    import xlcompile
+    from xlruntime import serial
+    from xlsxwriter.utility import xl_col_to_name as col_
+    vd, new, rate = date(2025, 6, 30), date(2026, 6, 30), 0.09
+
+    def run(ref: str, current_ends=None):
+        out = Path(tempfile.mkdtemp(prefix="balances_"))
+        ends = {w: [date(2025 + k, 6, 30) for k in range(10)] for w in ("prior", "current")}
+        if current_ends:
+            ends["current"] = current_ends
+        n = 10
+        nd = [200.0 - 20 * k for k in range(n)]  # the balance at each date, the same both years
+        cfs = {"prior": [0.0] + [45.0 * 1.03 ** k for k in range(n - 1)],
+               "current": [0.0, 46.0] + [46.5 * 1.03 ** k for k in range(1, n - 1)]}
+        paths = {}
+        for which in ("prior", "current"):
+            wbk = xlsxwriter.Workbook(out / f"{which}.xlsx")
+            dt = wbk.add_format({"num_format": "dd-mmm-yy"})
+            cl = wbk.add_worksheet("Client")
+            cl.write(0, 0, "Project model")
+            cl.write(5, 1, "Period ending")
+            cl.write(8, 1, "Distributions")
+            cl.write(10, 1, "Net debt")
+            for k, e in enumerate(ends[which]):
+                cl.write_datetime(5, 3 + k, e, dt)
+                cl.write_number(8, 3 + k, cfs[which][k])
+                cl.write_number(10, 3 + k, nd[k])
+            if which == "prior":
+                va = wbk.add_worksheet("Val")
+                va.write(3, 1, "Valuation date")
+                va.write_datetime(3, 2, vd, dt)
+                va.write(4, 1, "Discount rate")
+                va.write_number(4, 2, rate)
+                for r, label in ((5, "Period ending"), (9, "Cash flow"), (12, "Discount factor"), (13, "Present value"),
+                                 (15, "Enterprise PV"), (16, "Net debt"), (17, "Equity value")):
+                    va.write(r, 1, label)
+                total = 0.0
+                for k, e in enumerate(ends["prior"]):
+                    c = col_(3 + k)
+                    f = 1 / (1 + rate) ** ((e - vd).days / 365)
+                    total += cfs["prior"][k] * f
+                    va.write_formula(f"{c}6", f"=Client!{c}6", dt, (e - date(1899, 12, 30)).days)
+                    va.write_formula(f"{c}10", f"=Client!{c}9", None, cfs["prior"][k])
+                    va.write_formula(f"{c}13", f"=1/(1+$C$5)^(({c}6-$C$4)/365)", None, f)
+                    va.write_formula(f"{c}14", f"={c}10*{c}13", None, cfs["prior"][k] * f)
+                va.write_formula("C16", f"=SUM(D14:{col_(3 + n - 1)}14)", None, total)
+                va.write_formula("C17", "=Client!D11" if ref == "plain" else
+                                 f"=INDEX(Client!D11:{col_(3 + n - 1)}11,MATCH(C4,Client!D6:{col_(3 + n - 1)}6,0))", None, nd[0])
+                va.write_formula("C18", "=C16-C17", None, total - nd[0])
+            wbk.close()
+            paths[which] = build_map.main(str(out / f"{which}.xlsx"), str(out / f"db_{which}"))["db"]
+        db = paths["prior"]
+        src, _ = xlcompile.compile_overlay(db, ["Val"])
+        (out / "overlay.py").write_text(src)
+        sess = ov.Session(str(out / "overlay.py"), db, ["Val"], None, paths["current"], None, ["Client"])
+        roll = ov.plan_roll(sess, None, {"sheets": ["Val"]}, True, vd.isoformat(), None, new.isoformat())
+        roll.update(ov.date_cells(db, [{"cell": "Val!C18"}], ["Val"], None))
+        sess.cutoffs = [(*ov.parse_a1(c), serial(date.fromisoformat(d)), *[ov.parse_a1(x) for x in at]) for c, d, *at in roll["cutoff"]]
+        summary = {"wiring": {"overlay": {"db_path": db}, "current": {"db_path": paths["current"]}}, "sheets": ["Val"],
+                   "roll": roll, "held_values": {}, "outputs": [{"cell": "Val!C18", "label": "Equity value"}]}
+        roll["balance_cells"] = ov.deep(ov.balance_cells, sess, summary)
+        sess.balances = {(x[0], x[1]) for x in roll["balance_cells"]}
+        figs = ov.deep(result.figures, sess, summary, ["Val!C18"])
+        where = {"low": "Val!C18", "high": "Val!C18", "scale": 1, "sign": 1}
+        fl = ov.deep(cashflows.layer, sess, summary, where, figs)
+        cfc = ov.deep(cashflows.checks, sess, summary, where, figs, fl, lambda x: x)
+        gate = result._gate_holds(summary, {"texts": {}}, where, figs, lambda x: x)
+        return roll, figs, cfc, gate
+    for ref, how in (("plain", "the app"), ("index", "the overlay's own date")):
+        roll, figs, cfc, gate = run(ref)
+        assert roll["fixed_horizon"] and roll["balance_cells"] == [["Client", 11, 4]], roll.get("balance_cells")
+        v = figs["this_year"]["Val!C18"]
+        bal = figs["feed"]["balances"]["moved"]
+        assert bal and bal[0]["last"] == 200.0 and bal[0]["this"] == 180.0 and bal[0]["by"] == how, bal
+        sp = cfc["split"]["low"]
+        assert abs(sp["balances"] - 20.0) < 1e-9 and abs(sp["outside"]) < 1e-9, sp
+        assert not [h for h in cfc["holds"] if h["id"].startswith("cf-split")], cfc["holds"]
+        assert [h["id"] for h in gate if h["id"].startswith("balance")] == ["balance-moved"], gate
+        if ref == "plain":
+            v_plain = v
+        else:
+            assert abs(v - v_plain) < 1e-9, (v, v_plain)
+    # this year's model without a column at this year's date (half-yearly dates that skip it): held at last year's
+    skip = [date(2025, 6, 30)] + [date(2026, 12, 31) + (date(2027, 12, 31) - date(2026, 12, 31)) * k for k in range(9)]
+    roll, figs, cfc, gate = run("plain", current_ends=skip)
+    ids = {h["id"]: h for h in gate}
+    assert "balance-unmoved" in ids and ids["balance-unmoved"]["severity"] == "block", list(ids)
+    print(f"balances: ok (net debt read at last year's valuation date on a fixed horizon: this year's {v_plain:,.1f} "
+          "deducts this year's balance whether the overlay reads it plainly or by its date; the split counts the move as "
+          "the balances', not unexplained; a point lists it; no column at this year's date holds)")
+
+
 def loose_roll_check() -> None:
     """A discounting whose factors don't fit a convention the app recomputes, on a fixed horizon rolled a year: typed
     period counters (1, 2, ...) that don't move, so every cash flow is discounted a year too far, are found by the
@@ -1723,6 +1825,7 @@ if __name__ == "__main__":
     forward_check()
     flows_check()
     loose_roll_check()
+    balances_check()
     interest_check()
     basis_check()
     pairing_check()

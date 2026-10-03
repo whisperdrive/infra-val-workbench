@@ -1806,6 +1806,7 @@ function flowsCard(R) {
       ${line("added", "Periods added at the end", "periods this year's model discounts that last year's didn't")}
       ${line("dropped", "Periods dropped", "periods last year's discounted, after the new date, that this year's doesn't")}
       ${line("terminal", "The terminal value", "the change in the terminal value's part of the cash flows, discounted")}
+      ${line("balances", "Balances at the valuation date", "balances the overlay reads at the valuation date (a net debt, a cash balance), read at this year's date: their move, known")}
       ${line("convention", "Convention", "what the period-by-period sum doesn't account for in the discountings themselves (a first period's mid-point, say)")}
       ${line("outside", "Outside the discountings", "what moves the value that isn't the discounted cash flows: an input this year's model feeds outside them, or a roll the cash flows don't explain")}
     </tbody></table>` : sp?.why ? `<p class="small muted">${esc(sp.why)}</p>` : "";

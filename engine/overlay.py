@@ -22,7 +22,7 @@ import re
 import sqlite3
 import sys
 import threading
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
@@ -303,6 +303,9 @@ class Session:
         self.horizon_set = None  # "fixed" / "rolling": the engagement's profile says, not worked out (fixed_horizon)
         self.mode = None
         self.holds = {}  # (sheet, row, col) -> value: cells held at Excel's value on every feed (the doctor's fixes)
+        self.balances = set()  # client (sheet, row) the value reads as a balance at last year's valuation date
+        self.balances_at_last = False  # read them at last year's date instead: what their move adds (result.figures)
+        self.moved, self.unmoved = {}, {}  # those read at this year's date on the current feed, and those not
         self.cutoffs = []  # (sheet, row, col, period end serial[, its date cell]): the discountings' per-period cells (cutoff_cells)
         self.cut = set()  # those of them cut off on the current feed (_cut_off)
         self.keep_on_date = False  # the period ending on the new valuation date stays in (a method: methods.py)
@@ -319,6 +322,7 @@ class Session:
         self.beyond = {}
         self.derived_used = {}
         self.client_reads = set()
+        self.moved, self.unmoved = {}, {}
         self.other_reads = {}  # (link, sheet, row, col) -> value: another linked workbook's, last year's saved value
         B.overrides.clear()
         B.overrides.update(self.holds)
@@ -411,6 +415,28 @@ class Session:
             return self._stand_in(prior, s, r, c, want)
         s2, r2 = hit
         c2 = c
+        if (s, r) in self.balances and want is not None and self.base_vd is not None:
+            # a balance at last year's valuation date (balance_cells): this year's at this year's date. On a fixed
+            # horizon the periods keep their dates, so nothing else moves a plain reference off last year's; an overlay
+            # reading it by its date (INDEX/MATCH on the valuation date) moves it itself
+            old, new_vd = self.base_vd, add_months(self.base_vd, self.shift)
+            target, by = want, None
+            if self.balances_at_last:
+                target = old
+            elif round(tl_p[c]) == round(old) and round(want) != round(new_vd):
+                target, by = new_vd, "the app"
+            elif round(want) == round(new_vd) and round(new_vd) != round(old):
+                by = "the overlay's own date"
+            c3 = cur.column_of(s2, target)
+            if c3 is None:
+                # no column at this year's date: left at last year's date (a plain reference), or last year's forecast
+                # standing in (read by its date): either way not this year's balance, which holds the value
+                if not self.balances_at_last and round(target) == round(new_vd) and round(new_vd) != round(old):
+                    self.unmoved[(s, r, c)] = f"this year's model has no column at {to_date(new_vd).isoformat()}"
+            else:
+                if by:
+                    self.moved[(s, r, c)] = (old, target, s2, r2, c3, by)
+                want = target
         if want is None and not (len(tl_p) > 1 and c > max(tl_p)):
             # a single figure, not on the timeline: from the column whose heading is last year's (a case column
             # inserted before it moves it), not the same column letter
@@ -937,6 +963,52 @@ ZERO_ROLL = (0.75, 1.33)  # this year's model at last year's date, against last 
 REBUILT = 0.5  # the two client models share fewer line-item labels than this (rowfind.family): this year's is rebuilt
 ZERO_ROLL_CHECK = (0.87, 1.15)  # inside ZERO_ROLL but outside this, the value runs and a person is asked to confirm
                                 # the move is the new forecast (a judgment call: forecasts move, a mismatched row too)
+BALANCES = 1  # balance_cells' version: the cells a session found by older rules are found again when it loads
+
+
+def balance_cells(sess: Session, summary: dict) -> list[list]:
+    """The client cells the value reads as a balance at last year's valuation date: a row of the client model running
+    over its timeline, read in one column only, the one dated last year's valuation date (a net debt, a cash balance, a
+    distribution declared at the date). Rolled forward, each is read at this year's date (Session._rolled): on a fixed
+    horizon the periods keep their dates, so nothing else would move it. Walked down from the overlay's outputs on
+    last year's feed. -> [[sheet, row, col]]."""
+    if sess.base_vd is None:
+        return []
+    outs = [parse_a1(o["cell"]) for o in summary.get("outputs") or [] if o.get("cell")]
+    if not outs:
+        return []
+    prior = sess.prior or sess.ov
+    client = defaultdict(set)
+    sess.configure("prior" if sess.prior else "workbook")
+    try:
+        sess.values(outs)
+        B, seen, q = sess.B, set(), deque(("", s, r, c) for s, r, c in outs)
+        while q and len(seen) < 60000:
+            x = q.popleft()
+            if x in seen:
+                continue
+            seen.add(x)
+            src, s, r, c = x
+            if src != "" or s in (sess.client_sheets or ()):
+                if src in ("", sess.client_link):
+                    client[(s, r)].add(c)
+                continue
+            if not B.is_formula(s, r, c):
+                continue
+            reads, _ = B.reads(s, r, c)
+            q.extend(y for y in reads if y not in seen)
+    finally:
+        sess.configure("workbook")
+    out = []
+    for (s, r), cols in client.items():
+        tl = prior.timeline(s)
+        c = next(iter(cols))
+        if len(cols) == 1 and c in tl and round(tl[c]) == round(sess.base_vd) and \
+                sum(1 for cc in tl if isinstance(prior.value(s, r, cc), (int, float))) >= 2:
+            out.append([s, r, c])
+    return sorted(out)
+
+
 ROLL_PLAN = 4  # the rules' version: a roll planned by older rules is planned again when a session loads
 DATE_CELLS = 6  # date_cells' version: the cells a build traced with older rules are traced again when a session loads
 ROLL_MAX = 24  # months: a move beyond it from the timelines isn't a roll-forward

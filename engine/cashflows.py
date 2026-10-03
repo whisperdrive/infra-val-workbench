@@ -312,6 +312,7 @@ def checks(sess, summary: dict, where: dict, figs: dict, fl: dict, unit) -> dict
     # the new-forecast step, split: revisions, periods added and dropped, the terminal value, what's left
     v0s, before = figs.get("rebuilt") or {}, (figs.get("this_year_held") or figs.get("this_year_last_rate")
                                               or figs.get("this_year") or {})
+    unmoved = figs.get("this_year_unmoved") or {}  # the balances at the valuation date left at last year's date
     db = None
     for end in ("low", "high"):
         cell, tr = where.get(end), (fl.get("trees") or {}).get(end)
@@ -353,13 +354,16 @@ def checks(sess, summary: dict, where: dict, figs: dict, fl: dict, unit) -> dict
                 moved = dcftrace.recompute(prior_db, t, {c: base[c] + by.get(c, 0.0) for c in base})
                 parts[k] = (moved - v1) if moved is not None else None
             d_cf, step = v_cf - v1, before[cell] - v1
+            # the balances at the valuation date read at this year's date (a net debt, a cash balance): known, not
+            # something else moving outside the discountings
+            bal = before[cell] - unmoved[cell] if isinstance(unmoved.get(cell), float) else 0.0
             known = sum(v for v in parts.values() if v is not None)
             ref = abs(v0s.get(cell) or 0.0) or abs(v1) or 1.0
-            out = {"step": unit(step), "cash_flows": unit(d_cf), "outside": unit(step - d_cf),
+            out = {"step": unit(step), "cash_flows": unit(d_cf), "balances": unit(bal), "outside": unit(step - d_cf - bal),
                    "convention": unit(d_cf - known), **{k: unit(v) if v is not None else None for k, v in parts.items()},
-                   "share_outside": (step - d_cf) / ref}
+                   "share_outside": (step - d_cf - bal) / ref}
             split[end] = out
-            off = abs(step - d_cf) / ref
+            off = abs(step - d_cf - bal) / ref
             if off > SPLIT_CHECK:
                 holds.append(result.hold(summary, f"cf-split-{end}", [cell, step, d_cf],
                                          f"The {end} end's new-forecast step isn't the cash flows' change: "
@@ -367,7 +371,9 @@ def checks(sess, summary: dict, where: dict, figs: dict, fl: dict, unit) -> dict
                                          f"step {out['step']:,.1f}, of which this year's discounted cash flows "
                                          f"{out['cash_flows']:,.1f} (revised {out['revised'] or 0:,.1f}, added "
                                          f"{out['added'] or 0:,.1f}, dropped {out['dropped'] or 0:,.1f}, terminal value "
-                                         f"{out['terminal'] or 0:,.1f}); {out['outside']:,.1f} is something else this year's "
+                                         f"{out['terminal'] or 0:,.1f})" + (f"; balances at the valuation date read at this "
+                                         f"year's date {out['balances']:,.1f}" if bal else "") + f"; {out['outside']:,.1f} "
+                                         "is something else this year's "
                                          "model moves (an input read from it outside the discountings) or a roll the cash "
                                          "flows don't explain",
                                          severity="block" if off > SPLIT_HOLD else "check"))

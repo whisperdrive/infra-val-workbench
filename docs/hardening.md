@@ -148,7 +148,11 @@ reviewer's own session.
   `rowfind._copies` lets lineage rescue the first occurrence (identical in every copy); `in_place` is set on a row
   whose block has copies; a pick card's `matches()` ignores figures and position. `tests/variants.py` had none of
   these cases.
-- **S2. A balance at the valuation date on a fixed horizon** (re-run). Net debt read as `=Client!D11` (last year's
+- ~~**S2. A balance at the valuation date on a fixed horizon**~~ — fixed: a client row the value reads in one column
+  only, last year's valuation date's, is a balance at the valuation date (`overlay.balance_cells`); this year it's read
+  at this year's date, whether the overlay reads it plainly (the app moves it) or by its own date; the split counts the
+  move as the balances' (the right roll is no longer held, the wrong one no longer passes); a point to check lists
+  each move; no column at this year's date holds. Measured: 110.7, both ways of reading it. Was (re-run): Net debt read as `=Client!D11` (last year's
   date's column) still deducts last year's 200, not this year's 180: 18% off, no hold. The same overlay written with
   INDEX/MATCH rolls right and is held by `cf-split`, which measures movement: the stale read passes, the right one is
   held.

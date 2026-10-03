@@ -1417,6 +1417,11 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
     if sess.rowmap and getattr(sess.rowmap, "since", None) != sess.base_vd:  # the finder compares rows from it on
         sess.rowmap.since = sess.base_vd
         sess.rowmap._cache.clear()
+    if roll.get("balances_plan") != ovmod.BALANCES or roll.get("balances_vd") != roll.get("prior_valuation_date"):
+        # the balances the value reads at last year's valuation date: read at this year's date (overlay.balance_cells)
+        roll["balance_cells"] = ovmod.deep(ovmod.balance_cells, sess, summary) if sess.base_vd is not None else []
+        roll["balances_plan"], roll["balances_vd"] = ovmod.BALANCES, roll.get("prior_valuation_date")
+    sess.balances = {(x[0], x[1]) for x in roll.get("balance_cells") or []}
     roll["confirmed"] = now["confirmed"]
 
 
