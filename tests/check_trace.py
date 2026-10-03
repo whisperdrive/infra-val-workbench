@@ -1307,6 +1307,75 @@ def pairing_check() -> None:
           "pick; a low above the high isn't a pair; a range printed high first is read the right way round)")
 
 
+def structure_check() -> None:
+    """The structure tools (structure.py): each row's kind from its values and formulas; blocks under their headings;
+    two blocks alike (the same kinds of row under the same labels) found as copies; the copy a row is in chosen by
+    its heading, where last year's model had one block and this year's inserts a downside case above it; a row's
+    lineage down to the value it feeds."""
+    import structure
+    def model(path, downside):
+        wb = xlsxwriter.Workbook(path)
+        dt = wb.add_format({"num_format": "dd-mmm-yy"})
+        ws = wb.add_worksheet("CF")
+        ws.write(1, 1, "Period ending")
+        for k in range(6):
+            ws.write_datetime(1, 3 + k, date(2026 + k, 6, 30), dt)
+        r = 3
+        rows = {}
+        for case, bump in ((("Downside case", 0.9),) if downside else ()) + (("Base case", 1.0),):
+            ws.write(r, 0, case)
+            r += 1
+            top = r
+            for lab, base in (("Revenue", 100.0), ("Operating costs", -40.0), ("Tax paid", -15.0)):
+                ws.write(r, 1, lab)
+                for k in range(6):
+                    ws.write_number(r, 3 + k, base * bump * 1.03 ** k)
+                r += 1
+            ws.write(r, 1, "Distributions")
+            for k in range(6):
+                c = COL(3 + k)
+                ws.write_formula(r, 3 + k, f"=SUM({c}{top + 1}:{c}{r})", None, 45.0 * bump * 1.03 ** k)
+            rows[case] = r
+            r += 2
+        ws.write(r, 1, "Discount factor")
+        ws.write(r + 1, 1, "Interest held")
+        ws.write(r + 2, 1, "CPI index")
+        ws.write(r + 3, 1, "Forecast flag")
+        for k in range(6):
+            ws.write_number(r, 3 + k, 1 / 1.08 ** (k + 1))
+            ws.write_number(r + 1, 3 + k, 0.5)
+            ws.write_number(r + 2, 3 + k, 1.025 ** k)
+            ws.write_number(r + 3, 3 + k, 1 if k else 0)
+        ws.write(r + 5, 1, "Equity value")
+        ws.write_formula(r + 5, 2, f"=SUMPRODUCT(D{rows['Base case'] + 1}:I{rows['Base case'] + 1},D{r + 1}:I{r + 1})", None, 1.0)
+        wb.close()
+        return rows, r
+    out = Path(tempfile.mkdtemp(prefix="structure_"))
+    rows0, f0 = model(out / "last.xlsx", False)
+    rows1, f1 = model(out / "this.xlsx", True)
+    last = build_map.main(str(out / "last.xlsx"), str(out / "db_last"))["db"]
+    this = build_map.main(str(out / "this.xlsx"), str(out / "db_this"))["db"]
+    i1 = structure.rows(this)
+    kinds = {i1[("CF", f1 + 1 + k)]["kind"] for k in range(4)}
+    assert kinds == {"factors", "share", "index", "flags"} and i1[("CF", 2)]["kind"] == "dates", (kinds, i1[("CF", 2)])
+    assert i1[("CF", rows1["Base case"] + 1)]["kind"] == "subtotal", i1[("CF", rows1["Base case"] + 1)]
+    b0, b1 = structure.blocks(structure.rows(last)), structure.blocks(i1)
+    cp = structure.copies(b1)
+    assert len(cp) == 1 and {cp[0]["a_heading"], cp[0]["b_heading"]} == {"Downside case", "Base case"}, cp
+    # last year's Distributions (the base case's) by its label's first occurrence would land in the downside case
+    dist0 = ("CF", rows0["Base case"] + 1)
+    cands = [("CF", rows1["Downside case"] + 1), ("CF", rows1["Base case"] + 1)]
+    w = structure.which_copy(b0, b1, cp, dist0, cands)
+    assert w["pick"] == ("CF", rows1["Base case"] + 1) and "Base case" in w["why"], w
+    L = structure.lineage(this, ("CF", rows1["Base case"] + 1), targets=None)
+    eq = ("CF", f1 + 6)
+    seen = structure.closure(("CF", rows1["Base case"] + 1), structure.edges(this)[1])
+    assert eq in seen and ("CF", rows1["Downside case"] + 1) not in seen and L["downstream"] >= 1, (seen, L)
+    print("structure: ok (rows' kinds: dates, factors, a share, an index, flags, a subtotal; a downside case inserted "
+          "above the base found as a copy of it; last year's row chosen in the base case by its heading, where its "
+          "label's first occurrence is the downside's; the base case's distributions reach the value, the downside's don't)")
+
+
 if __name__ == "__main__":
     main()
     mid_year_check()
@@ -1326,3 +1395,4 @@ if __name__ == "__main__":
     interest_check()
     basis_check()
     pairing_check()
+    structure_check()
