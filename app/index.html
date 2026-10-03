@@ -406,6 +406,15 @@ dialog#uploadDlg { border: 1px solid var(--rule-strong); border-radius: 10px; ba
   <div class="row" style="justify-content:flex-end"><button class="btn" type="button" id="delCancel">Cancel</button><button class="btn danger" type="button" id="delGo" disabled>Delete</button></div>
 </div></dialog>
 <dialog id="uploadDlg" aria-labelledby="upTitle"><div class="dlg-head"><h2 id="upTitle">Upload the four files</h2><button class="btn small" type="button" id="upClose">Close</button></div><div class="dlg-body" id="upBody"></div></dialog>
+<dialog id="ackDlg" aria-labelledby="ackTitle"><div class="dlg-body">
+  <h2 id="ackTitle" style="margin:0;font-size:17px">Acknowledge this check</h2>
+  <p class="small" style="margin:0"><b id="ackWhat"></b></p>
+  <p class="small muted" style="margin:0" id="ackDetail"></p>
+  <p class="small" style="margin:0">Say why it's right as it is. Your reason is kept with it, shown on the list and in the workpaper; if the figures it found change, it holds again.</p>
+  <label class="small" for="ackWhy">Why</label>
+  <textarea id="ackWhy" rows="3" maxlength="600" class="in" placeholder="e.g. the report states the value at the client's 50% share"></textarea>
+  <div class="row" style="justify-content:flex-end"><button class="btn" type="button" id="ackCancel">Cancel</button><button class="btn primary" type="button" id="ackGo" disabled>Acknowledge</button></div>
+</div></dialog>
 <dialog id="setDlg" aria-labelledby="setTitle"><div class="dlg-head"><h2 id="setTitle">Settings</h2><button class="btn small" type="button" id="setClose">Close</button></div><div class="dlg-body" id="setBody"><p class="muted">Loading…</p></div></dialog>
 <dialog id="callsDlg" aria-labelledby="callsTitle"><div class="dlg-head"><h2 id="callsTitle">Tokens, time and the call log</h2><button class="btn small" type="button" id="callsClose">Close</button></div><div class="dlg-body" id="callsBody"><p class="muted">Loading…</p></div></dialog>
 <div class="shell" id="shell">
@@ -772,8 +781,30 @@ function heroSide(st, needs) {
 const answerIn = secs => secs < 45 ? "The answer in under a minute" : `The answer in about ${secs < 90 ? "a minute" : `${Math.round(secs / 60)} min`}`;
 function needsList(needs) {
   const pill = s => s === "block" ? `<span class="pill bad">Blocking</span>` : s === "check" ? `<span class="pill warn">Check</span>` : `<span class="pill">Note</span>`;
-  return `<ul class="needs">${needs.map(x => `<li>${pill(x.severity)}<span class="t">${esc(x.title)}${x.kind_label ? `<span class="small muted" style="font-weight:400"> · ${esc(x.kind_label.toLowerCase())}</span>` : ""}</span>${x.retry ? `<button class="btn small" type="button" data-retry-stage="${esc(x.retry)}">Try again</button>` : `<button class="btn small" type="button" data-need="${esc(x.id)}">Go</button>`}${x.detail ? `<span class="d">${esc(x.detail)}</span>` : ""}</li>`).join("")}</ul>`;
+  const ackBtn = x => x.acked ? `<button class="btn small" type="button" data-unack="${esc(x.id)}" title="Take the acknowledgement back: the check holds again">Take back</button>`
+    : x.ack ? `<button class="btn small" type="button" data-ack="${esc(x.id)}" title="You've looked at it and it's right as it is: say why, and the value goes through with your reason recorded. If its figures change, it holds again.">Acknowledge…</button>` : "";
+  return `<ul class="needs">${needs.map(x => `<li>${pill(x.severity)}<span class="t">${esc(x.title)}${x.kind_label ? `<span class="small muted" style="font-weight:400"> · ${esc(x.kind_label.toLowerCase())}</span>` : ""}</span><span class="row" style="gap:6px;justify-content:flex-end">${x.retry ? `<button class="btn small" type="button" data-retry-stage="${esc(x.retry)}">Try again</button>` : `<button class="btn small" type="button" data-need="${esc(x.id)}">Go</button>`}${ackBtn(x)}</span>${x.detail ? `<span class="d">${esc(x.detail)}</span>` : ""}</li>`).join("")}</ul>`;
 }
+// a check a person acknowledges, with the reason (kept with it; it holds again if its figures change), or takes back
+function bindAcks(root) {
+  root.querySelectorAll("[data-ack]").forEach(b => b.onclick = e => { e.stopPropagation(); openAck(b.dataset.ack); });
+  root.querySelectorAll("[data-unack]").forEach(b => b.onclick = e => { e.stopPropagation();
+    act(() => api(`/api/engagements/${E.id}/ack/${encodeURIComponent(b.dataset.unack)}`, {method: "DELETE"})).then(() => toast("Taken back: the check holds again; the bridge runs again")); });
+}
+function openAck(id) {
+  const n = (E.run?.needs || []).find(x => x.id === id); if (!n) return;
+  state.needsOpen = false; nowHtml = ""; renderNow();
+  $("#ackWhat").textContent = n.title; $("#ackDetail").textContent = n.detail || ""; $("#ackWhy").value = ""; $("#ackGo").disabled = true;
+  $("#ackDlg").dataset.id = id; $("#ackDlg").showModal(); $("#ackWhy").focus();
+}
+$("#ackWhy").oninput = () => { $("#ackGo").disabled = !$("#ackWhy").value.trim(); };
+$("#ackCancel").onclick = () => $("#ackDlg").close();
+$("#ackGo").onclick = () => {
+  const id = $("#ackDlg").dataset.id, n = (E.run?.needs || []).find(x => x.id === id); if (!n) return;
+  $("#ackDlg").close();
+  act(() => api(`/api/engagements/${E.id}/ack`, {method: "POST", body: {id, key: n.ack, reason: $("#ackWhy").value, title: n.title}}))
+    .then(() => toast("Acknowledged with your reason: the bridge runs again"));
+};
 let nowHtml = "", said = "";
 function renderNow() {
   const box = $("#now");
@@ -815,6 +846,7 @@ function renderNow() {
   box.querySelectorAll("[data-need]").forEach(b => b.onclick = () => { state.needsOpen = false; nowHtml = ""; goNeed(b.dataset.need); });
   box.querySelectorAll("[data-retry-stage]").forEach(b => b.onclick = () => act(() => api(`/api/engagements/${E.id}/run/retry/${b.dataset.retryStage}`, {method: "POST"})));
   box.querySelectorAll("[data-needs-pop]").forEach(b => b.onclick = e => { e.stopPropagation(); state.needsOpen = !state.needsOpen; nowHtml = ""; renderNow(); });
+  bindAcks(box);
   box.querySelectorAll("[data-upload]").forEach(b => b.onclick = () => openUpload());
   box.querySelector("[data-go-bridge]")?.addEventListener("click", () => jumpTo("result", "bridgeCard"));
   // a screen reader hears when the run moves on, not every tick of the clock
@@ -834,6 +866,7 @@ const EVWORD = {start: "started", done: "done", attention: "done, look", blocked
 function bindNeeds() {
   document.querySelectorAll("main [data-need]").forEach(b => b.onclick = () => goNeed(b.dataset.need));
   document.querySelectorAll("main [data-retry-stage]").forEach(b => b.onclick = () => act(() => api(`/api/engagements/${E.id}/run/retry/${b.dataset.retryStage}`, {method: "POST"})));
+  const mainEl = document.querySelector("main"); if (mainEl) bindAcks(mainEl);
 }
 function logFold(n = 40) {
   const log = E.run?.log || [];
@@ -1557,26 +1590,32 @@ function viewResult() {
   const R = E.result, rs = stageOf("result");
   if (!R?.bridges) return `<div class="card empty">${busy(rs.status) ? `Working out the bridge: ${esc(rs.note || "")}` : "The bridge appears once last year is rebuilt and rolled forward."}</div>${mapFold()}`;
   const B = R.bridges, end = state.bridgeEnd, steps = (B[end] || B.mid).steps, u = B.units || R.head?.units || "";
+  const stale = E.result_stale ? `<div class="callout warn" style="margin-bottom:12px"><b>An earlier result</b>: the value bridge is ${esc(E.result_stale)}, so what's below isn't the current answer yet${busy(rs.status) ? "" : `. ${esc(rs.note || "")}`}. The workpaper waits for the current one.</div>` : "";
+  const acked = (E.run?.needs || []).filter(n => n.acked);
+  const ackedFold = acked.length ? fold("acked", "Checks you acknowledged", `${acked.length}, each with your reason`, needsList(acked), false, "ackedCard") : "";
   let run = 0;
   const rows = steps.map(x => { if (x.value == null) return ""; run = x.total ? x.value : run + x.value;
     return `<tr class="${x.total ? "tot" : ""}"><td class="${x.total ? "" : "step"}">${esc(x.label)}</td><td class="num">${x.total ? "" : signed(x.value)}</td><td class="num"><b>${vN(run)}</b></td></tr>`; }).join("");
   const tots = steps.filter(x => x.total && x.value != null), from = tots[0]?.value, to = tots[tots.length - 1]?.value;
-  return `<div class="card" id="bridgeCard"><div class="row" style="justify-content:space-between;align-items:flex-start">
+  return `${stale}<div class="card" id="bridgeCard"><div class="row" style="justify-content:space-between;align-items:flex-start">
       <div><h2>Last year to this year</h2><p class="sub" style="margin:0">${esc(u)} · equity value, ${R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution"} · ${rateNow(R)?.applied ? `at this year's discount rate, ${esc(rateRange(rateNow(R).low, rateNow(R).high))}` : "at last year's discount rate"}${B.valuation_date ? ` · to ${esc(B.valuation_date)}` : ""}${heldNote(R)}</p></div>
       <div class="row">${state.hl?.step ? hlNote(STEP_SHORT[state.hl.step] || state.hl.step) : ""}<a class="btn small" href="${workpaperUrl()}" download title="The result, the bridge, the cash flows, the inputs and their checks, the facts, the review and the run log, as an Excel file">Export workpaper</a><div class="seg" role="group" aria-label="Which end">${["low", "mid", "high"].map(k => `<button type="button" data-end="${k}" class="${end === k ? "on" : ""}" aria-pressed="${end === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div></div></div>
     ${from != null && to != null && !B.held ? `<div class="move"><span class="from">${vN(from)}</span><span class="muted">→</span><span class="to">${vN(to)}</span><span class="${to - from >= 0 ? "okt" : "warnt"}">${signed(to - from)}</span><span class="small muted">the ${end}${end === "mid" ? ", the midpoint of the low and the high" : ""}</span></div>` : ""}
-    ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until what's below is settled (rows to find, new terms to confirm): the bridge stops at last year's rebuilt value.</div>` : ""}
+    ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until what needs you is settled (rows to find, terms to confirm, cash flows to check): the bridge stops at last year's rebuilt value.</div>` : ""}
     <div class="grid2" style="margin-top:10px"><div id="brChart"></div><div class="scroll"><table class="bridge"><thead><tr><th>Step</th><th class="num">Change</th><th class="num">Value</th></tr></thead><tbody>${rows}</tbody></table>
     ${(B.notes || []).length ? `<p class="small muted">${esc(B.notes.join("; "))}</p>` : ""}</div></div></div>
+  ${ackedFold}
   ${rateCard(R)}
   ${methodsCard(R)}
   ${heldCard(R)}
   ${rowsCard(R)}
   ${termsCard(R)}
+  ${flowsCard(R)}
   ${linesCard(R)}
   ${scenarioCard(R)}
   <div class="card" id="cfCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">The forecast cash flows</h2>${state.hl?.years?.length ? hlNote(yearsText(state.hl.years)) : ""}</div><p class="sub">Undiscounted, by financial year, the terminal value left out${R.chart?.left_out?.length ? ` (${esc(R.chart.left_out.join(", "))})` : ""}: last year's model against this year's.</p>
-    ${R.chart?.years?.length ? `<div id="cfChart"></div>` : `<p class="muted small">${esc(R.chart?.why || "No cash flows found under the value.")}</p>`}</div>
+    ${R.chart?.years?.length ? `<div id="cfChart"></div>` : `<p class="muted small">${esc(R.chart?.why || "No cash flows found under the value.")}</p>`}
+    ${Object.values(R.chart?.undated || {}).some(n => n) ? `<p class="small muted">${Object.entries(R.chart.undated).filter(([, n]) => n).map(([k, n]) => `${n} period(s) of ${k === "last_year" ? "last" : "this"} year's had no usable date and aren't on the chart`).join("; ")}.</p>` : ""}</div>
   ${reviewCard()}
   ${mapFold()}`;
 }
@@ -1685,6 +1724,44 @@ function rowsCard(R) {
 }
 // Cash-flow lines this year's model has and last year's didn't (or had nothing in), on the sheets the overlay reads:
 // the roll leaves them out, so they're a point to check, not a hold. Figures in this year's model's units.
+// This year's cash flows against last year's, discounting by discounting (cashflows.py): how each is built and whether
+// the app cuts it off and time-checks it on the roll, the bridge's new-forecast step split into what moved, the checks.
+function flowsCard(R) {
+  const F = R.flows; if (!F?.cores?.length) return F?.error ? `<div class="card" id="flowsCard"><h2>This year's cash flows against last year's</h2><p class="small muted">The comparison couldn't run: ${esc(F.error)}</p></div>` : "";
+  const S = R.flow_checks?.split || {}, end = state.bridgeEnd;
+  const both = S.low && S.high && !S.low.why && !S.high.why;
+  const sp = end === "mid" ? (both ? Object.fromEntries(Object.keys(S.low).map(k => [k, S.low[k] == null || S.high[k] == null ? null : (S.low[k] + S.high[k]) / 2])) : null) : S[end];
+  const ns = (E.run?.needs || []).filter(n => n.id.startsWith("cf-")), open = ns.filter(n => n.severity !== "info");
+  const pillH = open.some(n => n.severity === "block") ? `<span class="pill bad">held</span>` : open.length ? `<span class="pill warn">${open.length} to check</span>` : `<span class="pill ok">this year's model reaches the value</span>`;
+  const core = c => `<tr><td><b>${esc(c.label || c.cell)}</b> <span class="mono small muted">${esc(c.cell)}</span>${c.why ? `<div class="small muted">${esc(c.why)}</div>` : ""}</td>
+    <td>${esc(c.form?.function || "")}</td><td class="small">${esc(c.form?.convention || "")}</td>
+    <td>${c.form?.recomputed ? `<span class="pill ok" title="The app works out its factors on any date: it cuts off the periods to the new date and checks the roll moves it on by its rate">${esc(c.form.rolled)}</span>` : `<span class="pill warn" title="The app can't work out its factors on another date, so it neither cuts off the periods to the new date nor checks the time moved: the overlay's own formulas roll it">${esc(c.form?.rolled || "not read")}</span>`}</td>
+    <td class="num">${vN(c.last?.pv)}</td><td class="num">${vN(c.this?.pv)}</td></tr>`;
+  const line = (k, label, tip) => sp && sp[k] != null ? `<tr title="${esc(tip)}"><td class="step">${label}</td><td class="num">${signed(sp[k])}</td></tr>` : "";
+  const split = sp && !sp.why ? `<h3 style="font-size:14px;margin:14px 0 4px">The new-forecast step, split (${esc(end)})</h3><table class="bridge"><tbody>
+      <tr class="tot"><td>New-forecast step on the bridge</td><td class="num"><b>${signed(sp.step)}</b></td></tr>
+      ${line("revised", "Revisions to the periods both years have", "this year's cash flow less last year's, period by period, discounted at this year's factor and last year's rate")}
+      ${line("added", "Periods added at the end", "periods this year's model discounts that last year's didn't")}
+      ${line("dropped", "Periods dropped", "periods last year's discounted, after the new date, that this year's doesn't")}
+      ${line("terminal", "The terminal value", "the change in the terminal value's part of the cash flows, discounted")}
+      ${line("convention", "Convention", "what the period-by-period sum doesn't account for in the discountings themselves (a first period's mid-point, say)")}
+      ${line("outside", "Outside the discountings", "what moves the value that isn't the discounted cash flows: an input this year's model feeds outside them, or a roll the cash flows don't explain")}
+    </tbody></table>` : sp?.why ? `<p class="small muted">${esc(sp.why)}</p>` : "";
+  const main = F.cores.find(c => c.last && c.this);
+  let per = "";
+  if (main) {
+    const es = [...new Set([...Object.keys(main.last.periods), ...Object.keys(main.this.periods)])].sort().filter(e => !F.vd0 || e > F.vd0);
+    per = fold("cf-periods", `Period by period: ${esc(main.label || main.cell)}`, `${es.length} periods, last year's and this year's`,
+      `<div class="scroll"><table class="stack-sm"><thead><tr><th>Period ending</th><th class="num">Last year</th><th class="num">This year</th><th class="num">Change</th></tr></thead><tbody>${es.map(e => { const a = main.last.periods[e], b = main.this.periods[e];
+        const same = a && b && Math.abs(a.cf - b.cf) < 1e-9 * Math.max(1, Math.abs(a.cf));
+        return `<tr${same && (!F.vd1 || e > F.vd1) ? ` class="muted" title="the same as last year's"` : ""}><td class="small">${esc(e)}${F.vd1 && e <= F.vd1 ? ` <span class="small muted">(to the new date)</span>` : ""}</td><td class="num">${a ? vN(a.cf) : "–"}</td><td class="num">${b ? vN(b.cf) : "–"}</td><td class="num">${a && b ? signed(b.cf - a.cf) : "–"}</td></tr>`; }).join("")}</tbody></table></div>`);
+  }
+  return `<div class="card" id="flowsCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">This year's cash flows against last year's</h2>${pillH}</div>
+    <p class="sub">Each discounting under the value, as last year's model gives it and as this year's does (at last year's rate), compared period by period: that this year's revisions reach the value, that the forecast step is the cash flows' change, and that this year's forecast and the overlay's columns end together.</p>
+    ${ns.length ? needsList(ns) : ""}
+    <div class="scroll" style="margin-top:8px"><table class="stack-sm"><thead><tr><th>Discounting</th><th>Function</th><th>Convention</th><th>On the roll</th><th class="num">Last year PV</th><th class="num">This year PV</th></tr></thead><tbody>${F.cores.map(core).join("")}</tbody></table></div>
+    ${split}${per}</div>`;
+}
 function linesCard(R) {
   const L = R.figures?.gaps?.new_lines; if (!L?.length) return "";
   const row = x => `<tr><td><b>${esc(x.label)}</b> <span class="mono small muted">${esc(x.row)}</span><div class="small muted">${esc(x.why || "")}</div></td>
@@ -2129,7 +2206,8 @@ function bindGlobal() {
   if (keys.length) $("#cmpBridgeChart")?.append(chartCard({title: "What moved the value: the mid's steps", kind: "bar", units: u, labels: keys.map(k => STEP_SHORT[k] || k),
     series: [{name: A.name, data: keys.map(k => SA[k] ?? null)}, {name: B.name, data: keys.map(k => SB[k] ?? null)}]}));
   const fy = X => X.result?.chart?.series?.this_year || {}, FA = fy(A), FB = fy(B);
-  const years = [...new Set([...Object.keys(FA), ...Object.keys(FB)])].sort((a, b) => (+a.replace(/\D/g, "") || 0) - (+b.replace(/\D/g, "") || 0));
+  const fyN = y => { const n = +String(y).replace(/\D/g, "") || 0; return n < 100 ? 2000 + n : n; };  // FY26 (older results) = FY2026
+  const years = [...new Set([...Object.keys(FA), ...Object.keys(FB)])].sort((a, b) => fyN(a) - fyN(b));
   if (years.length) $("#cmpFlowsChart")?.append(chartCard({title: "This year's forecast cash flows", kind: "line", units: u, labels: years, period_labels: years, frequency: "annual", sign: 1,
     series: [{name: A.name, data: years.map(y => FA[y] ?? null)}, {name: B.name, data: years.map(y => FB[y] ?? null)}]}));
   else $("#cmpFlowsChart")?.insertAdjacentHTML("beforeend", `<p class="small muted">Neither has this year's cash flows yet.</p>`);

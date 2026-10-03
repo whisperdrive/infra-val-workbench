@@ -532,18 +532,39 @@ def _review(S: _Sheet, review: dict):
                           "end, and said what looks wrong.", 6)
     if not review["ran"]:
         S.text("Not reviewed yet.", f["muted"], 6)
-        return
-    if review["said"]:
+    elif review["said"]:
         S.text(review["said"], f["wrap"], 6, height=45 if len(review["said"]) > 200 else None)
         S.gap()
-    if not review["points"]:
+    if review["ran"] and not review["points"]:
         S.text("No concerns.", f["wrap"], 6)
-        return
-    S.header("#", "Kind", "Point", "Detail", "Years", "Bridge step")
-    for i, p in enumerate(review["points"], 1):
-        S.line(i, "a note" if p.get("severity") == "info" else "to check", p.get("title") or "", p.get("detail") or "",
-               ", ".join(p.get("years") or []), STEP_SHORT.get(p.get("step"), p.get("step") or ""),
-               fs=[None, None, f["bwrap"], f["wrap"], f["wrap"], None], height=15 * max(1, len(p.get("detail") or "") // 70 + 1))
+    elif review["points"]:
+        S.header("#", "Kind", "Point", "Detail", "Years", "Bridge step")
+        for i, p in enumerate(review["points"], 1):
+            S.line(i, "a note" if p.get("severity") == "info" else "to check", p.get("title") or "", p.get("detail") or "",
+                   ", ".join(p.get("years") or []), STEP_SHORT.get(p.get("step"), p.get("step") or ""),
+                   fs=[None, None, f["bwrap"], f["wrap"], f["wrap"], None], height=15 * max(1, len(p.get("detail") or "") // 70 + 1))
+    # the checks a person acknowledged, with the reason, and those still open: part of the workpaper's record
+    S.gap()
+    S.text("Checks acknowledged by a person", f["bwrap"], 6)
+    if review["acked"]:
+        S.header("#", "By", "Check", "Reason", "When", "")
+        for i, n in enumerate(review["acked"], 1):
+            a = n.get("acked") or {}
+            S.line(i, a.get("by") or "you", re.sub(r"^Acknowledged: ", "", n.get("title") or ""), a.get("reason") or "",
+                   when(a.get("at")), "", fs=[None, None, f["bwrap"], f["wrap"], None, None],
+                   height=15 * max(1, len(a.get("reason") or "") // 70 + 1))
+    else:
+        S.text("None.", f["muted"], 6)
+    S.gap()
+    S.text("Checks still open", f["bwrap"], 6)
+    if review["open"]:
+        S.header("#", "Kind", "Check", "Detail", "", "")
+        for i, n in enumerate(review["open"], 1):
+            S.line(i, "holds the value" if n.get("severity") == "block" else "to check", n.get("title") or "",
+                   n.get("detail") or "", "", "", fs=[None, None, f["bwrap"], f["wrap"], None, None],
+                   height=15 * max(1, len(n.get("detail") or "") // 70 + 1))
+    else:
+        S.text("None.", f["muted"], 6)
 
 
 def _log(S: _Sheet, eid: int):
@@ -565,13 +586,17 @@ def _review_of(g: dict) -> dict:
     rv = next((h for h in run.get("log") or [] if h.get("stage") == "review" and h.get("event") == "decide"), None)
     said = re.sub(r"^[\w.\-]+:\s*(ok|concerns)\s*[—–-]\s*", "", (rv or {}).get("text") or "", flags=re.I)
     st = next((s for s in run.get("stages") or [] if s.get("stage") == "review"), {})
-    return {"points": points, "said": said, "ran": bool(rv) or st.get("status") in ("done", "attention")}
+    needs = run.get("needs") or []
+    return {"points": points, "said": said, "ran": bool(rv) or st.get("status") in ("done", "attention"),
+            "acked": [n for n in needs if n.get("acked")],
+            "open": [n for n in needs if n.get("stage") != "review" and n.get("severity") in ("block", "check")]}
 
 
 # ---- all of it ----------------------------------------------------------------------------------------------------
 
 def ready(g: dict | None) -> bool:
-    return bool(g and (g.get("result") or {}).get("bridges"))
+    """The bridge is worked out, on the inputs as they are now (not an earlier result shown while it runs again)."""
+    return bool(g and (g.get("result") or {}).get("bridges") and not g.get("result_stale"))
 
 
 def filename(g: dict) -> str:

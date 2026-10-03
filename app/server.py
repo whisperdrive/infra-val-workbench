@@ -232,6 +232,30 @@ async def workpaper_xlsx(eid: int):
                     headers={"Content-Disposition": f'attachment; filename="{workpaper.filename(g)}"', **FRESH})
 
 
+class Ack(BaseModel):
+    id: str
+    key: str
+    reason: str = ""
+    title: str = ""
+
+
+@app.post("/api/engagements/{eid}/ack")
+async def ack_need(eid: int, body: Ack):
+    """Acknowledge a check on the figures it found, with a reason: a hold then lets this year's value through, marked."""
+    if not body.reason.strip():
+        raise HTTPException(400, "say why: the reason is kept with the acknowledgement")
+    out = await _run(workbench.acknowledge, eid, body.id, body.key, body.reason[:600], body.title[:300])
+    orchestrator.person(eid, "result", f"acknowledged {body.id}: {body.reason.strip()[:200]}")
+    return out
+
+
+@app.delete("/api/engagements/{eid}/ack/{nid}")
+async def unack_need(eid: int, nid: str):
+    out = await _run(workbench.acknowledge, eid, nid, None)
+    orchestrator.person(eid, "result", f"took back the acknowledgement of {nid}")
+    return out
+
+
 class Held(BaseModel):
     cell: str
     value: float | None = None

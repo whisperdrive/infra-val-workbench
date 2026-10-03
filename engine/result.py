@@ -14,7 +14,13 @@
            zero-roll check holds): otherwise the rows to find are listed, and there's no this-year value yet; and
            the cash-flow lines this year's model has that the overlay doesn't read, to check (they don't hold it)
 Every figure is shown in the report's units (the match to the report says how the overlay's units compare).
+
+A check that holds this year's value back is a hold (hold()): its id, a key from the figures it found, and what it
+says. A person can acknowledge it with a reason (workbench.acknowledge); the acknowledgement is keyed by the figures,
+so it lapses by itself when they change.
 """
+import hashlib
+import json
 import re
 from collections import Counter
 from datetime import date
@@ -40,6 +46,34 @@ FLOW_WORDS = re.compile(r"equity|injection|contribution|distribution|dividend|ca
 NOT_A_FLOW = re.compile(r"cost of|return on|\birr\b|\brates?\b|ratio|%|gearing|\bbeta\b|premium|multiple|yield|"
                         r"margin|\bflags?\b|factor", re.I)
 PV_WORDS = re.compile(r"\bn?pv\b|present value|discounted", re.I)
+VERSION = 2  # the result's rules: a result worked out by older rules is worked out again (the stage's inputs)
+
+
+def fingerprint(obj) -> str:
+    """A short key for the figures a check found (rounded, so a rerun's float noise doesn't change it)."""
+    def rnd(x):
+        if isinstance(x, float):
+            return float(f"{x:.6g}")
+        if isinstance(x, dict):
+            return {k: rnd(v) for k, v in x.items()}
+        if isinstance(x, (list, tuple)):
+            return [rnd(v) for v in x]
+        return x
+    return hashlib.sha1(json.dumps(rnd(obj), sort_keys=True, default=str).encode()).hexdigest()[:12]
+
+
+def hold(summary: dict, hid: str, figures, title: str, detail: str, severity: str = "block", **more) -> dict:
+    """A check's finding: {"id", "key", "title", "detail", "severity", "acked"}. A "block" holds this year's value back
+    unless a person acknowledged this id on these figures (summary["acks"]); a "check" is a point to look at."""
+    key = fingerprint(figures)
+    ack = (summary.get("acks") or {}).get(hid)
+    acked = ack if ack and ack.get("key") == key else None
+    return {"id": hid, "key": key, "title": title, "detail": detail, "severity": severity, "acked": acked, **more}
+
+
+def holding(holds: list[dict]) -> bool:
+    """Whether any of these findings holds the value back (a block nobody acknowledged)."""
+    return any(h["severity"] == "block" and not h.get("acked") for h in holds)
 
 
 # ---- where the report's equity value is in the overlay ------------------------------------------------------------
@@ -149,6 +183,10 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
             out["gaps"]["time_off"] = [x for x in out["time"]["discountings"] if abs(x["off"]) > TIME_HOLD]
         got, out["roll"], _, _ = _read(sess, summary, "current", keys)
         out["this_year"] = {c: ov._show(got[k]) for c, k in zip(cells, keys)}
+        # last year's figures standing in on this year's feed, and the periods past this year's forecast (read nil)
+        out["feed"] = {"stood_in": [{"row": f"{s_}!r{r_}", "col": c_, "value": float(v)}
+                                    for (s_, r_, c_), v in sess.stood_in.items() if isinstance(v, (int, float))],
+                       "beyond": [{"row": f"{s_}!r{r_}", "col": c_, "why": str(w)} for (s_, r_, c_), w in sess.beyond.items()]}
         out["cut_off"] = len(sess.cut)  # the discountings' periods before the new date, cut off on this year's feed
         if summary.get("rate_values"):
             got, _, _, _ = _read(sess, summary, "current", keys, rates=False)  # at last year's rate: the rate's own step
@@ -794,10 +832,11 @@ def _need(db, t: dict, cs: list[dict]) -> set[tuple]:
     return need
 
 
-def _patched(sess, summary: dict, db, feed: str, need: set, roll: dict | None = None):
-    """The overlay's model.db with the module's values on a feed in place (dcf.py and dcftrace read a model.db)."""
+def _patched(sess, summary: dict, db, feed: str, need: set, roll: dict | None = None, rates: bool = True):
+    """The overlay's model.db with the module's values on a feed in place (dcf.py and dcftrace read a model.db).
+    rates=False: this year's feed at last year's discount rate (where a person set this year's)."""
     if feed == "current":
-        defaults, _, months = ov._feed(summary, "current", None, None)
+        defaults, _, months = ov._feed(summary, "current", None, None, rates=rates)
         sess.configure("current", defaults, months or 0)
     else:
         sess.configure(feed)
@@ -910,9 +949,13 @@ def bridges(sess, summary: dict, head: dict, where: dict, figs: dict) -> dict:
 
 # ---- the cash-flow chart ------------------------------------------------------------------------------------------
 
+def fy_year(d: date, end_month: int) -> int:
+    """The financial year a period ending on d falls in (the year it ends in), as a four-digit year."""
+    return d.year if d.month <= end_month else d.year + 1
+
+
 def _fy(d: date, end_month: int) -> str:
-    y = d.year if d.month <= end_month else d.year + 1
-    return f"FY{y % 100:02d}"
+    return f"FY{fy_year(d, end_month)}"
 
 
 def _tv_parts(core: dict) -> list[dict]:
@@ -972,7 +1015,7 @@ def chart(sess, summary: dict, where: dict, figs: dict, fy_end: int) -> dict:
     inputs = {**main["inputs"], "cashflow": ranges}
     need = ov._dcf_cells(db, inputs)
     unit = lambda v: v / (where["scale"] or 1.0) * (where["sign"] or 1)
-    series = {}
+    series, dropped = {}, {}
     for key, feed, vd in (("last_year", figs["feeds"]["rebuilt"], (summary.get("roll") or {}).get("prior_valuation_date")),
                           ("this_year", "current" if figs.get("this_year") else None, (figs.get("roll") or {}).get("valuation_date"))):
         if not feed:
@@ -980,17 +1023,20 @@ def chart(sess, summary: dict, where: dict, figs: dict, fy_end: int) -> dict:
         pdb = _patched(sess, summary, db, feed, need)
         flows, ends = ov._flows(pdb, inputs)
         vd_d = date.fromisoformat(vd[:10]) if vd else None
-        by_fy = {}
+        by_fy, undated = {}, 0
         for c, v in flows.items():
             e = ends.get(c)
             e = e if isinstance(e, date) else None
-            if e is None or (vd_d and e <= vd_d):
+            if e is None or e.year < 1950:  # no usable period date (a year number or a serial read as one)
+                undated += 1 if v else 0
                 continue
-            by_fy.setdefault(_fy(e, fy_end), [e, 0.0])
-            by_fy[_fy(e, fy_end)][1] += v
-        series[key] = {k: unit(v) for k, (_, v) in sorted(by_fy.items(), key=lambda kv: kv[1][0])}
-    years = sorted({y for s in series.values() for y in s}, key=lambda y: int(y[2:]) + (100 if int(y[2:]) < 50 else 0))
-    return {"years": years, "series": series, "rows": ranges, "left_out": left_out, "core": main["cell"],
+            if vd_d and e <= vd_d:
+                continue
+            by_fy[fy_year(e, fy_end)] = by_fy.get(fy_year(e, fy_end), 0.0) + v
+        series[key] = {f"FY{y}": unit(v) for y, v in sorted(by_fy.items())}
+        dropped[key] = undated
+    years = [f"FY{y}" for y in sorted({int(y[2:]) for s in series.values() for y in s})]
+    return {"years": years, "series": series, "rows": ranges, "left_out": left_out, "core": main["cell"], "undated": dropped,
             "label": next((p.get("label") for p in (main.get("parts") or []) if p.get("label") not in left_out), None),
             "held": bool(figs.get("gaps") and not figs["gaps"]["reliable"]), "units": None}
 
@@ -1315,6 +1361,21 @@ def held_list(sess, summary: dict, where: dict, figs: dict) -> list[dict]:
 
 # ---- all of it --------------------------------------------------------------------------------------------------
 
+def _flows_public(fl: dict, unit) -> dict:
+    """The cash-flow layer as the page and the workpaper show it: per discounting, its form, and per period the cash
+    flow last year and this year (the report's units), without the trace trees."""
+    out = []
+    for c in fl.get("cores") or []:
+        x = {k: c.get(k) for k in ("cell", "kind", "what", "label", "ends", "form", "why", "tv_rows")}
+        for key in ("last", "rolled", "this"):
+            if c.get(key):
+                x[key] = {**{k: v for k, v in c[key].items() if k != "periods"}, "pv": unit(c[key].get("pv")),
+                          "periods": {e: {"cf": unit(p["cf"]), "tv": unit(p["tv"]), "factor": p["factor"]}
+                                      for e, p in c[key]["periods"].items()}}
+        out.append(x)
+    return {"cores": out, "vd0": fl.get("vd0"), "vd1": fl.get("vd1"), "error": fl.get("error")}
+
+
 def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, override: dict | None = None) -> dict:
     """The workbench's result, or {"stop": why, ...} where it can't go on (the orchestrator decides what next)."""
     head = keyfacts.conclusion(facts, markdown)
@@ -1339,6 +1400,19 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
         else:
             head["low"] = head["high"] = head["mid"] = head["other"]["value"]
     unit = lambda v: v / (where["scale"] or 1.0) * (where["sign"] or 1) if isinstance(v, float) else None
+    import cashflows
+    try:  # this year's cash flows against last year's, period by period, and the checks on them
+        fl = ov.deep(cashflows.layer, sess, summary, where, figs)
+        cfc = ov.deep(cashflows.checks, sess, summary, where, figs, fl, unit)
+    except Exception as ex:  # beside the value: but the checks not running is itself a point to check
+        fl, cfc = {"cores": [], "error": f"{type(ex).__name__}: {ex}"}, {"holds": [hold(
+            summary, "cf-error", [type(ex).__name__], "The cash-flow checks couldn't run",
+            f"{type(ex).__name__}: {ex}: this year's cash flows weren't compared with last year's", severity="check")],
+            "split": {}}
+    if figs.get("gaps") is not None:
+        figs["gaps"]["holds"] = cfc["holds"]
+        if holding(cfc["holds"]):
+            figs["gaps"]["reliable"] = False
     tie = {}
     for end in ("low", "high"):
         text = head["texts"].get(f"{end}_text") or head["texts"].get("value_text")
@@ -1352,7 +1426,10 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
         rec = ov.deep(reconcile, sess, summary, where, facts, figs)
     except Exception as ex:  # the reconciliation is beside the value, not in its way
         rec = {"rows": [], "error": f"{type(ex).__name__}: {ex}"}
-    ch = ov.deep(chart, sess, summary, where, figs, fy_end)
+    try:
+        ch = ov.deep(chart, sess, summary, where, figs, fy_end)
+    except Exception as ex:  # the chart is beside the value, not in its way
+        ch = {"why": f"couldn't draw the cash flows: {type(ex).__name__}: {ex}"}
     this = {e: unit((figs.get("this_year") or {}).get(where[e])) for e in ("low", "high")} if figs.get("this_year") else None
     with rodb.connect(summary["wiring"]["overlay"]["db_path"]) as db:
         traced = {e: (_traced(db, where[e]) or (None, []))[1] for e in ("low", "high")}
@@ -1377,6 +1454,7 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
             inv = {"methods": [], "default": methods.DEFAULT, "preferred": methods.DEFAULT, "asked": summary.get("method"),
                    "error": f"{type(ex).__name__}: {ex}"}
     return {"head": head, "where": where, "tie": tie, "figures": figs, "bridges": br, "chart": ch, "reconcile": rec,
+            "flows": _flows_public(fl, unit), "flow_checks": {"split": cfc.get("split") or {}, "rows": cfc.get("rows")},
             "assumptions": asm, "inputs": inputs, "held": held_inputs, "terminal": terminal, "methods": inv,
             "scenario": scenario,
             "values": {"report": {e: head[e] for e in ("low", "mid", "high")},

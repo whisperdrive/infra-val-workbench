@@ -151,8 +151,15 @@ def inputs(eid: int, name: str, snap: dict, holds: bool = True) -> str:
            _file_state(wb.held_file(eid)),  # this year's figures a person set for held inputs
            _file_state(wb.rate_file(eid)),  # and this year's discount rate
            _file_state(wb.method_file(eid)),  # and the method this year's value is worked out by
-           _file_state(wb.terms_file(eid))]  # and the new terms a person confirmed belong in it
+           _file_state(wb.terms_file(eid)),  # and the new terms a person confirmed belong in it
+           _file_state(wb.acks_file(eid)),  # and the checks a person acknowledged, with the reason
+           _result_version()]  # and the result's rules: a result worked out by older rules is worked out again
     return _h(res) if name == "result" else _h(["review", result_digest(eid)])
+
+
+def _result_version() -> int:
+    import result
+    return result.VERSION
 
 
 REVIEWED = ("head", "where", "tie", "values", "bridges", "chart", "reconcile", "inputs", "assumptions")
@@ -745,6 +752,24 @@ def _term_text(x: dict, how: str) -> str:
                                                         if x.get("now") else " (last year's)" if how != "in" else ""))
 
 
+def _acked(n: dict, key: str, ack: dict | None) -> dict:
+    """A need a person can acknowledge with a reason (key: the figures it found). Acknowledged on these figures, it
+    stays on the list as a note with the reason; on other figures it stands again."""
+    n = {**n, "ack": key}
+    if ack and ack.get("key") == key:
+        when = time.strftime("%d %B %Y", time.localtime(ack.get("at") or time.time())).lstrip("0")
+        n.update(severity="info", acked=ack, title="Acknowledged: " + n["title"],
+                 detail=(n.get("detail") or "") + f" — acknowledged by {ack.get('by') or 'you'} on {when}"
+                        + (f": {ack['reason']}" if ack.get("reason") else ""))
+    return n
+
+
+def _need_of(h: dict, go: dict, stage_: str = "result", **more) -> dict:
+    """A check's finding (result.hold) as a need: blocks hold the value back until acknowledged."""
+    return _acked({"id": h["id"], "stage": stage_, "severity": h["severity"], "title": h["title"],
+                   "detail": h["detail"], "go": go, **more}, h["key"], h.get("acked"))
+
+
 def _result_job(eid: int, key: str):
     import overlay as ovmod
     import result
@@ -756,10 +781,14 @@ def _result_job(eid: int, key: str):
     if res.get("stop"):
         return "blocked", res["why"], {"needs": [{"id": "equity", "stage": "result", "severity": "block",
                                                   "title": res["why"], "go": {"step": "rebuild", "anchor": "equityPick"}}]}
+    res["inputs_key"] = key  # the inputs it was worked out on: shown as stale when they change
     wb._set("engagements", eid, result_json=json.dumps(res, default=str), updated_at=time.time())
     needs = []
     g = res["figures"].get("gaps")
     dc = (g or {}).get("date_cells") or {}
+    for h in (g or {}).get("holds") or []:  # this year's cash flows against last year's (cashflows.py)
+        needs.append(_need_of(h, {"step": "result", "anchor": "flowsCard" if not h["id"].startswith("cf-split")
+                                  and not h["id"].startswith("cf-sign") else "bridgeCard"}))
     if g and not g["reliable"]:
         if g.get("no_reads"):
             needs.append({"id": "no-reads", "stage": "result", "severity": "block",
@@ -966,7 +995,7 @@ times the discount rate over the years between the dates; the cash flows paid ab
 flow), a figure that doesn't tie, a key fact that doesn't fit the model, a date that doesn't follow, a cash flow profile
 that jumps. Be specific and brief. choice: "ok" if nothing needs a person, else "concerns", with each concern in
 concerns (title, detail, severity: "check" for something a person should look at, "info" for a note; years: the
-financial years it's about, as cash_flows_by_year labels them (FY45), else empty; step: the bridge step it's about,
+financial years it's about, as cash_flows_by_year labels them (FY2045), else empty; step: the bridge step it's about,
 one of {steps}, else "").
 
 How the bridge is built, so you don't flag what follows from it: the primary approach discounts cash flows to equity
@@ -1081,7 +1110,7 @@ KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact"
          ("rate-", "check-input", "A model input to check"), ("growth-", "check-input", "A model input to check"),
          ("franking-", "check-input", "A model input to check"), ("tie-", "check-tie", "A tie to check"),
          ("review-", "review-point", "A review point"), ("failed-", "retry", "A step that failed"),
-         ("method", "check-method", "A method to check"))
+         ("method", "check-method", "A method to check"), ("cf-", "check-flows", "Cash flows to check"))
 
 
 def dress(n: dict) -> dict:

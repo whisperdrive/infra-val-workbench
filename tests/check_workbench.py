@@ -187,7 +187,7 @@ def fake_create(client, model, input, text=None, max_output_tokens=None, purpose
     if name == "run_review":  # one point, about two years the chart has and one it doesn't, and a bridge step
         return Reply({"choice": "concerns", "reason": "one note", "question": "", "concerns": [
             {"title": "Terminal-year cash flow", "detail": "the new final year's cash flow jumps", "severity": "info",
-             "years": ["FY45", "FY46", "FY99"], "step": "forecast"}]})
+             "years": ["FY2045", "FY2046", "FY2099"], "step": "forecast"}]})
     if name == "test_decision":
         return Reply({"choice": "pick", "reason": "test", "question": ""})
     if name == "row_action":  # the row agents, at their most careful: this year's model has no such row
@@ -314,7 +314,15 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     ch = res["chart"]
     assert ch["left_out"] == ["Terminal value"] and len(ch["series"]["last_year"]) == 20 and \
         len(ch["series"]["this_year"]) == 20, ch
-    assert list(ch["series"]["last_year"])[0] == "FY26" and list(ch["series"]["this_year"])[0] == "FY27"
+    assert list(ch["series"]["last_year"])[0] == "FY2026" and list(ch["series"]["this_year"])[0] == "FY2027", ch["years"]
+    assert ch["years"] == sorted(ch["years"]) and ch["years"][-1] == "FY2046", ch["years"]  # past 2049 sorts in order too
+    # this year's cash flows against last year's: every discounting read period by period, the step split
+    fl = res["flows"]
+    assert fl["cores"] and all(c.get("last") and c.get("this") and c["form"]["recomputed"] for c in fl["cores"]), fl["cores"]
+    sp = res["flow_checks"]["split"]
+    assert set(sp) == {"low", "high"} and all(abs(s["outside"]) < 0.005 * 2507.9 for s in sp.values()), sp
+    fc = [n for n in res["figures"]["gaps"]["holds"] if n["severity"] == "block"]
+    assert not fc and res["flow_checks"]["rows"]["changed"] > 0, (fc, res["flow_checks"]["rows"])
     rate = next(f for f in e["facts"] if f["key"] == "discount_rate")
     if files == PACK_A:  # read from the picture, the swap put right on the image, and the picture's table read
         assert (rate["low_text"], rate["high_text"]) == ("7.25%", "7.75%") and rate["visual"]["status"] == "corrected", rate
@@ -361,7 +369,7 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     # against the run (a year the chart doesn't have is dropped)
     assert all(n.get("kind") and (n["kind"] == "retry" or n["go"].get("anchor")) for n in view["needs"]), view["needs"]
     rp = next(n for n in view["needs"] if n["id"] == "review-0")
-    assert (rp["kind"], rp["years"], rp["step"], rp["go"]["anchor"]) == ("review-point", ["FY45", "FY46"], "forecast", "review-0"), rp
+    assert (rp["kind"], rp["years"], rp["step"], rp["go"]["anchor"]) == ("review-point", ["FY2045", "FY2046"], "forecast", "review-0"), rp
     # how long each stage took, so the page can say how long is left
     took = {x["stage"]: x["typical_secs"] for x in view["stages"]}
     assert all(took[k] is not None for k in ("facts", "roles", "rebuild", "rows", "result", "review")), took
@@ -1061,7 +1069,7 @@ def workpaper_check(eid: int) -> None:
     assert tot and abs(tot[-1][2] - res["values"]["this_year"]["mid"]) < 0.05, (tot, res["values"]["this_year"])
     assert not any(re.search(r"\b\d{4}-\d{2}-\d{2}\b", str(c)) for r in cells("Bridge") + cells("Summary") for c in r if c), \
         "a date left as ISO"
-    fy = [r for r in cells("Cash flows") if isinstance(r[0], str) and re.fullmatch(r"FY\d{2}", r[0])]
+    fy = [r for r in cells("Cash flows") if isinstance(r[0], str) and re.fullmatch(r"FY\d{4}", r[0])]
     assert len(fy) == len(res["chart"]["years"]) == 21, len(fy)
     assert any(c and str(c).startswith(workpaper.DISCLAIMER[:40]) for r in cells("Summary") for c in r), "no disclaimer"
     assert not any(re.match(r"gpt-", str(r[3] or "")) for r in cells("Run log")), "a model's name in the log's copy"

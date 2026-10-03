@@ -258,6 +258,23 @@ def roles(eid: int) -> dict:
     return out
 
 
+def result_stale(eid: int, res: dict | None) -> str | None:
+    """Why the saved result isn't the current one, or None: the value bridge is running again, waiting, or failed or
+    held on its last run (the result shown is an earlier one), or it was worked out on other inputs."""
+    if not res:
+        return None
+    import orchestrator
+    rec = orchestrator.stage(eid, "result")
+    st = rec["status"]
+    if st in orchestrator.MOVING or st == "waiting":
+        return "being worked out again"
+    if st in ("failed", "blocked") and res.get("inputs_key") != rec["inputs"]:
+        return "its last run didn't finish"
+    if res.get("inputs_key") and rec["inputs"] and res["inputs_key"] != rec["inputs"]:
+        return "worked out on earlier inputs"
+    return None
+
+
 def get(eid: int) -> dict | None:
     rows = _q("SELECT * FROM engagements WHERE id=?", eid)
     if not rows:
@@ -276,6 +293,7 @@ def get(eid: int) -> dict | None:
         w["identity_why"] = conf.get("why") or []
         w["identity_check"] = ident.get("auto_check")  # the agents' check of the date, where it didn't confirm
     import orchestrator  # what runs, and what it's waiting for: the orchestrator's view (reading it starts nothing)
+    e["result_stale"] = result_stale(eid, e.get("result"))
     rl = roles(eid)
     terminal = terminal_view(eid, rl)
     return {**e, "documents": documents(eid), "workbooks": wbs, "facts": facts(eid), "roles": rl,
@@ -1224,6 +1242,36 @@ def confirm_term(eid: int, row: str, ok: bool, label: str | None = None) -> dict
     return {"row": row, "confirmed": ok, "label": label or ""}
 
 
+def acks_file(eid: int) -> Path:
+    return OUT / "overlays" / f"e{eid}" / "acks.json"
+
+
+def acks(eid: int) -> dict:
+    """The checks a person acknowledged, each on the figures it found: {id: {"key", "reason", "title", "by", "at"}}.
+    A hold acknowledged lets this year's value through, marked; on other figures it holds again."""
+    try:
+        got = json.loads(acks_file(eid).read_text(encoding="utf-8"))
+        return got if isinstance(got, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def acknowledge(eid: int, nid: str, key: str | None, reason: str = "", title: str = "") -> dict:
+    """Acknowledge a check on the figures it found (key), with the reason; key None takes it back."""
+    got = acks(eid)
+    if key:
+        got[nid] = {"key": key, "reason": reason.strip(), "title": title, "by": "you", "at": time.time()}
+    else:
+        got.pop(nid, None)
+    f = acks_file(eid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(got), encoding="utf-8")
+    if eid in _SESSIONS:
+        _SESSIONS[eid][1]["acks"] = got
+    _touch(eid)
+    return {"id": nid, "acknowledged": bool(key)}
+
+
 def method_file(eid: int) -> Path:
     return OUT / "overlays" / f"e{eid}" / "method.json"
 
@@ -1267,6 +1315,7 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
     summary["this_year_rate"] = this_year_rate(eid)  # and this year's discount rate (result.this_year_rate)
     summary["method"] = preferred_method(eid)  # and the method this year's value is worked out by (methods.py)
     summary["terms_confirmed"] = sorted(terms_confirmed(eid))  # and the terms a person confirmed (result._term_changes)
+    summary["acks"] = acks(eid)  # and the checks a person acknowledged, with the reason (result.hold)
     roll = summary.get("roll")
     if not roll or not summary["wiring"].get("current"):
         return

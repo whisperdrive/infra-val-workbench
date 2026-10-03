@@ -949,6 +949,74 @@ def forward_check() -> None:
           f"drop with the utilisation at nil)")
 
 
+def flows_check() -> None:
+    """This year's cash flows against last year's (cashflows.checks), on a stand-in session: the overlay's cash flows
+    the same as last year's while the client rows behind them changed is held (stale), and so is a zero roll of
+    exactly 1; the same with the client rows unchanged too is a point to check; a terminal value reading nil this
+    year, this year's model forecasting past the overlay's last period, and last year's figures standing in, hold."""
+    from types import SimpleNamespace
+    import cashflows
+    import overlay as ov
+    s = lambda y: ov.serial(date(y, 6, 30))
+    ends = [f"{y}-06-30" for y in range(2026, 2031)]
+    per = lambda vals, tv=None: {e: {"col": i, "cf": v + ((tv or {}).get(e) or 0.0), "tv": (tv or {}).get(e) or 0.0,
+                                     "factor": 1 / 1.08 ** (i + 1)} for i, (e, v) in enumerate(zip(ends, vals))}
+    last = [100.0, 104.0, 108.0, 112.0, 116.0]
+
+    class Rows:
+        def __init__(self, now, beyond=None):
+            self.prior, self.current = "p", "c"
+            self.series = {"p": {s(y): v for y, v in zip(range(2026, 2031), last)},
+                           "c": {**{s(y): v for y, v in zip(range(2026, 2031), now)}, **(beyond or {})}}
+
+        def locate(self, sh, r):
+            return ("CF", 12)
+
+        def _series(self, wb, sh, r):
+            return self.series[wb]
+
+        def explain(self, sh, r):
+            return {}
+
+    def run(now, this_vals, tv_this=None, beyond=None, ratio=1.02, stood=()):
+        sess = SimpleNamespace(rowmap=Rows(now, beyond))
+        fl = {"vd0": "2025-06-30", "vd1": "2026-06-30", "trees": {},
+              "cores": [{"cell": "Val!C20", "label": "Distributions", "form": {"function": "SUMPRODUCT"}, "ends": ["low"],
+                         "tv_rows": ["Terminal value"], "last": {"periods": per(last, {"2030-06-30": 1500.0})},
+                         "this": {"periods": per(this_vals, tv_this)}}]}
+        figs = {"gaps": {"by_cell": {"Val!C20": {"zero_roll": {"ratio": ratio}}}, "dcf_origins": ["CF!r10"],
+                         "dcf_missing": []}, "feed": {"stood_in": list(stood)}}
+        was = ov.dcf_origins
+        ov.dcf_origins = lambda *_a: {"Val!C20": {"amounts": [("CF", 10)], "timing": []}}
+        try:
+            got = cashflows.checks(sess, {"acks": {}, "wiring": {"overlay": {"db_path": ":memory:"}}},
+                                   {"low": "Val!C20", "high": None}, figs, fl, lambda v: v)
+        finally:
+            ov.dcf_origins = was
+        return {h["id"]: h for h in got["holds"]}
+
+    revised = [101.0, 106.0, 110.0, 113.0, 118.0]
+    h = run(revised, last, {"2030-06-30": 1500.0}, ratio=1.0)
+    assert h["cf-stale"]["severity"] == "block" and h["cf-exact"]["severity"] == "block", h
+    h = run(last, last, {"2030-06-30": 1500.0})
+    assert set(h) == {"cf-same"} and h["cf-same"]["severity"] == "check", h
+    h = run(revised, revised, {"2030-06-30": 1500.0})
+    assert not h, h  # this year's revisions reach the value: nothing to say
+    h = run(revised, revised)
+    assert h["cf-tv-nil"]["severity"] == "block", h
+    h = run(revised, revised, {"2030-06-30": 1500.0}, beyond={s(2031): 120.0, s(2032): 124.0})
+    assert h["cf-horizon"]["severity"] == "block" and "244.0" in h["cf-horizon"]["detail"], h
+    h = run(revised, revised, {"2030-06-30": 1500.0}, stood=[{"row": "CF!r10", "col": 7, "value": 112.0}])
+    assert h["cf-standin"]["severity"] == "block", h
+    # acknowledged on its figures, a hold lets the value through; on other figures it holds again
+    key = h["cf-standin"]["key"]
+    import result
+    assert not result.holding([{**h["cf-standin"], "acked": {"key": key}}])
+    print("flows: ok (last year's cash flows in this year's value while the client rows changed, and a zero roll of "
+          "exactly 1, hold; an unchanged model is a point to check; a terminal value reading nil, a longer forecast "
+          "than the overlay reads and last year's figures standing in hold; an acknowledgement lets one through)")
+
+
 if __name__ == "__main__":
     main()
     mid_year_check()
@@ -963,3 +1031,4 @@ if __name__ == "__main__":
     sumif_check()
     multiple_check()
     forward_check()
+    flows_check()

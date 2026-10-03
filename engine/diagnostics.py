@@ -42,6 +42,8 @@ def _vocabulary() -> set[str]:
     words |= {k for k, _l, _r in keyfacts.TV_KINDS} | {"unknown"}
     import methods
     words |= set(methods.LABEL)
+    import cashflows
+    words |= set(cashflows.IDS) | set(cashflows.KINDS)
     words |= {"waiting", "queued", "running", "done", "attention", "blocked", "failed", "error", "pending", "approved",
               "rejected", "agreed", "escalated", "withdrawn", "open", "ready", "processing", "unread", "verified",
               "flagged", "resolved", "edited", "figure", "confirmed", "confirmed by the reviewer", "corrected", "disputed",
@@ -245,7 +247,11 @@ def _result(eid: int, res: dict) -> dict:
                             "applied": bool((((res.get("inputs") or {}).get("rate") or {}).get("this_year") or {}).get("applied"))},
          "cut_off": (res.get("figures") or {}).get("cut_off"),
          "methods": _methods(res.get("methods") or {}),
-         "chart": {"years": len((res.get("chart") or {}).get("years") or []), "found": bool((res.get("chart") or {}).get("years"))},
+         "chart": {"years": len((res.get("chart") or {}).get("years") or []), "found": bool((res.get("chart") or {}).get("years")),
+                   "ordered": (lambda ys: ys == sorted(ys))([int(y[2:]) for y in (res.get("chart") or {}).get("years") or []
+                                                              if str(y)[2:].isdigit()]),
+                   "undated": (res.get("chart") or {}).get("undated")},
+         "flows": _flows(res),
          "scenario": _scenario(res.get("scenario"))}
     # the discountings traced under each end: how many, and how many can be read here
     try:
@@ -329,6 +335,25 @@ def _result(eid: int, res: dict) -> dict:
     return r
 
 
+def _flows(res: dict) -> dict:
+    """This year's cash flows against last year's (cashflows.py), without a label or a figure: each discounting's form,
+    the checks that held or flagged, the new-forecast step's parts as shares of it, the rows behind the cash flows that
+    changed."""
+    fl, fc = res.get("flows") or {}, res.get("flow_checks") or {}
+    holds = ((res.get("figures") or {}).get("gaps") or {}).get("holds") or []
+    share = lambda x, of: round(x / of, 4) if isinstance(x, (int, float)) and of else None
+    return {"cores": [{"kind": (c.get("form") or {}).get("kind"), "recomputed": (c.get("form") or {}).get("recomputed"),
+                       "both_years": bool(c.get("last") and c.get("this")),
+                       "periods": len(((c.get("this") or c.get("last") or {}).get("periods")) or {}),
+                       "why": bool(c.get("why"))} for c in fl.get("cores") or []],
+            "error": bool(fl.get("error")),
+            "checks": [{"id": h["id"], "severity": h["severity"], "acked": bool(h.get("acked"))} for h in holds],
+            "split": {e: ({k: share(v, s.get("step")) for k, v in s.items() if k not in ("step", "share_outside")}
+                          | {"outside_of_value": s.get("share_outside")}) if not s.get("why") else {"why": True}
+                      for e, s in (fc.get("split") or {}).items()},
+            "client_rows": {k: (fc.get("rows") or {}).get(k) for k in ("rows", "compared", "changed")}}
+
+
 def _methods(inv: dict) -> dict:
     """The methods inventory as ratios: each method's mid against the default's, whether it was worked out, the
     preferred one, whether the recompute ties, how many forecast flags of the overlay's own were found."""
@@ -398,7 +423,10 @@ _KEYS = {"app", "generated", "files", "reports", "workbooks", "roles", "placed",
          "new_lines_error", "new_terms", "new_terms_in_value", "new_terms_held", "new_terms_error",
          "gone_terms", "gone_terms_in_value", "trace", "not_found", "none", "alone", "agrees", "elsewhere", "confident",
          "scores", "under_60", "from_60", "from_70", "from_90", "scenario", "selectors", "saved", "last_year", "from",
-         "monthly", "quarterly", "semi-annual", "annual", "irregular"}
+         "monthly", "quarterly", "semi-annual", "annual", "irregular",
+         "flows", "cores", "recomputed", "both_years", "periods", "why", "checks", "id", "severity", "acked", "split",
+         "client_rows", "compared", "changed", "outside_of_value", "revised", "added", "dropped", "cash_flows", "outside",
+         "convention", "ordered", "undated", "this_year"}
 
 
 def as_text(eid: int) -> str:
