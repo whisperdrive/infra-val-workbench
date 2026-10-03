@@ -224,17 +224,47 @@ reviewer's own session.
 
 ### Medium
 
-- The agents confirm this year's date on expectations alone (a year on, the financial year's end), not the file.
-- The facts come from every report uploaded, not only last year's report's role; on a tie, a draft's lead.
-- A report's folder is shared across engagements and deleted with either.
-- A SUMPRODUCT's factor row is laid on the columns by position: a blank factor shifts every later one.
-- A merged row ("Operating costs and tax") settled on its words alone, one kind of evidence agreeing.
-- The overview and compare views show an earlier result's value while it's being worked out again.
-- Circular references on this year's feed take last year's saved value; an unknown function in a branch not taken
-  last year falls through IFERROR silently.
+- ~~The agents confirm this year's date on expectations alone (a year on, the financial year's end), not the file~~ —
+  fixed: their confirmation needs a sign from the file itself; expectations alone leave it for a person.
+- ~~The facts come from every report uploaded, not only last year's report's role; on a tie, a draft's lead~~ — fixed:
+  once a report is placed as last year's, the facts navigated by are its own.
+- ~~A report's folder is shared across engagements and deleted with either~~ — fixed: kept while another engagement's
+  report reads it. **Left**: the same report uploaded again is read again into that folder, rewriting the same page
+  and table images while the other engagement may be reading one (the same bytes; a read at that instant could fail
+  and be retried).
+- ~~A SUMPRODUCT's factor row is laid on the columns by position: a blank factor shifts every later one~~ — fixed: each
+  factor read in its own column.
+- A merged row ("Operating costs and tax") settled on its words alone, one kind of evidence agreeing (in
+  `variants.KNOWN_WRONG`).
+- ~~The overview and compare views show an earlier result's value while it's being worked out again~~ — fixed: the list
+  shows no value for this year, saying why; the side-by-side view says which one is an earlier result.
+- ~~Circular references on this year's feed take last year's saved value; an unknown function in a branch not taken
+  last year falls through IFERROR silently~~ — fixed: either met on the way to this year's value holds it (`circular`,
+  `unknown-fn`), saying where; a person can acknowledge it.
 - ~~Every fact edit reruns the roles' second opinion (cost)~~ — fixed with S8.
-- ~~Model calls don't pass `store=False`~~ — fixed: every call asks Azure to keep nothing.
+- ~~Model calls don't pass `store=False`~~ — fixed: every call asks Azure to keep nothing (untested against Azure
+  itself: if a deployment refuses the parameter, remove the one line in `engine/llm.py`).
 - A single figure off the timeline stands in at last year's where its case column's heading is reworded (reviewer).
+
+### The review of the fixes
+
+Four reviewers went over S1 to S13 as fixed, reproducing on synthetic workbooks. Fixed since:
+
+- Copies (S1, S9): pasted copies, rows of another shape or kind and mirrors aren't candidates; a row holding last
+  year's forecast exactly beside revised ones can't be picked; a heading exactly on one copy decides; the periods
+  (annual, not the quarterly copy) and the sheet decide where the count is unchanged; a pick other than the row found
+  must pass the numbers band; a pick card is kept only where the label's occurrence and count, or its history figures,
+  match.
+- Balances (S2): only cells outside the overlay's periods are balances; one the discountings read moves but isn't
+  counted twice in the split; fixed dates by named dates only; each moved balance against last year's forecast of it
+  (10% off a point to check, 50% held); last year's figure stands in, said, where this year's model has no column.
+- Holds added: a distribution declared at this year's date the overlay doesn't deduct; a discounting turning the other
+  way; a mid-period valuation date (inferred by months: a leap year no longer looks like one); a report figure printed
+  to few digits; the overlay's own sheet differing in this year's model; a person's method not worked out.
+- Decisions: row picks re-read when their file changes; one session build at a time per engagement; the AI's equity
+  pick and the agents' date never written over a person's; damaged files listed at every exit; Windows waits up to
+  about 15 s with temporary files cleaned; no decisions for engagements that don't exist; the page's buttons rest
+  during an action; two settings made at once both land.
 
 ### Low
 ~~A job the loop queued just as its engagement was deleted ran on, writing its log for an engagement that's gone~~ —
@@ -242,16 +272,18 @@ fixed: a job for a deleted engagement doesn't run, and nothing is written for on
 low ≤ high not checked after the roll; `time` and `new-terms` holds shown as "a note"; the review prompt's wording.
 
 ### What would make it harder to get wrong
-1. One store for decisions: locked, atomic, a damaged file a blocking need (never read as empty); each decision
-   carries a card and the files it was made on, and one made on another file is set aside to confirm again.
-2. Copies a doubt by default: settled only where the heading decides by a margin, or this year's own equity value or
-   NPV reads that copy; cards compared on figures and position too.
+1. ~~One store for decisions~~ — done (S6, S7): locked, atomic, a damaged file a blocking need; decisions keyed on the
+   files they were made on, lapsing when one is replaced.
+2. ~~Copies a doubt by default~~ — done (S1): settled only where the heading, the valuation row, the periods or the
+   figures decide; cards compared on occurrence and figures too.
 3. A stale-read check beside `cf-split`: each client read outside the discountings that moves the value, against this
-   year's model at the new date (covers S2, S3 and the stand-in).
-4. A check that can't run is a hold, section by section; post-conditions on the result (low ≤ high, the mid, the
-   bridge's total, cum with the on-date method).
-5. Judgements per engagement; the library holds only what's true of a file.
-6. Fingerprints of what each job read, with a test editing each field a person can edit.
-7. The doctor's holds a person's decision; runtime health (cycles, unsupported calls) checked on this year's feed.
-8. ~~The failing variants in `tests/variants.py`~~ — done: 51 of 68 rows right, the 17 wrong all in the 5 kinds listed
-   in `variants.KNOWN_WRONG` (S1, S9 and the merged row), each taken off the list when it's fixed.
+   year's model at the new date (the balances' check against last year's forecast covers part of it).
+4. A check that can't run is a hold, section by section (done for the cash flows, the interest and the methods);
+   post-conditions on the result (low ≤ high after the roll, the bridge's total) still to do.
+5. ~~Judgements per engagement~~ — done (S5): the library holds only what's true of a file.
+6. ~~Fingerprints of what each job read~~ — done (S8), with a test editing each field a person can edit.
+7. ~~The doctor's holds a person's decision; runtime health checked on this year's feed~~ — done (S4; `circular`,
+   `unknown-fn`).
+8. ~~The failing variants in `tests/variants.py`~~ — done: 99 of 136 rows right, 32 left open where nothing in the
+   model decides, the 5 wrong all in the 2 kinds listed in `variants.KNOWN_WRONG` (small copies swapped with close
+   figures; a merged row), each taken off the list when it's fixed.

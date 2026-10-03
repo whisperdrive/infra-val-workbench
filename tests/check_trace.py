@@ -1138,7 +1138,7 @@ def balances_check() -> None:
     vd, new, rate = date(2025, 6, 30), date(2026, 6, 30), 0.09
 
     def run(ref: str, current_ends=None, to=None, declared=False, nd_at=None, nd_label="Net debt", decisions=None,
-            holds=None, nd_this=None, unpaid=None, flip=False, cur_val=None):
+            holds=None, nd_this=None, unpaid=None, flip=False, cur_val=None, extra=None):
         out = Path(tempfile.mkdtemp(prefix="balances_"))
         ends = {w: [date(2025 + k, 6, 30) for k in range(10)] for w in ("prior", "current")}
         if current_ends:
@@ -1205,6 +1205,15 @@ def balances_check() -> None:
                     va.write(18, 1, "Distribution declared at the valuation date")
                     va.write_formula("C19", "=Client!D9", None, cfs["prior"][0])
                     va.write_formula("C18", "=C16-C17-C19", None, total - nd[0] - cfs["prior"][0])
+                elif extra == "loop":  # a fee on the equity value itself: a circular reference Excel iterates
+                    eq = (total - nd[0]) / 1.001
+                    va.write(20, 1, "Fee on the equity value")
+                    va.write_formula("C21", "=0.001*C18", None, 0.001 * eq)
+                    va.write_formula("C18", "=C16-C17-C21", None, eq)
+                elif extra == "udf":  # a function Python hasn't, its #NAME? turned into a figure by IFERROR
+                    va.write(20, 1, "Adjustment")
+                    va.write_formula("C21", "=IFERROR(CUSTOMADJ(C16),0)", None, 0.0)
+                    va.write_formula("C18", "=C16-C17-C21", None, total - nd[0])
                 else:
                     va.write_formula("C18", "=C16-C17", None, total - nd[0])
             wbk.close()
@@ -1234,6 +1243,8 @@ def balances_check() -> None:
         return roll, figs, cfc, gate
     for ref, how in (("plain", "the app"), ("index", "the overlay's own date")):
         roll, figs, cfc, gate = run(ref)
+        assert not figs["feed"]["circular"] and not figs["feed"]["unknown"], figs["feed"]
+        assert not [h for h in gate if h["id"] in ("circular", "unknown-fn")], gate
         assert roll["fixed_horizon"] and [x["cell"] for x in roll["balance_cells"]] == [["Client", 11, 4]], roll.get("balance_cells")
         v = figs["this_year"]["Val!C18"]
         bal = figs["feed"]["balances"]["moved"]
@@ -1296,6 +1307,16 @@ def balances_check() -> None:
     hm = figs["holds_moved"]
     assert hm and hm[0]["cell"] == "Val!C17" and hm[0]["inputs"] == ["Client!D11"], hm  # (200 last year, 180 this)
     assert ("doctor-moved", "block") in [(h["id"], h["severity"]) for h in gate], gate
+    # a circular reference under the value: last year's rebuild ties (Excel's saved value where the loop closes), but
+    # this year's carries last year's figure there: held, saying where
+    roll, figs, cfc, gate = run("plain", extra="loop")
+    assert figs["feed"]["circular"] == ["Val!C18"], figs["feed"]["circular"]
+    assert ("circular", "block") in [(h["id"], h["severity"]) for h in gate] and "Val!C18" in \
+        next(h for h in gate if h["id"] == "circular")["detail"], gate
+    # a function Python hasn't, inside an IFERROR: a figure on both feeds, no error to see; held on this year's
+    roll, figs, cfc, gate = run("plain", extra="udf")
+    assert figs["feed"]["unknown"] == {"CUSTOMADJ": 1} and isinstance(figs["this_year"]["Val!C18"], float), figs["feed"]
+    assert ("unknown-fn", "block") in [(h["id"], h["severity"]) for h in gate], gate
     # a distribution declared at this year's date in this year's model, the overlay deducting none: held
     roll, figs, cfc, gate = run("plain", unpaid=15.0)
     assert ("declared", "block") in [(h["id"], h["severity"]) for h in gate], [h["id"] for h in gate]
@@ -1926,6 +1947,47 @@ def variants_check() -> None:
           f"known to go wrong)")
 
 
+def sumproduct_blank_check() -> None:
+    """A SUMPRODUCT discounting whose factor row has a blank cell (an actual year with no factor written, zeroed by a
+    flag row): each factor is read in its own column, not laid on the columns by position (which moved every factor
+    after the blank one column left: a present value the model doesn't have, and the method read off the wrong
+    dates)."""
+    out = Path(tempfile.mkdtemp(prefix="spblank_"))
+    vd, rate, n = date(2025, 6, 30), 0.08, 7  # D an actual year (FY25), E:J the forecast
+    wbk = xlsxwriter.Workbook(out / "sp.xlsx")
+    dt = wbk.add_format({"num_format": "dd-mmm-yy"})
+    i = wbk.add_worksheet("Inputs")
+    i.write(3, 0, "Valuation date")
+    i.write_datetime(3, 2, vd, dt)
+    i.write(4, 0, "Discount rate")
+    i.write_number(4, 2, rate)
+    d = wbk.add_worksheet("DCF")
+    for r, label in ((2, "Period ending"), (9, "Cash flow"), (12, "Discount factor"), (13, "Forecast flag"),
+                     (15, "Equity value")):
+        d.write(r, 1, label)
+    tot = 0.0
+    for k in range(n):
+        c, end = COL(3 + k), date(2025 + k, 6, 30)
+        d.write_datetime(2, 3 + k, end, dt)
+        cf = 90.0 + 10 * k
+        d.write_number(9, 3 + k, cf)
+        d.write_number(13, 3 + k, 0 if k == 0 else 1)
+        if k:  # the actual year has no factor written
+            f = 1 / (1 + rate) ** ((end - vd).days / 365)
+            d.write_formula(f"{c}13", f"=1/(1+Inputs!$C$5)^(({c}3-Inputs!$C$4)/365)", None, f)
+            tot += cf * f
+    last = COL(3 + n - 1)
+    d.write_formula("C16", f"=SUMPRODUCT(D10:{last}10,D13:{last}13,D14:{last}14)", None, tot)
+    wbk.close()
+    db = sqlite3.connect(build_map.main(str(out / "sp.xlsx"), str(out / "db"))["db"])
+    core = next(c for c in dcftrace.cores(dcftrace.trace(db, "DCF!C16")) if c.get("kind") == "sumproduct")
+    assert abs(core["pv"] - tot) < 1e-6, (core["pv"], tot)
+    m = core.get("method") or {}
+    assert (m.get("rate"), m.get("valuation_date"), m.get("timing")) == ("Inputs!C5", "Inputs!C4", "end"), m
+    assert (core.get("periods"), core.get("first_period")) == (6, "2026-06-30"), core
+    print("ok: a blank factor in a SUMPRODUCT discounting: each factor read in its own column")
+
+
 def store_check() -> None:
     """A person's decisions on disk (store.py): many at once all land (eight writers, twenty each); a reader never sees
     a half-written file; a damaged file isn't read as empty in silence: it's moved aside and listed; no temporary file
@@ -2053,6 +2115,7 @@ if __name__ == "__main__":
     pick_card_check()
     agent_context_check()
     variants_check()
+    sumproduct_blank_check()
     store_check()
     outage_check()
     evidence_check()

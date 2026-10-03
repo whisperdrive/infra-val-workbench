@@ -883,7 +883,7 @@ def _result_job(eid: int, key: str):
     g = res["figures"].get("gaps")
     dc = (g or {}).get("date_cells") or {}
     for h in (g or {}).get("holds") or []:  # this year's cash flows against last year's (cashflows.py)
-        anchor = ("equityPick" if h["id"].startswith("equity-") else "doctorCard" if h["id"] == "doctor-moved"
+        anchor = ("equityPick" if h["id"].startswith("equity-") else "doctorCard" if h["id"] in ("doctor-moved", "circular", "unknown-fn")
                   else "heldCard" if h["id"].startswith("declared") else "compareCard" if h["id"] == "own-inputs"
                   else "bridgeCard" if h["id"].startswith(("cf-split", "cf-sign")) or h["id"] == "damaged"
                   else "methodsCard" if h["id"] in ("basis-method", "method-unapplied")
@@ -1247,7 +1247,8 @@ KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact"
          ("date-overlay", "check-date", "A date to check"),
          ("date", "confirm-date", "A date to confirm"), ("equity", "pick-cells", "Cells to pick"),
          ("rows-models", "retry", "A step to try again"), ("doctor-holds", "check-cells", "Cells to hold"),
-         ("doctor-moved", "check-cells", "Cells to hold"), ("declared", "check-input", "A model input to check"),
+         ("doctor-moved", "check-cells", "Cells to hold"), ("circular", "check-cells", "Cells to check"),
+         ("unknown-fn", "check-cells", "Cells to check"), ("declared", "check-input", "A model input to check"),
          ("own-inputs", "check-input", "A model input to check"), ("damaged", "check-decisions", "Decisions to make again"), ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),
          ("rate-", "check-input", "A model input to check"), ("growth-", "check-input", "A model input to check"),
          ("franking-", "check-input", "A model input to check"), ("tie-", "check-tie", "A tie to check"),
@@ -1340,7 +1341,7 @@ def overview() -> list[dict]:
     on it, how many things are for a person, and its equity value (the saved result's few fields the list shows, read
     by SQLite rather than the whole result). Reading it starts nothing."""
     pick = {"values": "$.values", "units": "$.bridges.units", "head_units": "$.head.units", "basis": "$.head.basis",
-            "rolled_to": "$.bridges.valuation_date", "held": "$.bridges.held"}
+            "rolled_to": "$.bridges.valuation_date", "held": "$.bridges.held", "inputs_key": "$.inputs_key"}
     cols = ", ".join(f"json_extract(result_json, '{path}') AS \"{k}\"" for k, path in pick.items())
     saved = {r["id"]: r for r in wb._q(f"SELECT id, {cols} FROM engagements WHERE result_json IS NOT NULL")}
     out = []
@@ -1354,6 +1355,10 @@ def overview() -> list[dict]:
             next((s for s in v["stages"] if s["status"] == "queued"), None)
         r = saved.get(eid) or {}
         values = json.loads(r["values"]) if r.get("values") else None
+        # an earlier result (being worked out again, or on earlier inputs): its value isn't this year's, so not shown
+        stale = wb.result_stale(eid, {"inputs_key": r.get("inputs_key")}) if r else None
+        if stale and values:
+            values = {**values, "this_year": None}
         files = e["n_docs"] + e["n_workbooks"]
         if not files:
             state, note = "empty", "no files yet"
@@ -1371,7 +1376,7 @@ def overview() -> list[dict]:
         out.append({"id": eid, "name": e["name"], "updated_at": e["updated_at"], "files": files, "state": state,
                     "note": note, "needs": len(needs), "blocks": len(blocks), "values": values,
                     "units": r.get("units") or r.get("head_units"), "basis": r.get("basis"),
-                    "valuation_date": r.get("rolled_to"), "held": bool(r.get("held"))})
+                    "valuation_date": r.get("rolled_to"), "held": bool(r.get("held")), "stale": stale})
     return out
 
 

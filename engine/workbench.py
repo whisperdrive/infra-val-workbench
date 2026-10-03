@@ -285,8 +285,12 @@ def facts(eid: int) -> list[dict]:
 
 def reference(eid: int) -> list[dict]:
     """The facts to navigate by: approved ones as approved (with edits); if none approved yet, those that pass
-    the code checks and aren't waiting for a person, marked unapproved."""
+    the code checks and aren't waiting for a person, marked unapproved. Last year's report's only, once a report is
+    placed as it: a draft uploaded beside the final led with its own figures and units."""
     fs = facts(eid)
+    rep = roles(eid).get("prior_report") or {}
+    if rep.get("kind") == "document" and rep.get("id"):
+        fs = [f for f in fs if f.get("document_id") == rep["id"]]
     approved = [{**{k: f[k] for k in ("id", *FACT_FIELDS)}, **(f["final"] or {}), "approved": True}
                 for f in fs if f["status"] == "approved"]
     if approved:
@@ -664,7 +668,8 @@ def remove_document(did: int) -> None:
         db.execute("DELETE FROM roles WHERE kind='document' AND ref_id=?", (did,))
         db.execute("DELETE FROM documents WHERE id=?", (did,))
     out_dir, src = Path(d["out_dir"]), Path(d["source_path"])
-    if out_dir.is_relative_to(DOCS):
+    # the same report in another engagement reads the same folder (its pages, its table images): kept for it
+    if out_dir.is_relative_to(DOCS) and not _q("SELECT 1 FROM documents WHERE out_dir=?", d["out_dir"]):
         shutil.rmtree(out_dir, ignore_errors=True)
     others = _q("SELECT id FROM documents WHERE sha256=?", d["sha256"])
     if src.is_relative_to(UPLOADS) and not others and not library.by_sha(d["sha256"]):
@@ -1714,8 +1719,17 @@ def _profile(eid: int) -> dict:
     return json.loads((rows[0]["profile_json"] if rows else None) or "null") or {}
 
 
+_PROFILE = threading.Lock()  # read, changed and written whole: two settings made at once both land
+
+
 def set_profile(eid: int, fields: dict) -> dict:
     """Set (or, with None, clear) the financial-year end month (1-12) or the horizon ("fixed" / "rolling")."""
+    with _PROFILE:
+        _set_profile(eid, fields)
+    return profile_view(eid)
+
+
+def _set_profile(eid: int, fields: dict) -> None:
     mine = _profile(eid)
     for k, v in fields.items():
         if k == "fy_end_month" and v not in (None, ""):
@@ -1731,7 +1745,6 @@ def set_profile(eid: int, fields: dict) -> dict:
         else:
             mine[k] = v
     _set("engagements", eid, profile_json=json.dumps(mine), updated_at=time.time())
-    return profile_view(eid)
 
 
 class _Timelines:

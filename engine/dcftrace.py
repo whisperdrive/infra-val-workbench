@@ -283,8 +283,8 @@ def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict 
                                  "label": _label(db, shares[0][0], shares[0][1])}
             cf, fac_row = cfs[0], df[0]
             cols = list(range(cf[2], cf[3] + 1))
-            fv = list(_values(db, *fac_row).values())
-            seen = {c: fv[i] if i < len(fv) else 0.0 for i, c in enumerate(cols)}  # the factors, read for the method
+            fv = _values(db, *fac_row)  # by column: a blank factor (a period zeroed by a flag) mustn't shift the rest
+            seen = {c: fv.get(fac_row[2] + i, 0.0) for i, c in enumerate(cols)}  # the factors, read for the method
             on = {c: math.prod(_values(db, *m).get(c, 0.0) for m in masks) for c in cols}
             fac = {c: f * on[c] for c, f in seen.items()}  # what the cash flows are discounted at, the flags in
             flows = _values(db, *cf)
@@ -310,8 +310,8 @@ def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict 
                 elif not valuation._is_df(db, rb):
                     return None
                 cf, fac_row = a, b
-                fv = list(_values(db, *fac_row).values())
-                fac = {c: fv[i] if i < len(fv) else 0.0 for i, c in enumerate(range(cf[2], cf[3] + 1))}
+                fv = _values(db, *fac_row)  # by column, not by position (a blank factor shifted every later one)
+                fac = {c: fv.get(fac_row[2] + i, 0.0) for i, c in enumerate(range(cf[2], cf[3] + 1))}
                 starts = {"cells": {c: (fac_row[0], fac_row[1], fac_row[2] + i) for i, c in enumerate(range(cf[2], cf[3] + 1))}}
                 core.update(kind="sumproduct", what="SUMPRODUCT of a cash-flow row and a discount-factor row",
                             factor_row=_range(*fac_row))

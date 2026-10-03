@@ -347,13 +347,16 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
             out["gaps"]["reliable"] = False
             out["gaps"]["time_off"] = [x for x in out["time"]["discountings"] if abs(x["off"]) > TIME_HOLD]
         got, out["roll"], _, _ = _read(sess, summary, "current", keys)
+        # met on the way to this year's value: a circular reference (Python takes the value Excel saved there, last
+        # year's) and functions it lacks (#NAME?, which an IFERROR turns into a figure): neither is this year's
+        loops, lacks = sorted({ov._a1(*k) for k in sess.B.cycles}), dict(sess.B.unsupported)
         out["this_year"] = {c: ov._show(got[k]) for c, k in zip(cells, keys)}
         # last year's figures standing in on this year's feed, and the periods past this year's forecast (read nil)
         out["feed"] = {"stood_in": [{"row": f"{s_}!r{r_}", "col": c_, "value": float(v)}
                                     for (s_, r_, c_), v in sess.stood_in.items() if isinstance(v, (int, float))],
                        "beyond": [{"row": f"{s_}!r{r_}", "col": c_, "why": str(w)} for (s_, r_, c_), w in sess.beyond.items()],
                        "other_links": _other_links(getattr(sess, "other_reads", {})),
-                       "balances": _balances(sess, summary)}
+                       "balances": _balances(sess, summary), "circular": loops, "unknown": lacks}
         out["cut_off"] = len(sess.cut)  # the discountings' periods before the new date, cut off on this year's feed
         out["holds_moved"] = _holds_moved(sess, summary)  # cells held at Excel's value whose inputs move this year
         if summary.get("rate_values"):
@@ -1624,6 +1627,20 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
                         "This year's value reads another linked workbook at last year's figures",
                         f"{said}. Only the client model's link is fed from this year's model; these cells keep the values "
                         "Excel saved last year. Map them to this year's file, or say why they don't change"))
+    fd = figs.get("feed") or {}
+    if fd.get("circular"):  # Excel iterates a loop; Python takes the value Excel saved where it meets one: last year's
+        xs = fd["circular"]
+        out.append(hold(summary, "circular", xs[:40],
+                        f"This year's value goes through {len(xs)} circular reference(s)",
+                        f"{', '.join(xs[:6])}{' …' if len(xs) > 6 else ''}: where a formula reads its own result, Python "
+                        "takes the value Excel saved there, last year's, so this year's value carries last year's figure "
+                        "for it. Check how much the loop moves, or acknowledge why last year's is right"))
+    if fd.get("unknown"):  # a function Python lacks gives #NAME?: an IFERROR turns that into a figure no one sees
+        out.append(hold(summary, "unknown-fn", sorted(fd["unknown"]),
+                        "This year's value calls functions Python can't work out",
+                        f"{', '.join(f'{k} ({v} call(s))' for k, v in sorted(fd['unknown'].items()))}: each gives #NAME?, "
+                        "which an IFERROR turns into a figure. Hold the cells at Excel's value on the Rebuild page if "
+                        "nothing they read changes this year, or acknowledge"))
     hm = figs.get("holds_moved") or []
     if hm:  # cells held at Excel's value whose inputs move this year: held at last year's figures for them
         out.append(hold(summary, "doctor-moved", [[x["cell"], x["inputs"]] for x in hm],

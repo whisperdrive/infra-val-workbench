@@ -736,13 +736,76 @@ def slots_check() -> None:
           "overlay's tabs and the client's sheets named from the suggestion, the checks pass, nothing to acknowledge)")
 
 
+def shared_report_check(first: int) -> None:
+    """The same report in two engagements is read into one folder (its pages and table images): removing it from one,
+    or deleting that engagement, leaves the other's. And the facts an engagement navigates by are last year's report's,
+    not those of another report uploaded beside it (a deck, a draft), which led with its own figures and units."""
+    d0 = wb._doc(wb.roles(first)["prior_report"]["id"])
+    images = lambda: sorted(p.name for p in Path(d0["out_dir"]).rglob("*.png"))
+    have = images()
+    assert have, d0["out_dir"]
+    e = wb.create("Asset A, the report and a deck")
+    eid = e["id"]
+    try:
+        a = upload(eid, PACK_A[0], "prior_report")
+        b = upload(eid, PACK_B[0])  # last year's deck beside it, in no role
+        t0 = time.time()
+        while not all((wb._doc(x["id"]) or {}).get("facts_status") in ("done", "error") for x in (a, b)):
+            assert time.time() - t0 < 300, [(wb._doc(x["id"]) or {}).get("facts_status") for x in (a, b)]
+            time.sleep(0.5)
+        assert wb._doc(a["id"])["out_dir"] == d0["out_dir"], (wb._doc(a["id"])["out_dir"], d0["out_dir"])
+        of = {f["id"]: f["document_id"] for f in wb.facts(eid)}
+        assert set(of.values()) == {a["id"], b["id"]}, of
+        ref = wb.reference(eid)
+        assert ref and {of[f["id"]] for f in ref} == {a["id"]}, [(f["key"], of[f["id"]]) for f in ref]
+        wb.remove_document(a["id"])
+        assert images() == have, "removing the report from one engagement deleted another's pages and table images"
+    finally:
+        t0 = time.time()
+        while True:
+            try:
+                wb.delete(eid)
+                break
+            except ValueError as x:
+                assert "wait for" in str(x) and time.time() - t0 < 300, x
+                time.sleep(0.5)
+    assert images() == have, "deleting an engagement deleted another's pages and table images"
+    print("shared report: ok (one report in two engagements: removing it from one leaves the other's pages; the facts "
+          "navigated by are the placed report's, not a deck's beside it)")
+
+
+def profile_race_check() -> None:
+    """Two settings made at once (the financial year's end and the horizon, two quick clicks): both land."""
+    import threading
+    e = wb.create("Asset A, two settings at once")
+    try:
+        for i in range(30):
+            gate = threading.Barrier(2)
+            month = 1 + i % 12
+
+            def go(fields):
+                gate.wait()
+                wb.set_profile(e["id"], fields)
+            ts = [threading.Thread(target=go, args=(f,)) for f in ({"fy_end_month": month}, {"horizon": "fixed"})]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join()
+            got = wb._profile(e["id"])
+            assert got == {"fy_end_month": month, "horizon": "fixed"}, (i, got)
+            wb.set_profile(e["id"], {"fy_end_month": None, "horizon": None})
+    finally:
+        wb.delete(e["id"])
+    print("profile: ok (two settings made at once both land)")
+
+
 def quiet_check(eid: int) -> None:
     """The ordinary pack raises none of the checks for what it doesn't have: a mid-period date, a declared distribution
     the overlay doesn't deduct, a discounting turning the other way, a balance far from its forecast, a loose tie, the
     overlay's own sheet in this year's model, a typed equity end, a doctor's hold (a false point teaches a person to
     look past them)."""
     loud = ("cf-midperiod", "declared", "cf-flip", "balance-off", "tie-loose", "own-inputs", "equity-", "doctor-",
-            "method-unapplied", "basis-method", "damaged")
+            "method-unapplied", "basis-method", "damaged", "circular", "unknown-fn")
     got = [n["id"] for n in orc.view(eid)["needs"] if n["id"].startswith(loud)]
     assert not got, got
     print("quiet: ok (the ordinary pack raises none of the checks for what it doesn't have)")
@@ -759,9 +822,20 @@ def overview_check(eid: int) -> None:
             x["valuation_date"], x
         assert x["needs"] == len([n for n in wb.get(eid)["run"]["needs"] if n["severity"] != "info"]), x
         assert empty["state"] == "empty" and empty["values"] is None and empty["files"] == 0, empty
+        assert x["stale"] is None, x
+        # a result worked out on earlier inputs: the list doesn't show its value as this year's
+        raw = wb._q("SELECT result_json FROM engagements WHERE id=?", eid)[0]["result_json"]
+        try:
+            wb._set("engagements", eid, result_json=json.dumps({**json.loads(raw), "inputs_key": "earlier"}))
+            y = next(z for z in orc.overview() if z["id"] == eid)
+            assert y["stale"] == "worked out on earlier inputs" and y["values"]["this_year"] is None and \
+                y["values"]["report"] == want["report"], y
+        finally:
+            wb._set("engagements", eid, result_json=raw)
     finally:
         wb.delete(e["id"])
-    print("overview: ok (a finished engagement with its values and what's for a person; an empty one as empty)")
+    print("overview: ok (a finished engagement with its values and what's for a person; an empty one as empty; an "
+          "earlier result's value not shown as this year's)")
 
 
 def rows_context_check(eid: int) -> None:
@@ -2052,6 +2126,8 @@ def main() -> None:
     escalate_check()
     dates_check()
     place_check()
+    shared_report_check(eid)
+    profile_race_check()
     other = run_check(PACK_B, "Asset A, FY26 (overlay inside)")
     quiet_check(other)
     a, b = (wb.get(x)["result"]["values"]["this_year"]["mid"] for x in (eid, other))

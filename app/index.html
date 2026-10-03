@@ -2297,7 +2297,7 @@ function viewAll() {
       <td class="nowrap" data-no-open><input type="checkbox" data-pick="${x.id}" ${on ? "checked" : ""} ${can(x) && (on || pick.length < 2) ? "" : "disabled"} aria-label="Compare ${esc(x.name)}" title="${can(x) ? (on || pick.length < 2 ? "Tick two to compare" : "Two are ticked already") : "No value this year yet"}"></td>
       <td><b>${esc(x.name)}</b><div class="small muted">${x.files} of 4 files · changed ${esc(dayOf(x.updated_at))}</div></td>
       <td><span class="pill ${STATE_PILL[x.state] ?? ""}">${esc(x.state[0].toUpperCase() + x.state.slice(1))}</span><div class="small muted">${esc(cut(x.note || "", 70))}</div></td>
-      <td class="num">${t ? `<span class="muted">${vN(r?.mid)} →</span> <b>${vN(t.mid)}</b>` : r ? `<span class="muted">${vN(r.mid)}</span>` : "–"}<div class="small muted">${esc(x.units || "")}${x.basis ? ` · ${x.basis === "cum" ? "cum" : "ex"}-distribution` : ""}</div></td>
+      <td class="num">${t ? `<span class="muted">${vN(r?.mid)} →</span> <b>${vN(t.mid)}</b>` : r ? `<span class="muted">${vN(r.mid)}</span>` : "–"}<div class="small muted">${esc(x.units || "")}${x.basis ? ` · ${x.basis === "cum" ? "cum" : "ex"}-distribution` : ""}</div>${x.stale ? `<div class="small muted">This year's value: ${esc(x.stale)}</div>` : ""}</td>
       <td class="num">${t ? `${vN(t.low)} – ${vN(t.high)}` : "–"}</td>
       <td class="num">${t && r?.mid != null ? `<span class="${t.mid - r.mid >= 0 ? "okt" : "warnt"}">${signed(t.mid - r.mid)}</span>` : "–"}</td>
       <td class="nowrap">${esc(x.valuation_date || "–")}</td></tr>`; };
@@ -2355,6 +2355,7 @@ function viewCompare() {
     return tr(`${esc(STEP_SHORT[k] || (a || b).label)}${!tot && (a || b).label ? `<div class="small muted">${esc(cut((a || b).label, 90))}</div>` : ""}`, cell(a, tot), cell(b, tot), diff(a?.value, b?.value), tot ? "tot" : ""); }).join("");
   const unitsNote = same ? `${esc(uA)}` : `<span class="warnt">different units (${esc(uA || "none")} and ${esc(uB || "none")}): the differences aren't worked out</span>`;
   return `<div class="lede"><div><h1><b>Side by side</b></h1><p>${esc(A.name)} and ${esc(B.name)}: the equity value (the mid, the midpoint of the low and the high), the inputs and dates, the bridges step by step and this year's cash flows.</p></div><div style="margin-left:auto">${back}</div></div>
+    ${[A, B].filter(X => X.result_stale).map(X => `<div class="callout warn" style="margin-bottom:12px"><b>${esc(X.name)}: an earlier result</b>. Its value bridge is ${esc(X.result_stale)}, so its figures below aren't the current answer yet.</div>`).join("")}
     ${same ? "" : `<div class="callout warn" style="margin-bottom:12px">The two are in different units (${esc(uA || "none")} and ${esc(uB || "none")}): the figures are shown, the differences aren't worked out.</div>`}
     <div class="card" id="cmpValues"><h2>The equity value</h2><p class="sub">The mid. ${unitsNote} · ${esc(basis(A))}${basis(A) === basis(B) ? "" : ` and ${esc(basis(B))}`}.</p>
       <div class="scroll"><table class="cmp">${head}<tbody>${values}</tbody></table></div></div>
