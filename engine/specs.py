@@ -11,7 +11,8 @@ Only what's sighted: a client model gives its rows the value reads (their period
 date, its scenario and its save time, never a value worked out for it. The last-year columns should agree with each
 other: a row where they don't is flagged; this year against last year is the move, shown, not flagged.
     build(...) -> {"columns": [...], "sections": [{"title", "rows": [{"label", "cells": [...], "flag", "note"}]}]}
-Each cell: {"v": the value, "t": "num" / "pct" / "date" / "text" / "x" (a multiple), "src": where it's from} or None.
+Each cell: {"v": the value, "t": "num" / "n" (a count) / "pct" / "date" / "text" / "x" (a multiple), "src": where it's
+from} or None.
 """
 import statistics
 from datetime import date
@@ -99,7 +100,7 @@ def build(sess, summary: dict, facts: list[dict], head: dict, where: dict, tie: 
     def row(section, label, cells, note=None, kind="num"):
         cells = list(cells) + [None] * (len(COLUMNS) - len(cells))
         nums = [c["v"] for i, c in enumerate(cells) if i in LAST and c and isinstance(c["v"], (int, float))
-                and c["t"] == kind and kind in ("num", "pct", "x")]
+                and c["t"] == kind and kind in ("num", "pct", "x", "n")]
         flag = len(nums) > 1 and (max(nums) - min(nums)) > AGREE * max(1.0, max(abs(x) for x in nums))
         dates = [c["v"] for i, c in enumerate(cells) if i in LAST and c and c["t"] == "date"]
         flag = flag or len(set(dates)) > 1
@@ -170,7 +171,7 @@ def build(sess, summary: dict, facts: list[dict], head: dict, where: dict, tie: 
                                                                       if form else None, "text", (main or {}).get("cell")),
                                                              _c(form.get("convention") if form.get("recomputed") else None, "text"),
                                                              None, None, _c(form.get("rolled"), "text")], kind="text")
-    for lab, k, t in (("Cash-flow periods", "periods", "num"), ("Frequency", "frequency", "text"),
+    for lab, k, t in (("Cash-flow periods", "periods", "n"), ("Frequency", "frequency", "text"),
                       ("First period ending", "first_end", "date"), ("Last period ending", "last_end", "date")):
         row("Discounting", lab, [None, _c(p_saved.get(k), t) if k != "frequency" else None, _c(p_last.get(k), t),
                                  _c(cl_last.get(k), t, "the rows the value reads"), _c(cl_this.get(k), t, "the rows the value reads"),

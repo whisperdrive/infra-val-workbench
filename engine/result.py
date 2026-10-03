@@ -159,25 +159,42 @@ def cell_basis(db, cell: str) -> tuple[str | None, str]:
     return None, ""
 
 
+# rows holding the report's figures that aren't the equity value: an enterprise value, a sensitivity or scenario case,
+# minorities (the equity value's own row is found by its label, or by its formula)
+NOT_EQUITY = re.compile(r"enterprise|\bev\b|sensitiv|scenario|\bcase\b|upside|downside|minorit|non-controlling|"
+                        r"\bnet debt\b", re.I)
+
+
 def _pair(ms: list[dict]) -> dict | None:
     cell = lambda m: f"{m['sheet']}!{m['addr']}"
     lows, highs, mids = ([m for m in ms if m["part"] == p] for p in ("low", "high", "value"))
-    best = None
+    cands = []
     for a in lows:
         for b in highs:
             if (a["sheet"], a["row"], a["scale"], a["sign"]) != (b["sheet"], b["row"], b["scale"], b["sign"]):
                 continue
+            if NOT_EQUITY.search(a.get("label") or "") or not (a["label_match"] or (a["formula"] and b["formula"])):
+                continue  # a row that isn't the equity value, or one nothing says is it
+            if isinstance(a.get("value"), (int, float)) and isinstance(b.get("value"), (int, float)) and \
+                    a["value"] * (a["sign"] or 1) > b["value"] * (b["sign"] or 1) + 1e-9:
+                continue  # the low above the high: not this range's cells
             score = a["score"] + b["score"] + 2 * (a["formula"] and b["formula"]) + (a["label_match"] and b["label_match"])
-            if best is None or score > best[0]:
-                best = (score, a, b)
-    if best:
-        _, a, b = best
+            cands.append((score, a, b))
+    cands.sort(key=lambda x: -x[0])
+    if len(cands) > 1 and cands[1][0] == cands[0][0] and \
+            (cands[1][1]["sheet"], cands[1][1]["row"]) != (cands[0][1]["sheet"], cands[0][1]["row"]):
+        return None  # two rows as likely: gpt-sol or a person picks between them, not the order they're listed in
+    if cands:
+        _, a, b = cands[0]
         mid = next((cell(m) for m in mids if (m["sheet"], m["row"]) == (a["sheet"], a["row"])), None)
         return {"low": cell(a), "high": cell(b), "mid": mid, "scale": a["scale"], "sign": a["sign"], "label": a["label"],
                 "how": f"low and high on one row ({a['label'] or a['sheet']})"}
-    located = lambda xs: sorted((m for m in xs if m["located"]), key=lambda m: -m["score"])
+    located = lambda xs: sorted((m for m in xs if m["located"] and not NOT_EQUITY.search(m.get("label") or "")),
+                                key=lambda m: -m["score"])
     lo, hi = located(lows), located(highs)
-    if lo and hi and (lo[0]["scale"], lo[0]["sign"]) == (hi[0]["scale"], hi[0]["sign"]):
+    ordered = lambda a, b: not (isinstance(a.get("value"), (int, float)) and isinstance(b.get("value"), (int, float))
+                                and a["value"] * (a["sign"] or 1) > b["value"] * (b["sign"] or 1) + 1e-9)
+    if lo and hi and (lo[0]["scale"], lo[0]["sign"]) == (hi[0]["scale"], hi[0]["sign"]) and ordered(lo[0], hi[0]):
         return {"low": cell(lo[0]), "high": cell(hi[0]), "mid": None, "scale": lo[0]["scale"], "sign": lo[0]["sign"],
                 "label": lo[0]["label"], "how": "low and high found by their labels, on different rows"}
     one = located(mids)
@@ -195,6 +212,17 @@ def _read(sess, summary: dict, feed: str, cells: list[tuple], vd: str | None = N
     defaults, roll, months = ov._feed(summary, feed, vd, months, held, rates)
     sess.configure(feed, defaults, months or 0)
     return dict(zip(cells, sess.values(cells))), roll, defaults, months
+
+
+def _other_links(reads: dict) -> dict:
+    """The cells this year's value read from workbooks linked other than the client model's: {link: {"cells",
+    "nonzero"}} (each at last year's saved value, not fed from anything this year)."""
+    out = {}
+    for (i, _s, _r, _c), v in reads.items():
+        x = out.setdefault(str(i), {"cells": 0, "nonzero": 0})
+        x["cells"] += 1
+        x["nonzero"] += bool(isinstance(v, (int, float)) and not isinstance(v, bool) and v)
+    return out
 
 
 def figures(sess, summary: dict, cells: list[str]) -> dict:
@@ -221,7 +249,8 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
         # last year's figures standing in on this year's feed, and the periods past this year's forecast (read nil)
         out["feed"] = {"stood_in": [{"row": f"{s_}!r{r_}", "col": c_, "value": float(v)}
                                     for (s_, r_, c_), v in sess.stood_in.items() if isinstance(v, (int, float))],
-                       "beyond": [{"row": f"{s_}!r{r_}", "col": c_, "why": str(w)} for (s_, r_, c_), w in sess.beyond.items()]}
+                       "beyond": [{"row": f"{s_}!r{r_}", "col": c_, "why": str(w)} for (s_, r_, c_), w in sess.beyond.items()],
+                       "other_links": _other_links(getattr(sess, "other_reads", {}))}
         out["cut_off"] = len(sess.cut)  # the discountings' periods before the new date, cut off on this year's feed
         if summary.get("rate_values"):
             got, _, _, _ = _read(sess, summary, "current", keys, rates=False)  # at last year's rate: the rate's own step
@@ -1406,6 +1435,70 @@ def held_list(sess, summary: dict, where: dict, figs: dict) -> list[dict]:
 
 # ---- all of it --------------------------------------------------------------------------------------------------
 
+REBUILT_CHECK = 1e-6   # last year rebuilt in Python against Excel's saved value, relative: a point to check
+REBUILT_HOLD = 0.001   # ... and this far apart: held until a person says why (another version of the client file?)
+
+
+def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> list[dict]:
+    """The value's own checks: last year rebuilt in Python against what Excel saved; the overlay's value against the
+    report's (the tie); the roll's months assumed rather than read from the dates; the terms and the new lines not
+    compared (their checks failed); another linked workbook's cells in this year's value at last year's values."""
+    out = []
+    for e in ("low", "high"):
+        c = where.get(e)
+        s0, r0 = (figs.get("saved") or {}).get(c), (figs.get("rebuilt") or {}).get(c)
+        if isinstance(s0, float) and isinstance(r0, float) and s0:
+            off = abs(r0 - s0) / abs(s0)
+            if off > REBUILT_CHECK:
+                out.append(hold(summary, f"rebuild-{e}", [c, s0, r0],
+                                f"Last year's {e} rebuilt in Python is {off:.2%} from what Excel saved",
+                                f"{c}: Excel saved {unit(s0):,.2f}, Python on last year's client model gives {unit(r0):,.2f}. "
+                                "Either the client file isn't the version the overlay was built on, or a cell under the "
+                                "value isn't reproduced: the bridge starts from the rebuild",
+                                severity="block" if off > REBUILT_HOLD else "check"))
+        # the overlay's value against the report's: the bridge starts from the report's figure, so a cell that doesn't
+        # round to it (another basis, a share, another unit, a sensitivity) holds the value until a person says why
+        text = head["texts"].get(f"{e}_text") or head["texts"].get("value_text")
+        tie = ov.tie(s0, text, where["scale"], where["sign"]) if text and isinstance(s0, float) else None
+        if text and not (tie and tie["ok"]):
+            out.append(hold(summary, f"tie-{e}", [c, s0, text],
+                            f"The overlay's {e} doesn't round to the report's ({text})",
+                            f"{c}: Excel saved {unit(s0) if isinstance(s0, float) else s0}. The bridge's rounding step "
+                            "would carry the difference: it's the wrong cell, another basis, a share or another unit, "
+                            "or say why it's right"))
+    roll = summary.get("roll") or {}
+    if roll.get("months_assumed") and figs.get("this_year"):
+        out.append(hold(summary, "roll-assumed", [roll.get("months"), roll.get("months_basis")],
+                        f"The roll-forward's {roll.get('months')} months are assumed, not read from the dates",
+                        "neither this year's valuation date nor the models' timelines say how far to roll: set this "
+                        "year's valuation date, or say why a year is right"))
+    g = figs.get("gaps") or {}
+    if g.get("new_terms_error"):
+        out.append(hold(summary, "terms-error", [g["new_terms_error"]],
+                        "This year's sums couldn't be compared with last year's",
+                        f"{g['new_terms_error']}: a term this year's model adds or drops in what the value reads would "
+                        "go unseen"))
+    if g.get("new_lines_error"):
+        out.append(hold(summary, "lines-error", [g["new_lines_error"]],
+                        "This year's cash-flow lines couldn't be compared with last year's",
+                        f"{g['new_lines_error']}: a new line the overlay doesn't read would go unseen", severity="check"))
+    links = ((figs.get("feed") or {}).get("other_links")) or {}
+    live = {i: x for i, x in links.items() if x["nonzero"]}
+    if live:
+        names = {}
+        try:
+            with rodb.connect(summary["wiring"]["overlay"]["db_path"]) as db:
+                names = {str(i): f for i, f in db.execute("SELECT idx, filename FROM extbooks")}
+        except Exception:
+            pass
+        said = "; ".join(f"{names.get(i) or f'link {i}'}: {x['nonzero']} cell(s)" for i, x in live.items())
+        out.append(hold(summary, "other-link", sorted(live),
+                        "This year's value reads another linked workbook at last year's figures",
+                        f"{said}. Only the client model's link is fed from this year's model; these cells keep the values "
+                        "Excel saved last year. Map them to this year's file, or say why they don't change"))
+    return out
+
+
 def _flows_public(fl: dict, unit) -> dict:
     """The cash-flow layer as the page and the workpaper show it: per discounting, its form, and per period the cash
     flow last year and this year (the report's units), without the trace trees."""
@@ -1476,7 +1569,7 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
     except Exception as ex:
         inter = {"report": None, "model": None, "holds": [], "error": f"{type(ex).__name__}: {ex}"}
     held_inputs = ov.deep(held_list, sess, summary, where, figs)
-    cfc["holds"] = cfc["holds"] + inter["holds"] + basis_holds
+    cfc["holds"] = cfc["holds"] + inter["holds"] + basis_holds + _gate_holds(summary, head, where, figs, unit)
     if figs.get("gaps") is not None:
         figs["gaps"]["holds"] = cfc["holds"]
         if holding(cfc["holds"]):

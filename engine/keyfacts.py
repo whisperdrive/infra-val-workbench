@@ -989,6 +989,10 @@ def conclusion(facts: list[dict], markdown: str = "") -> dict | None:
         texts = {"value_text": "", "low_text": rng[0], "high_text": rng[1]}
         why.append(f"the range {pick.get('value_text')} is the low and the high")
     low, high, printed = _num(texts["low_text"]), _num(texts["high_text"]), _num(texts["value_text"])
+    if low is not None and high is not None and low > high:  # printed high first ("2,100 – 1,900"): the low is the lower
+        low, high = high, low
+        texts = {**texts, "low_text": texts["high_text"], "high_text": texts["low_text"]}
+        why.append("the report prints its range high first: the lower figure is the low")
     mid = (low + high) / 2 if low is not None and high is not None else printed
     if low is not None and high is not None:
         why.append(f"mid = the midpoint of {texts['low_text']} and {texts['high_text']}")

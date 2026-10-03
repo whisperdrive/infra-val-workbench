@@ -601,6 +601,9 @@ class Doctor:
             elif x[0] == "" and x[1:] in moving:
                 lev = self.levers.get(x[1:])
                 why = f"it reads {'the assumption ' + lev['label'] if lev else 'the timeline'} ({_a1k(x)}), which changes between feeds"
+            if kind == "formula" and re.search(r"\b(?:INDIRECT|CELL)\s*\(|\bOFFSET\s*\([^)]*&", self.formula(x) or "", re.I):
+                # an address built from text: where it reads isn't in the formula, so it may read the client model
+                why = f"it builds an address from text ({_a1k(x)}: INDIRECT, OFFSET or CELL), which may read anything"
             if why:
                 memo[k] = why
                 return why

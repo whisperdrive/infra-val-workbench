@@ -138,7 +138,8 @@ def inputs(eid: int, name: str, snap: dict, holds: bool = True) -> str:
     ov_dir = wb.OUT / "overlays" / f"e{eid}"
     if name == "roles":
         return _h([wb._roles_key(eid, snap["workbooks"], snap["documents"]),
-                   [(k, r["id"], r["sheets"]) for k, r in rl.items() if r["confirmed"] and r.get("by") == "you"]])
+                   [(k, r["id"], r["sheets"]) for k, r in rl.items() if r["confirmed"] and r.get("by") == "you"],
+                   (wb.acks(eid).get("role-check") or {}).get("key")])
     rebuild = [roles, built, _critical(snap["facts"]), _file_state(ov_dir / "holds.json") if holds else None,
                (snap.get("profile") or {}).get("horizon"), equity_pick(eid)]
     if name in ("rebuild", "map"):
@@ -547,6 +548,20 @@ def verify_roles(eid: int, a: dict) -> list[str]:
 def _roles_job(eid: int, key: str):
     rl = wb.roles(eid)
     if len(rl) == 4 and all(r["confirmed"] and r.get("by") == "you" for r in rl.values()):
+        # a person's roles are checked in code too (this year's model not last year's, dates the right way round):
+        # what fails holds, until the person says why it's right
+        bad = verify_roles(eid, {k: {"kind": r["kind"], "id": r["id"], "sheets": r["sheets"]} for k, r in rl.items()})
+        if bad:
+            import result
+            n = _acked({"id": "role-check", "stage": "roles", "severity": "block",
+                        "title": "The roles you confirmed don't pass the checks",
+                        "detail": "; ".join(bad) + ". Change them, or acknowledge with why they're right",
+                        "go": {"step": "workbench", "anchor": "rolesCard"}},
+                       result.fingerprint([sorted((k, r["id"], r["sheets"]) for k, r in rl.items()), bad]),
+                       wb.acks(eid).get("role-check"))
+            if n["severity"] == "block":
+                return "blocked", "the roles you confirmed don't pass the checks", {"needs": [n]}
+            return "done", "confirmed by you; the checks acknowledged", {"needs": [n]}
         return "done", "confirmed by you", {}
     res = wb.suggest_roles(eid)
     a = _assignment(res)
@@ -789,8 +804,11 @@ def _result_job(eid: int, key: str):
     dc = (g or {}).get("date_cells") or {}
     for h in (g or {}).get("holds") or []:  # this year's cash flows against last year's (cashflows.py)
         anchor = ("bridgeCard" if h["id"].startswith(("cf-split", "cf-sign")) else "compareCard"
-                  if h["id"] in ("basis", "interest", "interest-two") else "flowsCard")
-        needs.append(_need_of(h, {"step": "result", "anchor": anchor}))
+                  if h["id"] in ("basis", "interest", "interest-two") else "tieCard" if h["id"].startswith(("rebuild-", "tie-"))
+                  else "datesCard" if h["id"] == "roll-assumed" else "termsCard" if h["id"] == "terms-error"
+                  else "linesCard" if h["id"] == "lines-error" else "flowsCard")
+        step = "rebuild" if anchor == "tieCard" else "workbench" if anchor == "datesCard" else "result"
+        needs.append(_need_of(h, {"step": step, "anchor": anchor}))
     if g and not g["reliable"]:
         if g.get("no_reads"):
             needs.append({"id": "no-reads", "stage": "result", "severity": "block",
@@ -974,6 +992,19 @@ def _result_job(eid: int, key: str):
                           "title": f"The {end} end's {what} ({at.strip()}) " + (
                               "isn't sourced to a cell" if not r.get("sourced") else "doesn't check out"),
                           "detail": "; ".join(bad) or r.get("note") or "", "go": {"step": "rebuild", "anchor": "inputsCard"}})
+    # a figure typed into the overlay that the terminal value grows from (a maintainable cash flow): last year's,
+    # whatever this year's forecast says, unless a person sets it
+    for end, r in (((res.get("inputs") or {}).get("growth") or {}).get("ends") or {}).items():
+        b = r.get("base") or {}
+        if b.get("typed") and b.get("cell"):
+            needs.append({"id": f"tv-base-{end}", "stage": "result", "severity": "check",
+                          "title": f"The {end} end's terminal value grows from a typed figure: {b.get('label') or b['cell']}, "
+                                   f"held at last year's",
+                          "detail": f"{b['cell']} holds {b['value']:,.1f}, typed in the overlay: the terminal value "
+                                    "(often most of the value) stays on it this year, whatever this year's forecast ends "
+                                    "on. Check it, or set this year's",
+                          "go": {"step": "rebuild", "anchor": "inputsCard"}})
+            break
     said = next((f for f in wb.reference(eid) if f["key"] == "valuation_date" and f.get("value")), None)
     if said:
         v = int(said["value"])
@@ -986,12 +1017,6 @@ def _result_job(eid: int, key: str):
                           "title": f"The overlay discounts to {off[0][0]} ({off[0][1]}), the report says {said.get('value_text')}",
                           "detail": "the valuation date the discount factors read isn't the report's",
                           "go": {"step": "workbench", "anchor": "datesCard"}})
-    for end in ("low", "high"):
-        t = res["tie"][end]
-        if not t["ok"]:
-            needs.append({"id": f"tie-{end}", "stage": "result", "severity": "check",
-                          "title": f"The overlay's {end} doesn't round to the report's ({t['report_text']})",
-                          "detail": f"Excel saved {t['saved']}", "go": {"step": "rebuild"}})
     v = res["values"]
     line = (f"last year {v['report']['mid']:,.1f} → this year {v['this_year']['mid']:,.1f} (mid)"
             if v.get("this_year") and v["this_year"].get("mid") is not None else
@@ -1124,7 +1149,11 @@ KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact"
          ("franking-", "check-input", "A model input to check"), ("tie-", "check-tie", "A tie to check"),
          ("review-", "review-point", "A review point"), ("failed-", "retry", "A step that failed"),
          ("method", "check-method", "A method to check"), ("cf-", "check-flows", "Cash flows to check"),
-         ("interest", "check-interest", "The interest valued"), ("basis", "check-basis", "The basis to confirm"))
+         ("interest", "check-interest", "The interest valued"), ("basis", "check-basis", "The basis to confirm"),
+         ("rebuild-", "check-rebuild", "A rebuild to check"), ("roll-assumed", "check-date", "A date to check"),
+         ("terms-error", "check-terms", "Terms to check"), ("lines-error", "check-lines", "Cash-flow lines to check"),
+         ("other-link", "check-links", "A linked workbook to check"), ("role-check", "check-roles", "The roles to check"),
+         ("tv-base-", "check-input", "A model input to check"))
 
 
 def dress(n: dict) -> dict:

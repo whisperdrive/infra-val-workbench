@@ -127,7 +127,10 @@ def layer(sess, summary: dict, where: dict, figs: dict) -> dict:
             inputs = c["inputs"]
             discrete, left_out = result._discrete_rows(c)
             entry["tv_rows"] = left_out
-            need = ov._dcf_cells(db, inputs)
+            # the rows the discrete forecast is made of too, not only the whole cash-flow row: else they'd keep the
+            # values Excel saved last year on every feed, and the terminal value's part come out wrong
+            need = ov._dcf_cells(db, inputs) | (ov._dcf_cells(db, {**inputs, "cashflow": discrete})
+                                                if list(discrete) != list(inputs["cashflow"]) else set())
             try:
                 last_db = result._patched(sess, summary, db, figs["feeds"]["rebuilt"], need)
                 r0 = _run(last_db, inputs)

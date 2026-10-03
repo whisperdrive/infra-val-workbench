@@ -265,7 +265,8 @@ def growth(db, traced: dict, rates: dict, facts: list[dict], where: dict | None 
              f"({own.get('cell') or '?'}, {_pct(own['value']) if own.get('value') is not None else '?'})"),
             *([up] if up else []),
             _vs_report(stated, rep, ties, "terminal growth rate")], rep[1] if rep else None, ties,
-            terminal_value=fit["tv_cell"], traced_up={k: fw[k] for k in ("cell", "tv_cell", "where", "path")} if fw else None)
+            terminal_value=fit["tv_cell"], traced_up={k: fw[k] for k in ("cell", "tv_cell", "where", "path")} if fw else None,
+            base={"cell": xk, "label": xl, "value": x, "typed": bool(xk) and not _formula(db, xk)})
     return _wrap(ends, stated)
 
 

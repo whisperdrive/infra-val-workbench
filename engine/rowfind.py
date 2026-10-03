@@ -37,6 +37,7 @@ BANNER_ROWS = 10
 EXACT = 1e-9
 SAME_SHEET = 0.35     # a sheet of the same name is the same sheet only if it shares this much of its labels
 RENAMED_SHEET = 0.5   # a sheet of another name is a renamed one if it shares this much
+RENAMED_TIE = 0.05    # ... and the next as like it within this: neither is taken (which one is a person's to say)
 CONFIDENT = 0.5      # a row found with less than this needs a person's look before its figures are this year's
 CHECK_GAP = 0.15     # a row carries last year's numbers when its median difference from them is within this
 CHECK_PERIODS = 3    # ... over at least this many periods side by side
@@ -124,13 +125,17 @@ class RowFinder:
         if s in idx["sheets"] and (not mine or _jaccard(mine, labels_of(s)) >= SAME_SHEET):
             idx["sheet_map"][s] = s
             return s
-        best, share = None, 0.0
-        for sh in idx["sheets"]:
+        scored = []
+        for sh in sorted(idx["sheets"]):  # in order, so the same files give the same answer on every run
             if sh == s or self._has_prior_sheet(sh) or self._pasted_for(s, sh):
                 continue
-            j = _jaccard(mine, labels_of(sh))
-            if j > share:
-                best, share = sh, j
+            scored.append((_jaccard(mine, labels_of(sh)), sh))
+        scored.sort(key=lambda x: -x[0])
+        best, share = (scored[0][1], scored[0][0]) if scored else (None, 0.0)
+        # two of this year's sheets as like last year's (a nominal and a real copy, a 100% and a share): neither is
+        # taken; its rows are left to find, both sheets for a person
+        if len(scored) > 1 and scored[1][0] >= RENAMED_SHEET and scored[0][0] - scored[1][0] < RENAMED_TIE:
+            best = None
         idx["sheet_map"][s] = best if share >= RENAMED_SHEET else None
         return idx["sheet_map"][s]
 

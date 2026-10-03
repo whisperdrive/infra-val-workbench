@@ -1795,11 +1795,11 @@ function flowsCard(R) {
 function compareCard(R) {
   const S = R.specs; if (!S?.sections?.length) return S?.error ? `<div class="card" id="compareCard"><h2>The models side by side</h2><p class="small muted">${esc(S.error)}</p></div>` : "";
   const fmt = c => { if (!c || c.v == null) return `<span class="muted">–</span>`;
-    const v = c.t === "num" ? vN(c.v) : c.t === "pct" ? vPct(c.v) : c.t === "x" ? `${Number(c.v).toFixed(2)}x` : esc(String(c.v));
+    const v = c.t === "num" ? vN(c.v) : c.t === "n" ? String(c.v) : c.t === "pct" ? vPct(c.v) : c.t === "x" ? `${Number(c.v).toFixed(2)}x` : esc(String(c.v));
     return c.src ? `<span title="${esc(c.src)}">${v}</span>` : v; };
   const flags = S.sections.reduce((n, s) => n + s.rows.filter(r => r.flag).length, 0);
   const body = S.sections.map(s => `<tr class="spec-sec"><th colspan="${S.columns.length + 1}">${esc(s.title)}</th></tr>` + s.rows.map(r =>
-    `<tr class="${r.flag ? "spec-flag" : ""}"><th scope="row">${esc(r.label)}${r.flag ? ` <span class="pill warn" title="Last year's report, overlay and rebuild should agree here">differ</span>` : ""}${r.note ? `<div class="small muted" style="font-weight:400">${esc(r.note)}</div>` : ""}</th>${r.cells.map((c, i) => `<td class="${c && (c.t === "num" || c.t === "pct" || c.t === "x") ? "num" : ""}${i >= 4 ? " spec-now" : ""}">${fmt(c)}</td>`).join("")}</tr>`).join("")).join("");
+    `<tr class="${r.flag ? "spec-flag" : ""}"><th scope="row">${esc(r.label)}${r.flag ? ` <span class="pill warn" title="Last year's report, overlay and rebuild should agree here">differ</span>` : ""}${r.note ? `<div class="small muted" style="font-weight:400">${esc(r.note)}</div>` : ""}</th>${r.cells.map((c, i) => `<td class="${c && (c.t === "num" || c.t === "n" || c.t === "pct" || c.t === "x") ? "num" : ""}${i >= 4 ? " spec-now" : ""}">${fmt(c)}</td>`).join("")}</tr>`).join("")).join("");
   return `<div class="card" id="compareCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">The models side by side</h2>${flags ? `<span class="pill warn">${flags} row${flags > 1 ? "s" : ""} where last year's don't agree</span>` : `<span class="pill ok">last year's agree</span>`}</div>
     <p class="sub">Each model's specifications in one place: the report, the overlay as Excel saved it and the rebuild should agree; the client models show the rows the value reads, in their own units; this year is rolled forward. Hover a figure for its source.</p>
     <div class="scroll"><table class="specs"><thead><tr><th></th><th colspan="4" class="spec-grp">Last year</th><th colspan="2" class="spec-grp spec-now">This year</th></tr>

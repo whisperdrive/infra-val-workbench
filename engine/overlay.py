@@ -281,6 +281,7 @@ class Session:
         self.beyond = {}
         self.derived_used = {}
         self.client_reads = set()
+        self.other_reads = {}  # (link, sheet, row, col) -> value: another linked workbook's, last year's saved value
         B.overrides.clear()
         B.overrides.update(self.holds)
         B.reset()
@@ -297,8 +298,13 @@ class Session:
                 raise ValueError("no current client model to feed from")
             prior = self.prior or self.ov
             B.feed = lambda s, r, c: self._rolled(prior, s, r, c) if s in self.client_sheets else self.ov.value(s, r, c)
-            B.ext = lambda i, s, r, c: (self._rolled(prior, s, r, c) if i == self.client_link
-                                        else self.ext_cached.get((i, s, r, c)))
+            def ext(i, s, r, c):
+                if i == self.client_link:
+                    return self._rolled(prior, s, r, c)
+                v = self.ext_cached.get((i, s, r, c))  # another workbook than the client model: last year's saved value
+                self.other_reads[(i, s, r, c)] = v
+                return v
+            B.ext = ext
             if roll_dates and shift_months:
                 for key, v in self.rolled_timeline(shift_months).items():
                     B.overrides[key] = v

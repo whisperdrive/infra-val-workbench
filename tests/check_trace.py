@@ -1232,6 +1232,33 @@ def basis_check() -> None:
           "report's basis in words: before / after, including / excluding, pre- / post- the distribution)")
 
 
+def pairing_check() -> None:
+    """The report's low and high paired to the overlay's cells: an enterprise value or a sensitivity row holding the
+    same figures isn't the equity value; two rows as likely are left for gpt-sol or a person, not the order they're
+    listed in; a low above the high isn't a pair. A range printed high first is read the right way round."""
+    import keyfacts
+    import result
+    m = lambda part, sheet, row, label, value, score=3.0, lm=True, f=True: {
+        "part": part, "sheet": sheet, "addr": f"C{row}" if part == "low" else f"E{row}", "row": row, "label": label,
+        "value": value, "formula": f, "label_match": lm, "scale": 1.0, "sign": 1, "score": score, "located": lm}
+    ev = [m("low", "DCF", 5, "Enterprise value", 1900.0, 4), m("high", "DCF", 5, "Enterprise value", 2100.0, 4)]
+    eq = [m("low", "Sum", 9, "Equity value", 1900.0), m("high", "Sum", 9, "Equity value", 2100.0)]
+    got = result._pair(ev + eq)
+    assert got and got["low"] == "Sum!C9", got
+    sens = [m("low", "Sens", 3, "Equity value sensitivity", 1900.0, 5), m("high", "Sens", 3, "Equity value sensitivity", 2100.0, 5)]
+    assert result._pair(sens + eq)["low"] == "Sum!C9"
+    twin = [m("low", "Out", 9, "Equity value", 1900.0), m("high", "Out", 9, "Equity value", 2100.0)]
+    assert result._pair(eq + twin) is None  # two rows as likely: a pick, not the listing order
+    flip = [m("low", "Sum", 9, "Equity value", 2100.0), m("high", "Sum", 9, "Equity value", 1900.0)]
+    assert result._pair(flip) is None
+    facts = [{"id": 1, "key": "equity_value", "status": "approved", "low_text": "A$2,100m", "high_text": "A$1,900m",
+              "value_text": "", "basis": "ex-distribution"}]
+    h = keyfacts.conclusion(facts, "")
+    assert (h["low"], h["high"], h["mid"]) == (1900.0, 2100.0, 2000.0) and h["texts"]["low_text"] == "A$1,900m", h
+    print("pairing: ok (an enterprise value or a sensitivity row isn't the equity value; two rows as likely go to a "
+          "pick; a low above the high isn't a pair; a range printed high first is read the right way round)")
+
+
 if __name__ == "__main__":
     main()
     mid_year_check()
@@ -1250,3 +1277,4 @@ if __name__ == "__main__":
     loose_roll_check()
     interest_check()
     basis_check()
+    pairing_check()

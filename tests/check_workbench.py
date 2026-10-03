@@ -329,6 +329,13 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     assert fl["cores"] and all(c.get("last") and c.get("this") and c["form"]["recomputed"] for c in fl["cores"]), fl["cores"]
     sp = res["flow_checks"]["split"]
     assert set(sp) == {"low", "high"} and all(abs(s["outside"]) < 0.005 * 2507.9 for s in sp.values()), sp
+    # the terminal value's part, on each feed, is the reconciliation's terminal value (the discrete rows fed too)
+    low = next(c for c in fl["cores"] if "low" in c["ends"] and c.get("this"))
+    for key, rk in (("last", "last_year"), ("this", "this_year")):
+        tv = sum(p["tv"] for p in low[key]["periods"].values())
+        assert abs(tv - res["reconcile"][rk]["low"]["tv"]) < 1e-6 * abs(tv), (key, tv, res["reconcile"][rk]["low"])
+    disc = rows["Undiscounted forecast cash flows (no terminal value)"]["cells"]
+    assert abs(disc[2]["v"] - disc[5]["v"]) > 1, disc  # this year's discrete forecast isn't last year's
     fc = [n for n in res["figures"]["gaps"]["holds"] if n["severity"] == "block"]
     assert not fc and res["flow_checks"]["rows"]["changed"] > 0, (fc, res["flow_checks"]["rows"])
     rate = next(f for f in e["facts"] if f["key"] == "discount_rate")
@@ -1054,17 +1061,26 @@ def gate_check() -> None:
     orc.poke()
     v = wait(eid, lambda v: status(v)["roles"] == "blocked", "the roles check")
     assert any("takes every sheet" in (h["text"] or "") for h in v["log"] if h["stage"] == "roles"), v["log"][:5]
-    # every role placed by a person: their choice stands, and the value waits, saying why
+    # every role placed by a person: checked too, and held, saying why; acknowledged with a reason, their choice
+    # stands, and the value waits, saying why
     wb.confirm_roles(eid, {**a, "prior_overlay": {**a["prior_overlay"], "sheets": None}}, "you")
     orc.poke()
+    v = wait(eid, lambda v: any(n["id"] == "role-check" for n in v["needs"]), "the check of a person's roles")
+    rc = next(n for n in v["needs"] if n["id"] == "role-check")
+    assert rc["severity"] == "block" and rc["ack"] and "inside the client model" in rc["detail"], rc
+    wb.acknowledge(eid, "role-check", rc["ack"], "set this way on purpose, for the test", rc["title"])
+    orc.person(eid, "roles", "acknowledged role-check")
     v = wait(eid, lambda v: any(n["id"] == "no-reads" for n in v["needs"]), "the no-reads hold")
+    rc = next(n for n in v["needs"] if n["id"] == "role-check")
+    assert rc["severity"] == "info" and rc["acked"]["reason"] == "set this way on purpose, for the test", rc
     need = next(n for n in v["needs"] if n["id"] == "no-reads")
     assert need["severity"] == "block" and need["go"]["anchor"] == "rolesCard", need
     assert wb.get(eid)["result"]["values"]["this_year"] is None, wb.get(eid)["result"]["values"]
     assert all(r["by"] == "you" for k, r in wb.roles(eid).items() if k in ("prior_model", "prior_overlay"))
     wb.delete(eid)
     print("gate: ok (held, with the reason, where a discounting still reads last year's date or nothing of this year's "
-          "model is read; the roles check refuses the overlay taking every sheet; a big move at last year's date is a "
+          "model is read; the roles check refuses the overlay taking every sheet, a person's roles too until they "
+          "acknowledge it with a reason; a big move at last year's date is a "
           "point to check; an unreadable discounting makes the roll-forward one step)")
 
 
