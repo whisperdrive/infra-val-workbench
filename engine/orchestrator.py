@@ -186,7 +186,7 @@ def inputs(eid: int, name: str, snap: dict, holds: bool = True, rows_version: in
            _file_state(wb.terms_file(eid)),  # and the new terms a person confirmed belong in it
            _file_state(wb.acks_file(eid)),  # and the checks a person acknowledged, with the reason
            [x["aside"] for x in wb.store.damaged(ov_dir)],  # and their files moved aside as damaged
-           _result_version()]  # and the result's rules: a result worked out by older rules is worked out again
+           _result_version()]  # and the result's rules and the session's plans: older ones work it out again
     return _h(res) if name == "result" else _h(["review", result_digest(eid)])
 
 
@@ -195,9 +195,12 @@ def _rows_version() -> int:
     return rowfind.VERSION
 
 
-def _result_version() -> int:
+def _result_version() -> list:
+    """The result's rules, and the plans a session makes for it (the roll, the date cells, the balances): a plan made
+    by older rules is made again when the session loads, and the result is worked out again on it."""
+    import overlay as ovmod
     import result
-    return result.VERSION
+    return [result.VERSION, ovmod.ROLL_PLAN, ovmod.DATE_CELLS, ovmod.BALANCES]
 
 
 REVIEWED = ("head", "where", "tie", "values", "bridges", "chart", "reconcile", "inputs", "assumptions")
@@ -763,7 +766,7 @@ def _rebuild_job(eid: int, key: str):
     head = keyfacts.conclusion(facts, _report_md(eid))
     where = None
     if not head:
-        needs.append({"id": "equity", "stage": "rebuild", "severity": "block", "title": "No equity value from the report",
+        needs.append({"id": "no-equity-value", "stage": "rebuild", "severity": "block", "title": "No equity value from the report",
                       "detail": "the bridge starts from it: approve or add it on The report", "go": {"step": "report"}})
     else:
         pick = equity_pick(eid)
@@ -794,12 +797,13 @@ def _rebuild_job(eid: int, key: str):
                     log(eid, "rebuild", "verify", "the pick isn't a low and a high of the report's range", issue="equity",
                         inputs=key)
         if not where:
+            said = (f"two rows hold the report's low and high as likely ({', '.join(tied)}), neither reading the other: "
+                    "pick the equity value's on Rebuild") if tied else \
+                "no pair of cells holding the report's low and high was found: pick them on Rebuild"
+            q = (out or {}).get("question")  # gpt-sol's question; the tied rows named with it
             needs.append({"id": "equity", "stage": "rebuild", "severity": "block",
                           "title": "Where is last year's equity value in the overlay?",
-                          "detail": (out or {}).get("question") or (
-                              f"two rows hold the report's low and high as likely ({', '.join(tied)}), neither reading the "
-                              "other: pick the equity value's on Rebuild" if tied else
-                              "no pair of cells holding the report's low and high was found: pick them on Rebuild"),
+                          "detail": f"{q} ({said})" if q and tied else q or said,
                           "go": {"step": "rebuild", "anchor": "equityPick"},
                           "candidates": cands})
     blocked = any(n["severity"] == "block" for n in needs)
@@ -878,6 +882,25 @@ def _acked(n: dict, key: str, ack: dict | None) -> dict:
     return n
 
 
+# Where a check's finding (result.hold) lands: the card that lists it (by its id, else the first prefix that fits; the
+# cash flows' card for the rest), on that card's page
+HOLD_CARD = {"damaged": "bridgeCard", "circular": "bridgeCard", "unknown-fn": "bridgeCard", "unsaved-current": "bridgeCard",
+             "errors-current": "bridgeCard", "calc-incomplete": "bridgeCard", "beyond-standin": "bridgeCard",
+             "pasted": "bridgeCard", "basis-method": "methodsCard", "method-unapplied": "methodsCard",
+             "own-inputs": "compareCard", "basis": "compareCard", "interest": "compareCard", "interest-two": "compareCard",
+             "interest-error": "compareCard", "unsaved-prior": "tieCard", "errors-prior": "tieCard",
+             "unsaved-overlay": "tieCard", "roll-assumed": "datesCard", "terms-error": "termsCard",
+             "lines-error": "linesCard", "assumption-moved": "inputsCard", "doctor-moved": "doctorCard"}
+HOLD_PREFIX = (("equity-", "equityPick"), ("declared", "heldCard"), ("rebuild-", "tieCard"), ("tie-", "tieCard"))
+CARD_PAGE = {"tieCard": "rebuild", "inputsCard": "rebuild", "equityPick": "rebuild", "doctorCard": "rebuild",
+             "datesCard": "workbench"}  # the rest of the cards a finding lands on are the result page's
+
+
+def hold_go(hid: str) -> dict:
+    card = HOLD_CARD.get(hid) or next((c for p, c in HOLD_PREFIX if hid.startswith(p)), "flowsCard")
+    return {"step": CARD_PAGE.get(card, "result"), "anchor": card}
+
+
 def _need_of(h: dict, go: dict, stage_: str = "result", **more) -> dict:
     """A check's finding (result.hold) as a need: blocks hold the value back until acknowledged."""
     return _acked({"id": h["id"], "stage": stage_, "severity": h["severity"], "title": h["title"],
@@ -892,7 +915,10 @@ def _result_job(eid: int, key: str):
     fy = wb.profile_view(eid)["fields"]["fy_end_month"]["value"] or 12
     with wb._fy_hint(eid):
         res = result.compute(sess, summary, wb.reference(eid), _report_md(eid), fy, equity_pick(eid))
-    if res.get("stop"):
+    if res.get("stop") == "no_equity_value":  # the report's figure to approve or add, on The report
+        return "blocked", res["why"], {"needs": [{"id": "no-equity-value", "stage": "result", "severity": "block",
+                                                  "title": res["why"], "go": {"step": "report"}}]}
+    if res.get("stop"):  # its cells to pick, on Rebuild
         return "blocked", res["why"], {"needs": [{"id": "equity", "stage": "result", "severity": "block",
                                                   "title": res["why"], "go": {"step": "rebuild", "anchor": "equityPick"}}]}
     res["inputs_key"] = key  # the inputs it was worked out on: shown as stale when they change
@@ -900,20 +926,8 @@ def _result_job(eid: int, key: str):
     needs = []
     g = res["figures"].get("gaps")
     dc = (g or {}).get("date_cells") or {}
-    for h in (g or {}).get("holds") or []:  # this year's cash flows against last year's (cashflows.py)
-        anchor = ("equityPick" if h["id"].startswith("equity-") else "doctorCard" if h["id"] == "doctor-moved"
-                  else "heldCard" if h["id"].startswith("declared") else "compareCard" if h["id"] == "own-inputs"
-                  else "bridgeCard" if h["id"].startswith(("cf-split", "cf-sign")) or h["id"] in (
-                      "damaged", "circular", "unknown-fn", "unsaved-current", "errors-current", "calc-incomplete",
-                      "beyond-standin", "pasted")
-                  else "methodsCard" if h["id"] in ("basis-method", "method-unapplied")
-                  else "compareCard" if h["id"] in ("basis", "interest", "interest-two", "interest-error")
-                  else "tieCard" if h["id"].startswith(("rebuild-", "tie-")) or h["id"] in ("unsaved-prior", "errors-prior", "unsaved-overlay")
-                  else "datesCard" if h["id"] == "roll-assumed" else "termsCard" if h["id"] == "terms-error"
-                  else "inputsCard" if h["id"] == "assumption-moved"
-                  else "linesCard" if h["id"] == "lines-error" else "flowsCard")
-        step = "rebuild" if anchor in ("tieCard", "equityPick", "doctorCard", "inputsCard") else "workbench" if anchor == "datesCard" else "result"
-        needs.append(_need_of(h, {"step": step, "anchor": anchor}))
+    for h in (g or {}).get("holds") or []:  # the checks' findings (result.py, cashflows.py, interest.py)
+        needs.append(_need_of(h, hold_go(h["id"])))
     for i, x in enumerate((g or {}).get("pick_notes") or []):  # picks in a model that changed since they were made
         if x.get("now"):
             needs.append({"id": f"pick-moved-{i}", "stage": "result", "severity": "info",
@@ -1000,7 +1014,7 @@ def _result_job(eid: int, key: str):
         needs.append({"id": "time-none", "stage": "result", "severity": "info",
                       "title": "The roll's time value isn't measured",
                       "detail": (tc.get("why") or "") + ": that each discounting moves on by its rate is a person's to check",
-                      "go": {"step": "result", "anchor": "bridgeCard"}})
+                      "go": {"step": "workbench", "anchor": "datesCard"}})
     if g and not dc.get("moved"):
         needs.append({"id": "dates-none", "stage": "result", "severity": "check",
                       "title": "No valuation date cell was found to move",
@@ -1280,8 +1294,11 @@ KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact"
          ("held-lost-", "check-held", "A figure to set again"), ("held-moved-", "note", "A figure found again"),
          ("held-", "check-held", "An input held at last year's"), ("rebuilt", "confirm-rows", "Rows to confirm"),
          ("new-lines", "check-lines", "Cash-flow lines to check"), ("scenario", "check-scenario", "A scenario to confirm"),
+         ("new-terms-out", "check-terms", "Terms to check"), ("new-terms", "confirm-terms", "Terms to confirm"),
+         ("time-none", "note", "A note"), ("time", "check-roll", "The roll to check"),
          ("date-overlay", "check-date", "A date to check"),
-         ("date", "confirm-date", "A date to confirm"), ("equity", "pick-cells", "Cells to pick"),
+         ("date", "confirm-date", "A date to confirm"), ("no-equity-value", "add-fact", "A fact to add"),
+         ("equity", "pick-cells", "Cells to pick"),
          ("rows-models", "retry", "A step to try again"), ("doctor-holds", "check-cells", "Cells to hold"),
          ("doctor-moved", "check-cells", "Cells to hold"), ("circular", "check-cells", "Cells to check"),
          ("unknown-fn", "check-cells", "Cells to check"), ("unsaved-", "recalc-file", "A file to calculate and upload again"),
@@ -1290,7 +1307,8 @@ KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact"
          ("declared", "check-input", "A model input to check"),
          ("own-inputs", "check-input", "A model input to check"), ("damaged", "check-decisions", "Decisions to make again"), ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),
          ("rate-", "check-input", "A model input to check"), ("growth-", "check-input", "A model input to check"),
-         ("franking-", "check-input", "A model input to check"), ("tie-", "check-tie", "A tie to check"),
+         ("franking-", "check-input", "A model input to check"), ("multiple-", "check-input", "A model input to check"),
+         ("tie-", "check-tie", "A tie to check"),
          ("review-", "review-point", "A review point"), ("failed-", "retry", "A step that failed"),
          ("method", "check-method", "A method to check"), ("cf-", "check-flows", "Cash flows to check"),
          ("interest", "check-interest", "The interest valued"), ("basis", "check-basis", "The basis to confirm"),

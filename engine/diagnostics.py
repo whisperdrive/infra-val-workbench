@@ -280,6 +280,9 @@ def _result(eid: int, res: dict) -> dict:
          # met on the way to this year's value: circular references (at last year's saved value), functions Python lacks
          "this_year_loops": {"circular": len((((res.get("figures") or {}).get("feed") or {}).get("circular")) or []),
                              "unknown_functions": len((((res.get("figures") or {}).get("feed") or {}).get("unknown")) or {})},
+         # and the client cells read with no figure in them (no saved value, an Excel error), by model; the rows typed
+         # in as last year's figures (pasted); the figures right of the timeline standing in at last year's
+         "client_figures": _client_figures(res.get("figures") or {}),
          "rate_this_year": {"set": bool(((res.get("inputs") or {}).get("rate") or {}).get("this_year")),
                             "applied": bool((((res.get("inputs") or {}).get("rate") or {}).get("this_year") or {}).get("applied"))},
          "cut_off": (res.get("figures") or {}).get("cut_off"),
@@ -382,6 +385,14 @@ def _result(eid: int, res: dict) -> dict:
     return r
 
 
+def _client_figures(figs: dict) -> dict:
+    fd = figs.get("feed") or {}
+    held = lambda xs: {"unsaved": sum(1 for x in xs if x.get("what") == "no saved value"),
+                       "errors": sum(1 for x in xs if x.get("what") != "no saved value")}
+    return {"unusable": {"current": held(fd.get("unusable") or []), "prior": held(figs.get("unusable_prior") or [])},
+            "pasted": len(fd.get("pasted") or []), "beyond_stood": len(fd.get("beyond_stood") or [])}
+
+
 def _flows(res: dict) -> dict:
     """This year's cash flows against last year's (cashflows.py), without a label or a figure: each discounting's form,
     the checks that held or flagged, the new-forecast step's parts as shares of it, the rows behind the cash flows that
@@ -468,6 +479,7 @@ def _red(n: list) -> str:
 _KEYS = {"app", "generated", "files", "reports", "workbooks", "roles", "placed", "by", "confirmed", "same_file_as_overlay",
          "models", "sheets", "line_items", "formula_cells", "timelines", "periods_max", "first", "last",
          "saved", "errors", "hidden_sheets", "unsaved_formulas", "calc_mode", "calc_completed", "iterate", "tv_after",
+         "client_figures", "unusable", "unsaved", "current", "prior", "beyond_stood",
          "sheets_without_timeline", "error", "alike", "labels", "sheet_names", "profile", "fy_end_month", "horizon", "dates",
          "date", "ok", "run", "stages", "needs", "facts", "n", "by_status", "failing_checks", "image", "keys", "result",
          "worked_out", "stopped", "basis", "located", "tied", "rebuilt_tied", "held", "this_to_last", "bridge_steps",

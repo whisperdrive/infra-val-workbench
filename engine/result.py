@@ -48,7 +48,7 @@ FLOW_WORDS = re.compile(r"equity|injection|contribution|distribution|dividend|ca
 NOT_A_FLOW = re.compile(r"cost of|return on|\birr\b|\brates?\b|ratio|%|gearing|\bbeta\b|premium|multiple|yield|"
                         r"margin|\bflags?\b|factor", re.I)
 PV_WORDS = re.compile(r"\bn?pv\b|present value|discounted", re.I)
-VERSION = 3  # the result's rules: a result worked out by older rules is worked out again (the stage's inputs)
+VERSION = 4  # the result's rules: a result worked out by older rules is worked out again (the stage's inputs)
 
 
 def fingerprint(obj) -> str:
@@ -394,7 +394,7 @@ def _pasted_rows(sess) -> list[dict]:
     """The client rows the value reads that this year's model has as typed figures where last year's had formulas,
     equal to last year's: by period (pasted in place, the forecast not updated) or by column (pasted one period off, so
     each period carries the period before's). Every check lines periods up by date, so a copy one period off looks
-    like a revised forecast. -> [{"row", "found", "label", "how", "n"}]."""
+    like a revised forecast. -> [{"row", "found", "label", "how", "n", "total" (of the figures pasted)}]."""
     pri, cur, rm = sess.prior or sess.ov, sess.current, sess.rowmap
     if not cur or not rm:
         return []
@@ -410,7 +410,8 @@ def _pasted_rows(sess) -> list[dict]:
         copies = (rm.explain(s_, r_) or {}).get("copies") or []
         if not hit and copies:  # its line this year passed over by the row finder as last year's figures pasted in
             out.append({"row": f"{s_}!r{r_}", "found": copies[0], "label": labels.get((s_, r_), ""),
-                        "how": "by period (so the row finder passed it over)", "n": len(pri.timeline(s_))})
+                        "how": "by period (so the row finder passed it over)", "n": len(pri.timeline(s_)),
+                        "total": sum(v for v in (num(pri.value(s_, r_, c)) for c in pri.timeline(s_)) if v is not None)})
             continue
         f1, k1 = now_k.get(hit, (1, 0)) if hit else (1, 0)
         if not hit or not was_k.get((s_, r_), (0, 0))[0] or not k1 or f1 > 0.2 * (f1 + k1):
@@ -428,7 +429,7 @@ def _pasted_rows(sess) -> list[dict]:
             same = [a for a, b in xs if abs(a - b) <= 1e-9 * max(1.0, abs(b))]
             if len(xs) >= 3 and len(set(round(a, 6) for a in same)) >= 3 and len(same) >= PASTED_SHARE * len(xs):
                 out.append({"row": f"{s_}!r{r_}", "found": f"{hit[0]}!r{hit[1]}", "label": labels.get((s_, r_), ""),
-                            "how": how, "n": len(same)})
+                            "how": how, "n": len(same), "total": sum(same)})
                 break
     return out
 
@@ -1882,7 +1883,7 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
     fd = figs.get("feed") or {}
     pasted = fd.get("pasted") or []
     if pasted:  # typed figures this year where last year's model worked them out, equal to last year's: a paste
-        out.append(hold(summary, "pasted", [[x["found"], x["how"], x["n"]] for x in pasted],
+        out.append(hold(summary, "pasted", [[x["found"], x["how"], x["n"], round(x.get("total") or 0.0, 6)] for x in pasted],
                         f"{len(pasted)} row(s) the value reads are last year's figures pasted into this year's model",
                         "; ".join(f"{x['found']} ({x['label'] or x['row']}): typed figures equal to last year's "
                                   f"{x['how']}, {x['n']} periods" for x in pasted[:6])
@@ -2153,6 +2154,10 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
     if not head:
         return {"stop": "no_equity_value", "why": "the report's equity value isn't among the key facts"}
     where = override or locate(summary, head)
+    if where and where.get("ambiguous"):  # two rows as likely (a rebuild settled on older code): picked, not guessed
+        return {"stop": "not_located", "head": head, "candidates": candidates(summary, head), "rows": where["rows"],
+                "why": f"two rows hold the report's low and high as likely ({', '.join(where['rows'])}): pick the "
+                       "equity value's on Rebuild"}
     if not where:
         return {"stop": "not_located", "head": head, "candidates": candidates(summary, head),
                 "why": "the report's equity value (low and high) wasn't found in the overlay"}

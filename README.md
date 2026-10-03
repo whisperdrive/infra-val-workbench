@@ -115,8 +115,8 @@ takes it from there:
    holds the value. A rebuild that gives an error where Excel saved a figure (a reference deleted, a name that refers
    to nothing, a function Python lacks) holds, naming the cell the error starts at. A row whose cells read another
    row holding the report's figures (a report table carrying the summary, a rounding) gives way to the row it reads;
-   two rows as likely, or only some of the report's figures in the overlay, ask for a pick with the candidates, and
-   the other basis is never taken to cover it. A CHOOSE on a typed selector (a scenario's) is followed to the case
+   two rows as likely (the need names both), or only some of the report's figures in the overlay, ask for a pick on
+   Rebuild with the candidates, and the other basis is never taken to cover it. A CHOOSE on a typed selector (a scenario's) is followed to the case
    it picks, in the trace, the inputs and the recompute.
 6. **Rolls forward onto this year's client model.** Rows are found by a set of tools, cheap ones first, the next when
    they disagree or can't settle a row: the address (a model whose structure is unchanged), the label, the row's block
@@ -175,7 +175,7 @@ takes it from there:
    with nothing to cut), else last year's moved by the sheet's periods. The period ending on the new date is cut off too,
    as a valuer zeroing the overlay's own period flags by hand does (keeping it is one of the methods below). This
    year's value is shown only where it can be trusted, and
-   is held back otherwise, with a need that says why:
+   is held back otherwise, with a need that says why. Among the reasons (the checks in step 7 hold it too):
    - the rows its cash flows come from weren't found (or were found blank, or not surely);
    - a discounting still reads another date than this year's valuation date;
    - the overlay reads nothing of this year's client model (last year's figures, rolled by date alone);
@@ -343,7 +343,7 @@ one that matters. Beside it is the one thing that matters now: the files to uplo
 kind: a date to confirm, cells to pick, rows to find), how long is left and when the answer is due (from how long each
 stage took last time, here or on other engagements), or the answer (last year's equity value to this year's, with
 this year's low to high). A stage is a link to its card, and each thing that needs you lands on the card where it's
-decided. An engagement opens where it matters: the decision that blocks it, else the Result once there is one, else
+decided, which lists it with its Acknowledge button (or shows it in its own rows: a held input, a term to confirm). An engagement opens where it matters: the decision that blocks it, else the Result once there is one, else
 the Run page.
 
 - **Run**: the four files as four slots (each file, how it was read, its role and who confirmed it, its valuation
@@ -385,8 +385,9 @@ counts, yes / no, ratios, dates and the app's own words. Each model's shape (its
 quarterly, semi-annual, annual; its periods, first and last), how alike the two client models are, the profile, each
 stage's outcome, the facts by status, the result's checks, the discountings traced, the roll, the reliability gate
 (with how many cash-flow lines the overlay doesn't read, how many terms added and gone, in the value and held, and how
-the row finder's trace did on the rows the value reads), each row to find by its shape, and the client models'
-scenario selectors by how this year's compares with last year's, with when each was saved. Every string is checked
+the row finder's trace did on the rows the value reads), the client cells read with no figure in them (by model),
+the rows pasted in as last year's figures and the figures standing in right of the timeline, each row to find by its
+shape, and the client models' scenario selectors by how this year's compares with last year's, with when each was saved. Every string is checked
 against the app's own vocabulary before it leaves; anything else is redacted and counted. It's for pasting from a machine with real files into a session that can't see them.
 
 The trace's weights and thresholds (`rowfind.WEIGHTS`, `TRACE_*`, the 0.7 a trace needs to count on its own) were set on
@@ -429,6 +430,8 @@ uv run python tests/check_ingest.py     # the shapes a workbook can arrive in: t
                                         # changed (saved uncalculated, protected, macro-enabled, pasted over, renamed,
                                         # a report table, a terminal value added after the discounting, ...): the same
                                         # value and cells, or held saying why
+uv run python tests/check_needs.py      # every need the run can raise, read from the code: what it asks of a person,
+                                        # the card its Go lands on (on its page, listing or showing it), its export word
 ```
 
 ## Layout

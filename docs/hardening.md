@@ -66,7 +66,7 @@ off and time-checks it on the roll, on the Model assumptions card and the cash-f
 | A typed terminal base | the terminal value grows from a figure typed in the overlay | point to check |
 | A renamed sheet | two of this year's sheets as like last year's: neither taken; the choice no longer depends on the run | fixed |
 | An earlier result | the result shown while the bridge runs again, or after a run that failed, is marked; the workpaper waits | fixed |
-| Rules' version | results worked out by older rules are worked out again; a newer row finder makes the row agents look again (their older picks were set aside with nothing rerunning them, so the rows waited for a person) | fixed |
+| Rules' version | results worked out by older rules, or on a roll, date cells or balances a session planned by older rules, are worked out again; a newer row finder makes the row agents look again (their older picks were set aside with nothing rerunning them, so the rows waited for a person) | fixed |
 | Your held figures | a figure set for a held input, where the overlay changed under it: found again by its label and last year's figure, or set aside, never applied to another input | point to check |
 
 ### The page
@@ -75,6 +75,12 @@ off and time-checks it on the roll, on the Model assumptions card and the cash-f
   back to the default or the previous choice; the method step sits before this year's total everywhere.
 - The models side by side: one table of each model's specifications (the report, the overlay as saved, the rebuild,
   both client models, this year), last year's flagged where they don't agree.
+- Every need says what it asks of a person and lands on a card, on the page it names, that lists it (or shows it in
+  its own rows): `tests/check_needs.py` reads the needs and the checks' holds from the code and holds them to the
+  page's one table of what each card lists (`CARD_NEEDS`). A card a need lands on is there even with nothing else to
+  show (the rows, the terms, the lines, the dates). Before, the roll's time checks, the zero-roll check, a typed
+  terminal base and the new-forecast step's split landed on cards that didn't list them, five kinds of need were
+  called "a note", and the report's missing equity value was called cells to pick (from the result, sent to Rebuild).
 
 ### Row finding (measured)
 On synthetic pairs of models with known answers (`tests/variants.py`: revised, renamed, a downside case inserted, the

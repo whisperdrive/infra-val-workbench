@@ -1078,7 +1078,7 @@ ZERO_ROLL = (0.75, 1.33)  # this year's model at last year's date, against last 
 REBUILT = 0.5  # the two client models share fewer line-item labels than this (rowfind.family): this year's is rebuilt
 ZERO_ROLL_CHECK = (0.87, 1.15)  # inside ZERO_ROLL but outside this, the value runs and a person is asked to confirm
                                 # the move is the new forecast (a judgment call: forecasts move, a mismatched row too)
-BALANCES = 5  # balance_cells' version: the cells a session found by older rules are found again when it loads
+BALANCES = 6  # balance_cells' version: the cells a session found by older rules are found again when it loads
 # a balance labelled as at a fixed date (its overlay cell's label, or the client row's): it stays at that date, which
 # last year's valuation date only happened to be. A date named, not a word ("acquisition facility", "net debt at
 # close" are balances like any other); "opening" and "closing" are a period's, not fixed
@@ -1199,7 +1199,7 @@ def set_balances(sess: Session, cells: list, decisions: dict | None = None) -> N
 
 
 ROLL_PLAN = 4  # the rules' version: a roll planned by older rules is planned again when a session loads
-DATE_CELLS = 6  # date_cells' version: the cells a build traced with older rules are traced again when a session loads
+DATE_CELLS = 7  # date_cells' version: the cells a build traced with older rules are traced again when a session loads
 ROLL_MAX = 24  # months: a move beyond it from the timelines isn't a roll-forward
 ROLL_SHEETS = 5  # sheets: fewer can't show how far the timelines moved
 

@@ -554,7 +554,8 @@ CASES = {
     "an iterative loop under the value": (lambda d: _loop(d), {"circular": "block"}),
     "an encrypted client model": (lambda d: (d / CURRENT).write_bytes(OLE + b"\0" * 4088), {"files": "failed"}),
     "a report table carrying the equity cells": (lambda d: _equity_twice(d, True), SAME),
-    "a second row working out the equity value": (lambda d: _equity_twice(d, False), {"equity": "block", "cells": False}),
+    "a second row working out the equity value": (lambda d: _equity_twice(d, False), {
+        "equity": "block", "cells": False, "rows": ["Summary!r13", "Summary!r9"]}),
     "the terminal value added after the discounting": (lambda d: _tv_after(d, False), SAME),
     "the terminal value's present value in a cell of its own": (lambda d: _tv_after(d, True), SAME),
     "last year's cash flows pasted in place": (lambda d: _pasted(d, False), {"pasted": "block"}),
@@ -604,7 +605,8 @@ def run(files: list[Path], name: str, timeout: float = 600) -> dict:
     ins = res.get("inputs") or {}
     ends = lambda k: {x: ((ins.get(k) or {}).get("ends") or {}).get(x, {}).get("cells")
                       or ((ins.get(k) or {}).get("ends") or {}).get(x, {}).get("cell") for x in ("low", "high")}
-    return {"stages": {s["stage"]: s["status"] for s in v["stages"]}, "needs": {n["id"]: n["severity"] for n in v["needs"]},
+    return {"eid": eid, "stages": {s["stage"]: s["status"] for s in v["stages"]},
+            "needs": {n["id"]: n["severity"] for n in v["needs"]}, "details": {n["id"]: n.get("detail") for n in v["needs"]},
             "mid": ((res.get("values") or {}).get("this_year") or {}).get("mid"),
             "where": {k: (res.get("where") or {}).get(k) for k in ("low", "high")},
             "rate": ends("rate"), "growth": ends("growth"), "franking": ends("franking"),
@@ -657,7 +659,13 @@ def pack_check(only: list[str] | None = None) -> None:
             assert any("password" in (x or "") for x in got["errors"].values()), (name, got["errors"])
         else:  # held, saying why: each expected need at its severity, the value not given
             assert got["mid"] is None, (name, got["mid"], new)
-            assert all(new.get(k) == s for k, s in expect.items() if k != "cells"), (name, expect, new)
+            assert all(new.get(k) == s for k, s in expect.items() if k not in ("cells", "rows")), (name, expect, new)
+            if expect.get("rows"):  # a tie: both rows named, and the result's own run stops on it rather than failing
+                import result
+                assert all(r in got["details"]["equity"] for r in expect["rows"]), (name, got["details"]["equity"])
+                sess, summary = cw.wb.overlay_session(got["eid"])
+                stop = result.compute(sess, summary, cw.wb.reference(got["eid"]), cw.orc._report_md(got["eid"]), 12)
+                assert stop.get("stop") == "not_located" and stop.get("rows") == expect["rows"], (name, stop)
             if expect.get("cells", True):
                 assert {k: got[k] for k in ("where", "rate", "growth", "franking")} == ORACLE, (name, got)
     print(f"pack: ok ({len(CASES)} ways a model arrives: {sum(1 for _n, (_c, x) in CASES.items() if x is SAME)} give the "

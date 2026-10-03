@@ -790,8 +790,22 @@ function heroSide(st, needs) {
   return `<div class="t">Nothing running</div><div class="small muted">${waiting ? `${esc(RAIL_NAME[waiting.stage])}: ${esc(waiting.note || "waiting for the step before it")}` : "Up to date with the files."}</div>${forYou}`;
 }
 const answerIn = secs => secs < 45 ? "The answer in under a minute" : `The answer in about ${secs < 90 ? "a minute" : `${Math.round(secs / 60)} min`}`;
-// the needs a card answers for (its "Go" lands here), listed on it with their Acknowledge buttons
-const cardNeeds = test => { const ns = (E.run?.needs || []).filter(n => test(n.id)); return ns.length ? needsList(ns) : ""; };
+// The needs each card lists, with their Acknowledge buttons (an id, or a prefix ending in "-"): a need's "Go" lands on
+// one of these cards, or on one whose own rows show it (tests/check_needs.py holds the orchestrator's needs to this)
+const CARD_NEEDS = {
+  "rolesCard": ["roles", "role-check", "no-reads"], "datesCard": ["dates-", "date-overlay", "roll-assumed", "time", "time-"],
+  "reportCard": ["no-equity-value", "missing-"],
+  "tieCard": ["rebuild-", "tie-", "unsaved-prior", "errors-prior", "unsaved-overlay"], "inputsCard": ["assumption-moved", "tv-base-"],
+  "equityPick": ["equity", "equity-"], "doctorCard": ["doctor-"],
+  "bridgeCard": ["damaged", "circular", "unknown-fn", "unsaved-current", "errors-current", "calc-incomplete", "beyond-standin",
+                 "pasted", "zero-roll"],
+  "methodsCard": ["basis-method", "method-"], "heldCard": ["held-lost-", "held-moved-", "declared", "declared-"],
+  "rowsCard": ["rows", "rebuilt", "pick-lost-", "pick-moved-"], "flowsCard": ["cf-", "balance-", "other-link"],
+  "compareCard": ["basis", "interest", "interest-", "own-inputs"], "linesCard": ["lines-error"],
+  "termsCard": ["new-terms-out", "terms-error"]
+};
+const cardList = card => (E.run?.needs || []).filter(n => (CARD_NEEDS[card] || []).some(p => p.endsWith("-") ? n.id.startsWith(p) : n.id === p));
+const cardNeeds = card => { const ns = cardList(card); return ns.length ? needsList(ns) : ""; };
 function needsList(needs) {
   const pill = s => s === "block" ? `<span class="pill bad">Blocking</span>` : s === "check" ? `<span class="pill warn">Check</span>` : `<span class="pill">Note</span>`;
   const ackBtn = x => x.acked ? `<button class="btn small" type="button" data-unack="${esc(x.id)}" title="Take the acknowledgement back: the check holds again">Take back</button>`
@@ -1148,7 +1162,7 @@ function rolesEditor() {
   };
   const rs = stageOf("roles"), ask = rs.status === "blocked" || !!roleDraft._dirty;
   const meta = rs.status === "done" ? esc(rs.note || "") : busy(rs.status) ? "the orchestrator is weighing them" : rs.status === "blocked" ? "the orchestrator wants you to confirm" : "a suggestion appears once the files and the report's facts are in";
-  return fold("roles-edit", "Change the roles", meta, `<p class="sub">Pick a different file for a role, or the overlay's sheets, and confirm: yours stands, and the steps after it run again.</p>
+  return fold("roles-edit", "Change the roles", meta, `${cardNeeds("rolesCard")}<p class="sub">Pick a different file for a role, or the overlay's sheets, and confirm: yours stands, and the steps after it run again.</p>
     <div class="flow">${SLOTS.map(node).join("")}</div>
     <div class="row" style="margin-top:12px"><button class="btn" type="button" id="suggest">Look again</button>
       <button class="btn primary" type="button" id="confirmRoles" ${Object.keys(CFG.roles).some(k => roleDraft[k]) ? "" : "disabled"}>Confirm these roles</button></div>`, ask, "rolesCard");
@@ -1161,10 +1175,10 @@ function rolesCheckFold() {
     against > 0 || !!so?.differs?.length);
 }
 function datesCard() {
-  const D = E.dates || [];
-  if (!D.length) return "";
+  const D = E.dates || [], ns = cardNeeds("datesCard");
+  if (!D.length && !ns) return "";
   const mark = ok => ok === true ? `<span class="pill ok">✓</span>` : ok === false ? `<span class="pill bad">✗</span>` : "";
-  return `<div class="card" id="datesCard"><h2>Valuation dates</h2><p class="sub">The report's date is the anchor; this year's client model's should be a year on.</p>${cardNeeds(id => id === "roll-assumed")}
+  return `<div class="card" id="datesCard"><h2>Valuation dates</h2><p class="sub">The report's date is the anchor; this year's client model's should be a year on.</p>${ns}
     <div class="dateline">${D.map(d => `<div><div class="k">${esc(d.step)}</div><div class="v">${esc(d.date || "–")} ${mark(d.ok)}</div>
       ${d.where || d.how ? `<div class="small">${d.where ? `<span class="${d.where.includes("!") ? "mono" : ""}">${esc(d.where)}</span>${d.how ? ", " : ""}` : ""}${esc(d.how || "")}</div>` : ""}
       ${d.note ? `<div class="small muted" title="${esc(d.note)}">${esc(d.note.split("; ")[0])}</div>` : ""}</div>`).join("")}</div></div>`;
@@ -1360,12 +1374,12 @@ function lowMidHigh(F) {
 }
 function reportSummary(d, fs) {
   const F = k => { const f = fs.find(x => x.key === k && x.status !== "rejected"); return f && f.status === "approved" && f.final ? {...f, ...f.final} : f; };
-  if (!fs.length) return `<div class="card" id="reportCard"><h2>What the report says</h2><p class="muted small" style="margin:0">${d.facts_status === "error" ? "Reading its key facts failed: see All facts below." : "The key facts appear here once the report is read."}</p></div>`;
+  if (!fs.length) return `<div class="card" id="reportCard"><h2>What the report says</h2><p class="muted small" style="margin:0">${d.facts_status === "error" ? "Reading its key facts failed: see All facts below." : "The key facts appear here once the report is read."}</p>${cardNeeds("reportCard")}</div>`;
   const eq = F("equity_value"), H = E.result?.head, units = H?.units || F("currency_units")?.value_text || "";
   const basis = /cum/i.test(H?.basis || eq?.basis || "") ? "cum-distribution" : "ex-distribution";
   const [low, mid, high] = H ? [vN(H.low), vN(H.mid), vN(H.high)] : [eq?.low_text || "–", eq?.value_text || "–", eq?.high_text || "–"];
   const n = {page: fs.filter(f => f.check?.ok).length, image: fs.filter(f => ["confirmed", "confirmed by the reviewer", "corrected"].includes(f.visual?.status)).length, you: fs.filter(needsYou).length};
-  return `<div class="card" id="reportCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">What the report says</h2><span class="small muted">${esc(d.filename)}${units ? ` · ${esc(units)}` : ""} · ${basis}</span></div>
+  return `<div class="card" id="reportCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">What the report says</h2><span class="small muted">${esc(d.filename)}${units ? ` · ${esc(units)}` : ""} · ${basis}</span></div>${cardNeeds("reportCard")}
     <div class="eqrow"><div><span class="k">Low</span><b>${esc(low)}</b></div><div class="mid"><span class="k">Mid, the midpoint</span><b>${esc(mid)}</b></div><div><span class="k">High</span><b>${esc(high)}</b></div></div>
     <div class="small muted" style="margin-top:6px">Equity value${eq?.page ? `, p. ${esc(eq.page)}` : ""}${eq ? ` · ${seenShort(eq) || "not looked at"}` : ""}${F("valuation_date") ? ` · valuation date ${esc(F("valuation_date").value_text)}, p. ${esc(F("valuation_date").page ?? "?")} · ${seenShort(F("valuation_date")) || "not looked at"}` : ""}</div>
     ${lowMidHigh(F)}
@@ -1491,7 +1505,7 @@ function viewRebuild() {
   ${R?.reconcile ? fold("reconcile", "Reconciled to the report", R.reconcile.error ? "couldn't split the value" : rec.length ? `${recOk} of ${rec.filter(r => r.ok != null).length} tie${recBad ? `, ${recBad} don't` : ""} · the terminal value, the present values, the franking credits` : "nothing disclosed to reconcile", reconcileCard(R), recBad > 0, "reconcileCard") : ""}
   ${R?.assumptions ? fold("assumptions", "The model's assumptions", "each discounting under the low and the high, and what the report says beside them", assumptionsCard(R)) : ""}
   ${equityPickCard()}
-  ${off > 0 ? `<details class="card fold" data-k="mismatches"><summary><span class="ft">${off} cell(s) Python computes differently from Excel</span></summary><div class="fold-body scroll"><table><thead><tr><th>Cell</th><th>Line item</th><th class="num">Python</th><th class="num">Excel</th><th>Formula</th></tr></thead><tbody>
+  ${off > 0 ? `<details class="card fold" id="mismatches" data-k="mismatches"><summary><span class="ft">${off} cell(s) Python computes differently from Excel</span></summary><div class="fold-body scroll"><table><thead><tr><th>Cell</th><th>Line item</th><th class="num">Python</th><th class="num">Excel</th><th>Formula</th></tr></thead><tbody>
     ${(val.mismatches || []).map(m => `<tr><td class="mono">${esc(m.cell)}</td><td>${esc(m.label)}</td><td class="num">${esc(fmt(m.python, 4))}</td><td class="num">${esc(fmt(m.workbook, 4))}</td><td class="mono small">${esc((m.formula || "").slice(0, 90))}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
   ${doctorCard()}
   ${fold("module", "The Python module", `overlay_e${E.id}.py`, `<p class="sub">${esc(O.files?.overlay || "")}, sheets ${esc((O.sheets || []).join(", "))}: each formula a Python function, Excel's formula beside it. Regenerated from the workbook, never edited.</p>
@@ -1500,7 +1514,7 @@ function viewRebuild() {
 function tieCard(R) {
   const u = R.head?.units || "", row = (end, t) => `<tr><td><b>${end === "low" ? "Low" : "High"}</b> <span class="mono small muted">${esc(R.where[end])}</span></td><td class="num">${esc(t.report_text || vN(t.report))}</td>
     <td class="num">${vN(t.saved)} ${t.ok ? `<span class="pill ok">✓</span>` : `<span class="pill bad">✗</span>`}</td><td class="num">${vN(t.rebuilt)} ${t.rebuilt_ok ? `<span class="pill ok">✓</span>` : `<span class="pill warn">moves</span>`}</td></tr>`;
-  return `<div class="card" id="tieCard"><h2>The tie to the report</h2><p class="sub">The report's equity value against the overlay's cells as Excel saved them, and rebuilt in Python on last year's client model. ${esc(u)}. Mid = the midpoint of the low and the high.</p>${cardNeeds(id => id.startsWith("rebuild-") || id.startsWith("tie-") || ["unsaved-prior", "errors-prior", "unsaved-overlay"].includes(id))}
+  return `<div class="card" id="tieCard"><h2>The tie to the report</h2><p class="sub">The report's equity value against the overlay's cells as Excel saved them, and rebuilt in Python on last year's client model. ${esc(u)}. Mid = the midpoint of the low and the high.</p>${cardNeeds("tieCard")}
     <div class="scroll"><table><thead><tr><th></th><th class="num">The report</th><th class="num">As Excel saved</th><th class="num">Rebuilt in Python</th></tr></thead><tbody>${row("low", R.tie.low)}${row("high", R.tie.high)}
     <tr class="tot"><td>Mid</td><td class="num">${vN(R.values.report.mid)}</td><td class="num">${vN((R.tie.low.saved + R.tie.high.saved) / 2)}</td><td class="num">${vN(R.values.rebuilt.mid)}</td></tr></tbody></table></div>
     ${(R.head?.why || []).length ? `<p class="small muted" style="margin:8px 0 0">${esc(R.head.why.join("; "))}.</p>` : ""}</div>`;
@@ -1529,7 +1543,7 @@ function inputsCard(R) {
       <div class="small" style="margin:4px 0">${brief}${X.report?.length ? ` <span class="muted">· the report: ${X.report.map(esc).join(" – ")}</span>` : ""}</div>
       ${X.error ? `<p class="small muted">${esc(X.error)}</p>` : `<details data-k="inputs-${key}" ${X.ok === true ? "" : "open"}><summary>The evidence</summary><div class="grid2" style="margin-top:8px">${block(key === "rate" ? "The low (at the higher rate)" : "The low", L, key)}${block(key === "rate" ? "The high (at the lower rate)" : "The high", H, key)}</div></details>`}</div>`;
   };
-  return `<div class="card" id="inputsCard"><h2>Model inputs: sourced and checked</h2><p class="sub">Each input is the cell the model's formulas read, found by following them; recomputed from it; then checked against the report.</p>${cardNeeds(id => id === "assumption-moved")}
+  return `<div class="card" id="inputsCard"><h2>Model inputs: sourced and checked</h2><p class="sub">Each input is the cell the model's formulas read, found by following them; recomputed from it; then checked against the report.</p>${cardNeeds("inputsCard")}
     ${["rate", "growth", "multiple", "franking"].map(section).join("")}</div>`;
 }
 function reconcileCard(R) {
@@ -1576,7 +1590,7 @@ function equityPickCard() {
   const w = E.result?.where, open = !!needs || !!held.length;
   const cands = needs?.candidates || EQ.cands;
   return `<details class="card fold" id="equityPick" data-k="equitypick" ${open ? "open" : ""}><summary><span class="ft">${open ? "Pick last year's equity value cells" : "Pick other cells for last year's equity value"}</span></summary>
-    ${cardNeeds(id => id.startsWith("equity-") && id !== "equity-rows")}
+    ${cardNeeds("equityPick")}
     <p class="small muted">The low and the high of the report's equity value, as cells on the overlay's sheets (Sheet!A1). ${w ? `Now: ${esc(w.low)} / ${esc(w.high)} (${esc(w.how || "")}).` : ""} Cells holding the report's figures:</p>
     ${cands?.length ? `<div class="scroll"><table><thead><tr><th>Cell</th><th>Line item</th><th class="num">Value</th><th>The report's</th><th>Basis</th></tr></thead><tbody>${cands.map(c => `<tr><td class="mono">${esc(c.cell)}</td><td>${esc(c.label || "")}</td><td class="num">${esc(fmt(c.value, 1))}</td><td>${esc(c.part === "value" ? "mid / preferred" : c.part)}</td><td>${esc(c.basis)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="small"><button class="btn small" id="eqLoad" type="button">Find them</button></p>`}
     <form class="row" id="eqForm" style="margin-top:10px"><label class="small">Low<br><input type="text" name="low" value="${esc(w?.low || "")}" placeholder="Summary!C9"></label>
@@ -1589,7 +1603,7 @@ function equityPickCard() {
 let DOC = {key: null, data: null};
 function doctorCard() {
   if (!E.doctor_status) return "";
-  return `<div class="card" id="doctorCard"><h2>Cells Python can't work out</h2>${cardNeeds(id => id.startsWith("doctor-"))}<div id="docBody"><p class="muted small">Loading the doctor's findings…</p></div></div>`;
+  return `<div class="card" id="doctorCard"><h2>Cells Python can't work out</h2>${cardNeeds("doctorCard")}<div id="docBody"><p class="muted small">Loading the doctor's findings…</p></div></div>`;
 }
 async function loadDoctor() {
   const box = $("#docBody"); if (!box) return;
@@ -1656,7 +1670,7 @@ function viewResult() {
       <div><h2>Last year to this year</h2><p class="sub" style="margin:0">${esc(u)} · equity value, ${R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution"} · ${rateNow(R)?.applied ? `at this year's discount rate, ${esc(rateRange(rateNow(R).low, rateNow(R).high))}` : "at last year's discount rate"}${B.valuation_date ? ` · to ${esc(B.valuation_date)}` : ""}${heldNote(R)}</p></div>
       <div class="row">${state.hl?.step ? hlNote(STEP_SHORT[state.hl.step] || state.hl.step) : ""}<a class="btn small" href="${workpaperUrl()}" download title="The result, the bridge, the cash flows, the inputs and their checks, the facts, the review and the run log, as an Excel file">Export workpaper</a><div class="seg" role="group" aria-label="Which end">${["low", "mid", "high"].map(k => `<button type="button" data-end="${k}" class="${end === k ? "on" : ""}" aria-pressed="${end === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div></div></div>
     ${from != null && to != null && !B.held ? `<div class="move"><span class="from">${vN(from)}</span><span class="muted">→</span><span class="to">${vN(to)}</span><span class="${to - from >= 0 ? "okt" : "warnt"}">${signed(to - from)}</span><span class="small muted">the ${end}${end === "mid" ? (R.methods?.preferred === "mid_rate" ? ", at the midpoint rate (the method preferred)" : ", the midpoint of the low and the high") : ""}</span></div>` : ""}
-    ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until what needs you is settled (rows to find, terms to confirm, cash flows to check): the bridge stops at last year's rebuilt value.</div>` : ""}${cardNeeds(id => ["damaged", "circular", "unknown-fn", "unsaved-current", "errors-current", "calc-incomplete", "beyond-standin", "pasted"].includes(id))}
+    ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until what needs you is settled (rows to find, terms to confirm, cash flows to check): the bridge stops at last year's rebuilt value.</div>` : ""}${cardNeeds("bridgeCard")}
     <div class="grid2" style="margin-top:10px"><div id="brChart"></div><div class="scroll"><table class="bridge"><thead><tr><th>Step</th><th class="num">Change</th><th class="num">Value</th></tr></thead><tbody>${rows}</tbody></table>
     ${(B.notes || []).length ? `<p class="small muted">${esc(B.notes.join("; "))}</p>` : ""}</div></div></div>
   ${ackedFold}
@@ -1720,7 +1734,7 @@ function bindRate() {
 // This year's value worked out other ways (engine/methods.py), each against the default; the one you prefer is this
 // year's value, with a bridge step of its own.
 function methodsCard(R) {
-  const mNeeds = cardNeeds(id => ["basis-method", "method", "method-unapplied"].includes(id));
+  const mNeeds = cardNeeds("methodsCard");
   const M = R.methods; if (!M?.methods?.length) return M?.error || mNeeds ? `<div class="card" id="methodsCard"><h2>Methods</h2>${M?.error ? `<p class="small muted">${esc(M.error)}</p>` : ""}${mNeeds}</div>` : "";
   const rs = stageOf("result"), pending = busy(rs.status);
   const d = x => x == null ? `<span class="muted">–</span>` : Math.abs(x) < 0.05 ? `<span class="muted">same</span>` : signed(x);
@@ -1761,7 +1775,7 @@ function bindMethods() {
 const heldNote = R => { const n = (R.held || []).filter(h => h.held).length;
   return n ? ` · <button class="linkbtn warnt" type="button" data-jump-held>${n} input${n > 1 ? "s" : ""} held at last year's</button>` : ""; };
 function heldCard(R) {
-  const H = R.held || [], ns = (E.run?.needs || []).filter(n => /^held-(lost|moved)-|^declared/.test(n.id)); if (!H.length && !ns.length) return "";
+  const H = R.held || [], ns = cardList("heldCard"); if (!H.length && !ns.length) return "";
   const still = H.filter(h => h.held).length;
   const row = h => { const sg = h.suggestion || {}, ok = sg.status === "checked", now = h.this_year ?? sg.value ?? "";
     return `<tr class="${h.held ? "held" : ""}"><td><b>${esc(h.label)}</b> ${h.held ? `<span class="pill warn">held at last year's</span>` : `<span class="pill ok">this year's · ${h.from === "suggestion" ? "accepted" : "typed"} by you</span>`}
@@ -1792,10 +1806,11 @@ function rowsCard(R) {
   const rows = [...g.dcf_missing.map(x => ({...x, kind: "not found this year"})), ...g.blank_rows.map(x => ({...x, kind: "found, but blank this year"})),
     ...g.weak_rows.map(x => ({...x, kind: x.found ? "found, not sure" : "not found this year"})), ...g.timing_open.map(x => ({...x, kind: "a timing row to find"}))];
   const check = (g.rebuilt_rows || []).filter(x => !rows.some(y => y.row === x.row)).map(x => ({...x, kind: `found by its ${x.how === "history" ? "history" : "numbers or words"}, not its label`}));
-  if (!rows.length && !check.length) return "";
-  if (!rows.length) return `<div class="card" id="rowsCard"><h2>Rows to check: this year's model looks rebuilt</h2><p class="sub">Only ${Math.round(100 * (g.family || 0))}% of this year's line items are last year's, so these rows the value reads were found by their numbers or words rather than their labels. The value stands, as its checks pass; confirm each is the line item it should be, or pick another.</p>
+  const ns = cardNeeds("rowsCard");
+  if (!rows.length && !check.length) return ns ? `<div class="card" id="rowsCard"><h2>Rows in this year's model</h2>${ns}</div>` : "";
+  if (!rows.length) return `<div class="card" id="rowsCard"><h2>Rows to check: this year's model looks rebuilt</h2><p class="sub">Only ${Math.round(100 * (g.family || 0))}% of this year's line items are last year's, so these rows the value reads were found by their numbers or words rather than their labels. The value stands, as its checks pass; confirm each is the line item it should be, or pick another.</p>${ns}
     <div class="stack" style="gap:12px">${check.map(rowBlock).join("")}</div></div>`;
-  return `<div class="card" id="rowsCard"><h2>Rows to find in this year's model</h2><p class="sub">This year's value reads these rows of last year's client model, and the row finder couldn't settle where each is this year, so the value waits. For each: what it is last year (where it sits, what it adds up, its figures, what reads it), and the rows of this year's model that might be it, with their figures for the same periods. Use one, type another, or keep last year's values on purpose; last year's values are never used silently.</p>
+  return `<div class="card" id="rowsCard"><h2>Rows to find in this year's model</h2><p class="sub">This year's value reads these rows of last year's client model, and the row finder couldn't settle where each is this year, so the value waits. For each: what it is last year (where it sits, what it adds up, its figures, what reads it), and the rows of this year's model that might be it, with their figures for the same periods. Use one, type another, or keep last year's values on purpose; last year's values are never used silently.</p>${ns}
     <div class="stack" style="gap:12px">${rows.map(rowBlock).join("")}</div>
     ${check.length ? `<h3 style="font-size:15px;margin:16px 0 6px">And to check: found by their numbers in a model that looks rebuilt</h3><div class="stack" style="gap:12px">${check.map(rowBlock).join("")}</div>` : ""}</div>`;
 }
@@ -1855,13 +1870,13 @@ function balancesBlock(R) {
 function flowsCard(R) {
   const F = R.flows;
   if (!F?.cores?.length) {  // no discountings compared: the card still carries what needs you, and the balances
-    const ns = cardNeeds(id => id.startsWith("cf-") || id.startsWith("balance-") || id === "other-link"), b = balancesBlock(R);
+    const ns = cardNeeds("flowsCard"), b = balancesBlock(R);
     return F?.error || ns || b ? `<div class="card" id="flowsCard"><h2>This year's cash flows against last year's</h2>${F?.error ? `<p class="small muted">The comparison couldn't run: ${esc(F.error)}</p>` : ""}${ns}${b}</div>` : "";
   }
   const S = R.flow_checks?.split || {}, end = state.bridgeEnd;
   const both = S.low && S.high && !S.low.why && !S.high.why;
   const sp = end === "mid" ? (both ? Object.fromEntries(Object.keys(S.low).map(k => [k, S.low[k] == null || S.high[k] == null ? null : (S.low[k] + S.high[k]) / 2])) : null) : S[end];
-  const ns = (E.run?.needs || []).filter(n => n.id.startsWith("cf-") || n.id.startsWith("balance-") || n.id === "other-link"), open = ns.filter(n => n.severity !== "info");
+  const ns = cardList("flowsCard"), open = ns.filter(n => n.severity !== "info");
   const pillH = open.some(n => n.severity === "block") ? `<span class="pill bad">held</span>` : open.length ? `<span class="pill warn">${open.length} to check</span>` : `<span class="pill ok">this year's model reaches the value</span>`;
   const core = c => `<tr><td><b>${esc(c.label || c.cell)}</b> <span class="mono small muted">${esc(c.cell)}</span>${c.why ? `<div class="small muted">${esc(c.why)}</div>` : ""}</td>
     <td>${esc(c.form?.function || "")}</td><td class="small">${esc(c.form?.convention || "")}</td>
@@ -1914,7 +1929,7 @@ function drivesCard(R) {
     ${D.groups.map(g => fold(`drv-${g.group}`, esc(g.group), `${g.inputs.length} input row(s)`, `<div class="scroll"><table class="stack-sm">${head}<tbody>${g.inputs.map(line).join("")}</tbody></table></div>`)).join("")}</div>`;
 }
 function compareCard(R) {
-  const sNeeds = cardNeeds(id => ["basis", "interest", "interest-two", "interest-error", "own-inputs"].includes(id));
+  const sNeeds = cardNeeds("compareCard");
   const S = R.specs; if (!S?.sections?.length) return S?.error || sNeeds ? `<div class="card" id="compareCard"><h2>The models side by side</h2>${S?.error ? `<p class="small muted">${esc(S.error)}</p>` : ""}${sNeeds}</div>` : "";
   const fmt = c => { if (!c || c.v == null) return `<span class="muted">–</span>`;
     const v = c.t === "num" ? vN(c.v) : c.t === "n" ? String(c.v) : c.t === "pct" ? vPct(c.v) : c.t === "x" ? `${Number(c.v).toFixed(2)}x` : esc(String(c.v));
@@ -1928,12 +1943,13 @@ function compareCard(R) {
       <tr><th></th>${S.columns.map((c, i) => `<th class="${i >= 4 ? "spec-now" : ""}">${esc(c.label)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div></div>`;
 }
 function linesCard(R) {
-  const L = R.figures?.gaps?.new_lines; if (!L?.length) return "";
+  const g = R.figures?.gaps || {}, L = g.new_lines || [], ns = cardNeeds("linesCard");
+  if (!L.length) return ns || g.new_lines_error ? `<div class="card" id="linesCard"><h2>Cash-flow lines the overlay doesn't read</h2>${ns || `<p class="small muted">The comparison couldn't run: ${esc(g.new_lines_error)}</p>`}</div>` : "";
   const row = x => `<tr><td><b>${esc(x.label)}</b> <span class="mono small muted">${esc(x.row)}</span><div class="small muted">${esc(x.why || "")}</div></td>
       <td class="num">${x.periods}</td><td class="small">${esc(x.from === x.to ? x.from : `${x.from} to ${x.to}`)}</td><td class="num">${vN(x.total)}${x.units ? ` <span class="small muted">${esc(x.units)}</span>` : ""}</td>
       <td class="small">${x.pv ? `${vN(x.pv.total)} <span class="mono muted">${esc(x.pv.row)}</span>` : `<span class="muted">–</span>`}</td></tr>`;
   return `<div class="card" id="linesCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Cash-flow lines the overlay doesn't read</h2><span class="pill warn">${L.length} to check</span></div>
-    <p class="sub">This year's model has these lines on the sheets the overlay reads, with figures after this year's valuation date, and last year's model had nothing like them (or nothing in them) to discount. The overlay doesn't read them, so this year's value leaves them out: check whether it should take them in.</p>
+    <p class="sub">This year's model has these lines on the sheets the overlay reads, with figures after this year's valuation date, and last year's model had nothing like them (or nothing in them) to discount. The overlay doesn't read them, so this year's value leaves them out: check whether it should take them in.</p>${ns}
     <div class="scroll"><table class="stack-sm"><thead><tr><th>Line</th><th class="num">Periods</th><th>When</th><th class="num">Total, undiscounted</th><th>Its present value in the model</th></tr></thead><tbody>${L.map(row).join("")}</tbody></table></div></div>`;
 }
 // Terms this year's model adds to, or drops from, the sums the overlay's rows sit in, found by setting each sum's terms
@@ -1941,7 +1957,8 @@ function linesCard(R) {
 // the overlay reads doesn't move the value, a point to check. Figures in each model's own units.
 function termsCard(R) {
   const g = R.figures?.gaps || {}, T = (g.new_terms || []).map(x => ({...x, gone: false})), G = (g.gone_terms || []).map(x => ({...x, gone: true}));
-  if (!T.length && !G.length) return "";
+  const ns = cardNeeds("termsCard");
+  if (!T.length && !G.length) return ns || g.new_terms_error ? `<div class="card" id="termsCard"><h2>Terms added or gone in this year's model</h2>${ns || `<p class="small muted">The comparison couldn't run: ${esc(g.new_terms_error)}</p>`}</div>` : "";
   const held = [...T, ...G].filter(x => x.hold).length;
   const state = x => x.in_value ? (x.confirmed ? `<span class="pill ok">${x.gone ? "out of the value" : "in the value"} · confirmed by you</span>` : `<span class="pill warn">${x.gone ? "out of the value" : "in the value"} · to confirm</span>`)
     : `<span class="pill">${x.gone ? "wasn't in the value" : "left out of the value"}</span>`;
@@ -1955,7 +1972,7 @@ function termsCard(R) {
       <td>${act_(x)}</td></tr>`;
   const table = (xs, when) => `<div class="scroll"><table class="stack-sm"><thead><tr><th>Term</th><th>In the value?</th><th class="num">Periods</th><th>${when}</th><th class="num">Total, undiscounted</th><th></th></tr></thead><tbody>${xs.map(row).join("")}</tbody></table></div>`;
   return `<div class="card" id="termsCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Terms added or gone in this year's model</h2>${held ? `<span class="pill warn">${held} to confirm</span>` : `<span class="pill ok">none holding the value</span>`}</div>
-    <p class="sub">Each sum the overlay's rows sit in (the rows it reads, what they add up, and what adds them up) is set against last year's, term by term; a term regrouped under a subtotal of the same sum is neither. One that moves the value (a new term feeding a row the overlay reads, or one last year's value took in that this year's model hasn't) holds it until you confirm it. One beside the rows the overlay reads doesn't move the value: check whether it should.</p>
+    <p class="sub">Each sum the overlay's rows sit in (the rows it reads, what they add up, and what adds them up) is set against last year's, term by term; a term regrouped under a subtotal of the same sum is neither. One that moves the value (a new term feeding a row the overlay reads, or one last year's value took in that this year's model hasn't) holds it until you confirm it. One beside the rows the overlay reads doesn't move the value: check whether it should.</p>${ns}
     ${T.length ? `<h3 style="font-size:15px;margin:12px 0 6px">New this year: figures after this year's valuation date</h3>${table(T, "When")}` : ""}
     ${G.length ? `<h3 style="font-size:15px;margin:16px 0 6px">Gone this year: last year's figures after last year's valuation date</h3>${table(G, "When (last year's)")}` : ""}</div>`;
 }
