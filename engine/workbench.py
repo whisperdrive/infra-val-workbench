@@ -1278,8 +1278,14 @@ def method_file(eid: int) -> Path:
 
 def preferred_method(eid: int) -> str | None:
     """The method a person prefers for this year's value (methods.py), or None for the default."""
+    return (method_choice(eid) or {}).get("key")
+
+
+def method_choice(eid: int) -> dict | None:
+    """The method a person chose, with who, when and the one it replaced: {"key", "by", "at", "previous"}, or None."""
     try:
-        return json.loads(method_file(eid).read_text(encoding="utf-8")).get("key")
+        got = json.loads(method_file(eid).read_text(encoding="utf-8"))
+        return got if isinstance(got, dict) else None
     except (OSError, ValueError):
         return None
 
@@ -1289,14 +1295,19 @@ def set_method(eid: int, key: str | None) -> dict:
     for the move from the default to it."""
     import methods
     f = method_file(eid)
+    was = preferred_method(eid)
+    if key not in (None, "", methods.DEFAULT):
+        if key not in methods.LABEL:
+            raise ValueError(f"no method {key}: one of {', '.join(methods.LABEL)}")
+        res = (get(eid) or {}).get("result") or {}
+        m = next((x for x in ((res.get("methods") or {}).get("methods") or []) if x["key"] == key), None)
+        if m is not None and not m.get("ok"):
+            raise ValueError(f"{methods.LABEL[key]} can't be worked out here: {m.get('why') or 'not worked out'}")
     if key in (None, "", methods.DEFAULT):
-        f.unlink(missing_ok=True)
         key = None
-    elif key not in methods.LABEL:
-        raise ValueError(f"no method {key}: one of {', '.join(methods.LABEL)}")
-    else:
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps({"key": key, "by": "you", "at": time.time()}), encoding="utf-8")
+    # who chose it, when, and what it replaced (for "back to" the previous one); the default chosen is kept too
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"key": key, "by": "you", "at": time.time(), "previous": was}), encoding="utf-8")
     if eid in _SESSIONS:
         _SESSIONS[eid][1]["method"] = key
     _touch(eid)  # the result's inputs changed: the orchestrator works it out again
@@ -1314,6 +1325,7 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
     summary["held_values"] = held_values(eid)  # this year's figures a person set, on this year's feed
     summary["this_year_rate"] = this_year_rate(eid)  # and this year's discount rate (result.this_year_rate)
     summary["method"] = preferred_method(eid)  # and the method this year's value is worked out by (methods.py)
+    summary["method_choice"] = method_choice(eid)  # who chose it, when, and the one it replaced
     summary["terms_confirmed"] = sorted(terms_confirmed(eid))  # and the terms a person confirmed (result._term_changes)
     summary["acks"] = acks(eid)  # and the checks a person acknowledged, with the reason (result.hold)
     roll = summary.get("roll")

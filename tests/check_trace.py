@@ -1147,6 +1147,91 @@ def loose_roll_check() -> None:
           "a quarter's rate read at the annual rate, sourced to the annual input)")
 
 
+def interest_check() -> None:
+    """The interest valued: a row of one figure between 0 and 1 in a SUMPRODUCT is a share inside the discounting (and
+    the discounting is still read, the share multiplied in); a cell labelled as an interest multiplying the
+    discounting is a share after it. Against the report: the same, nothing to say; different, or applied where the
+    report doesn't say, held; stated below 100% with none applied, a point to check."""
+    import dcf
+    import interest
+    out = Path(tempfile.mkdtemp(prefix="interest_"))
+    wb = xlsxwriter.Workbook(out / "i.xlsx")
+    dt = wb.add_format({"num_format": "dd-mmm-yy"})
+    ws = wb.add_worksheet("Val")
+    ws.write(3, 1, "Valuation date")
+    ws.write_datetime(3, 2, date(2025, 6, 30), dt)
+    ws.write(4, 1, "Discount rate")
+    ws.write_number(4, 2, 0.08)
+    ws.write(6, 1, "Ownership interest")
+    ws.write_number(6, 2, 0.5)
+    for r, lab in ((8, "Period ending"), (9, "Cash flow"), (10, "Discount factor"), (11, "Interest held")):
+        ws.write(r, 1, lab)
+    n = 6
+    for k in range(n):
+        e = date(2026 + k, 6, 30)
+        ws.write_datetime(8, 3 + k, e, dt)
+        ws.write_number(9, 3 + k, 100.0 + 10 * k)
+        ws.write_formula(10, 3 + k, f"=1/(1+$C$5)^YEARFRAC($C$4,{COL(3 + k)}9,1)", None,
+                         1 / 1.08 ** dcf.yearfrac(date(2025, 6, 30), e, "actual/actual"))
+        ws.write_number(11, 3 + k, 0.5)
+    last = COL(3 + n - 1)
+    pv = sum((100.0 + 10 * k) / 1.08 ** dcf.yearfrac(date(2025, 6, 30), date(2026 + k, 6, 30), "actual/actual")
+             for k in range(n))
+    ws.write(13, 1, "Equity value (share row)")
+    ws.write_formula("C14", f"=SUMPRODUCT(D10:{last}10,D11:{last}11,D12:{last}12)", None, 0.5 * pv)
+    ws.write(14, 1, "Equity value (100%)")
+    ws.write_formula("C15", f"=SUMPRODUCT(D10:{last}10,D11:{last}11)", None, pv)
+    ws.write(15, 1, "Equity value (after)")
+    ws.write_formula("C16", "=C15*C7", None, 0.5 * pv)
+    wb.close()
+    db = sqlite3.connect(build_map.main(str(out / "i.xlsx"), str(out / "db"))["db"])
+    inside = dcftrace.trace(db, "Val!C14")
+    cs = dcftrace.cores(inside)
+    assert cs and cs[0].get("share", {}).get("value") == 0.5 and cs[0].get("inputs"), cs
+    a = interest.applied(inside)
+    assert (a["value"], a["where"]) == (0.5, "inside"), a
+    after = dcftrace.trace(db, "Val!C16")
+    b = interest.applied(after)
+    assert (b["value"], b["where"], b["cell"]) == (0.5, "after", "Val!C7"), b
+    assert interest.applied(dcftrace.trace(db, "Val!C15")) is None
+    said = lambda txt: [{"key": "interest_valued", "status": "approved", "value_text": txt}] if txt else []
+    run = lambda tree, txt: {h["id"]: h["severity"] for h in interest.check({"acks": {}}, said(txt), {"low": {"tree": tree}})["holds"]}
+    assert run(after, "50%") == {} and run(inside, "50%") == {}
+    assert run(after, "100%") == {"interest": "block"}
+    assert run(after, None) == {"interest": "block"}
+    assert run(dcftrace.trace(db, "Val!C15"), "50%") == {"interest": "check"}
+    assert run(dcftrace.trace(db, "Val!C15"), "100%") == {} and run(dcftrace.trace(db, "Val!C15"), None) == {}
+    print("interest: ok (a share row inside a SUMPRODUCT and an interest cell after it are found, the discounting still "
+          "read; against the report: the same passes, another or unstated holds, stated with none applied is checked)")
+
+
+def basis_check() -> None:
+    """The basis of an overlay cell's equity value, from the cell, not the report: its label (cum-distribution, after
+    the distribution), else its formula (a distribution deducted is ex, added cum); and the report's wordings for it."""
+    import keyfacts
+    import result
+    out = Path(tempfile.mkdtemp(prefix="basis_"))
+    wb = xlsxwriter.Workbook(out / "b.xlsx")
+    ws = wb.add_worksheet("Sum")
+    rows = [("Equity value before distribution", 1000.0, None), ("Distribution payable", 40.0, None),
+            ("Equity value (cum-distribution)", 1000.0, None), ("Equity value", 960.0, "=C2-C3"),
+            ("Equity value plus", 1040.0, "=C2+C3"), ("Enterprise value", 1500.0, None)]
+    for i, (lab, v, f) in enumerate(rows, 1):
+        ws.write(i, 1, lab)
+        ws.write_formula(i, 2, f, None, v) if f else ws.write_number(i, 2, v)
+    wb.close()
+    db = sqlite3.connect(build_map.main(str(out / "b.xlsx"), str(out / "db"))["db"])
+    got = {c: result.cell_basis(db, c)[0] for c in ("Sum!C2", "Sum!C4", "Sum!C5", "Sum!C6", "Sum!C7")}
+    assert got == {"Sum!C2": "cum", "Sum!C4": "cum", "Sum!C5": "ex", "Sum!C6": "cum", "Sum!C7": None}, got
+    for text, want in (("including the final distribution", "cum"), ("before payment of the June distribution", "cum"),
+                       ("pre-distribution", "cum"), ("after the distribution", "ex"), ("ex-dividend", "ex"),
+                       ("excluding the declared distribution", "ex"), ("the distribution policy", None)):
+        ex, cum = bool(keyfacts._EX.search(text)), bool(keyfacts._CUM.search(text))
+        assert ("ex" if ex and not cum else "cum" if cum and not ex else None) == want, (text, ex, cum)
+    print("basis: ok (a cell's basis from its label, else its formula: a distribution deducted ex, added cum; the "
+          "report's basis in words: before / after, including / excluding, pre- / post- the distribution)")
+
+
 if __name__ == "__main__":
     main()
     mid_year_check()
@@ -1163,3 +1248,5 @@ if __name__ == "__main__":
     forward_check()
     flows_check()
     loose_roll_check()
+    interest_check()
+    basis_check()

@@ -22,6 +22,7 @@ affects run again by themselves.
 import hashlib
 import json
 import queue
+import re
 import threading
 import time
 import traceback
@@ -787,8 +788,9 @@ def _result_job(eid: int, key: str):
     g = res["figures"].get("gaps")
     dc = (g or {}).get("date_cells") or {}
     for h in (g or {}).get("holds") or []:  # this year's cash flows against last year's (cashflows.py)
-        needs.append(_need_of(h, {"step": "result", "anchor": "flowsCard" if not h["id"].startswith("cf-split")
-                                  and not h["id"].startswith("cf-sign") else "bridgeCard"}))
+        anchor = ("bridgeCard" if h["id"].startswith(("cf-split", "cf-sign")) else "compareCard"
+                  if h["id"] in ("basis", "interest", "interest-two") else "flowsCard")
+        needs.append(_need_of(h, {"step": "result", "anchor": anchor}))
     if g and not g["reliable"]:
         if g.get("no_reads"):
             needs.append({"id": "no-reads", "stage": "result", "severity": "block",
@@ -930,14 +932,25 @@ def _result_job(eid: int, key: str):
                           "title": f"{r['label']} doesn't reconcile to the report",
                           "detail": "; ".join(bad) or "Python couldn't split the value this way",
                           "go": {"step": "rebuild", "anchor": "reconcileCard"}})
+    ex = (res.get("head") or {}).get("basis") != "cum"
     for i, h in enumerate(x for x in res.get("held") or [] if x["held"]):
         sg = h.get("suggestion") or {}
+        if ex and re.search(r"distribution|dividend", h.get("label") or "", re.I) and h.get("value"):
+            sg = {**sg, "text": (sg.get("text") or "") + " This year's value is ex-distribution: the distribution to "
+                  "deduct is the one declared at this year's date, not last year's."}
         needs.append({"id": f"held-{i}", "stage": "result", "severity": "check",
                       "title": f"{h['label']}: {h['value']:,.1f} held at last year's" + (
                           f"; {sg['value']:,.1f} in this year's model" + (", checked" if sg["status"] == "checked" else "")
                           if sg.get("value") is not None else ""),
                       "detail": sg.get("text") or "", "go": {"step": "result", "anchor": "heldCard"}})
     inv = res.get("methods") or {}
+    if inv.get("methods") and not inv.get("ties"):
+        needs.append({"id": "method-ties", "stage": "result", "severity": "check",
+                      "title": "The recomputed methods aren't like for like: the recompute doesn't give the overlay's figure",
+                      "detail": "each discounting recomputed in code, as the overlay discounts, should give the default's "
+                                "figure to the cent; it doesn't, so the recomputed methods (mid-period, mid-year, the other "
+                                "day count) differ from the default by more than their convention",
+                      "go": {"step": "result", "anchor": "methodsCard"}})
     if inv.get("asked") and inv.get("asked") != inv.get("preferred"):
         m = next((x for x in inv.get("methods") or [] if x["key"] == inv["asked"]), {})
         needs.append({"id": "method", "stage": "result", "severity": "check",
@@ -1110,7 +1123,8 @@ KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact"
          ("rate-", "check-input", "A model input to check"), ("growth-", "check-input", "A model input to check"),
          ("franking-", "check-input", "A model input to check"), ("tie-", "check-tie", "A tie to check"),
          ("review-", "review-point", "A review point"), ("failed-", "retry", "A step that failed"),
-         ("method", "check-method", "A method to check"), ("cf-", "check-flows", "Cash flows to check"))
+         ("method", "check-method", "A method to check"), ("cf-", "check-flows", "Cash flows to check"),
+         ("interest", "check-interest", "The interest valued"), ("basis", "check-basis", "The basis to confirm"))
 
 
 def dress(n: dict) -> dict:

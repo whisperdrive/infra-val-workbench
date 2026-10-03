@@ -28,11 +28,11 @@ from docingest import numbers
 
 MAX_CHARS = 150_000  # longer reports: send the pages most likely to hold conclusions and assumptions
 MAX_ROUNDS = 3       # review and remediation rounds before a fact goes to a person
-CHECK_VERSION = 5    # check()'s version (nothing here re-checks saved facts by it yet: a new run checks afresh) (2: spacing-tolerant, waivers;
+CHECK_VERSION = 6    # check()'s version (nothing here re-checks saved facts by it yet: a new run checks afresh) (2: spacing-tolerant, waivers;
                      # 3: numbers worked out by code, none for identity text or a range without a preferred point;
                      # 4: a date checked whole, its month included; 5: a figure's scale and currency, the label it
                      # sits under, a quote on word and number boundaries, identity checked as text, a range's ends,
-                     # a waiver tied to the quote and figures it was given for)
+                     # a waiver tied to the quote and figures it was given for; 6: the interest valued, a %)
 LOOP_CHARS = 60_000  # the loop sends only the pages the open facts cite, and their neighbours
 KEYWORDS = re.compile(r"valuation|discount|wacc|terminal|growth|multiple|rab|conclu|range|preferred|assumption|"
                       r"enterprise value|equity value|methodolog|approach|summary|cost of capital|cpi|inflation", re.I)
@@ -47,7 +47,9 @@ conclusion: equity_value: the concluded equity value. low_text / high_text for t
             Where the report states them: terminal_value, pv_forecast (present value of the discrete forecast
             cash flows), pv_terminal_value (present value of the terminal value), franking_credits_value (the
             value of franking credits in the equity value), franking_credits_share (that value as a % of the
-            equity value: not the utilisation rate)
+            equity value: not the utilisation rate). interest_valued: the share of the entity the equity value is
+            for, as a % (100% where the whole of the equity is valued; 50% for a 50% interest); basis: whose interest,
+            as the report says (e.g. "the client's interest", "100% of the equity")
 assumption: discount_rate (basis e.g. cost of equity, or a post-tax nominal WACC), terminal_growth_rate,
             franking_utilisation (the share of franking credits' face value counted in the
             valuation, whatever the report calls it: utilisation rate, gamma, theta, or "X% value ascribed to franking
@@ -62,7 +64,7 @@ Nothing else: no other keys."""
 KNOWN = {"target_name", "client", "valuation_date", "currency_units", "equity_value", "equity_value_cum",
          "equity_value_ex", "terminal_value", "pv_forecast", "pv_terminal_value", "franking_credits_value",
          "franking_credits_share", "discount_rate", "terminal_growth_rate", "franking_utilisation",
-         "terminal_value_method", "terminal_multiple"}
+         "terminal_value_method", "terminal_multiple", "interest_valued"}
 CRITICAL = ("valuation_date", "equity_value", "discount_rate")  # the bridge can't start without them
 
 FIELDS = """- Low, mid and high, for every figure, the values and the assumptions alike: where the report gives a range
@@ -364,10 +366,11 @@ TERMS = {"equity_value": r"equity|net assets|\bshares?\b|unitholder|securit",
          "pv_forecast": r"present value|\bpv\b|discrete|forecast|explicit",
          "pv_terminal_value": r"present value|\bpv\b|terminal"}
 TERMS["terminal_multiple"] = r"multiple|ev\s*/\s*(?:ebitda|rab)|exit|times"
+TERMS["interest_valued"] = r"interest|share|stake|holding|ownership|owns?\b|of the equity|attributable"
 TERMS.update(equity_value_ex=TERMS["equity_value"], equity_value_cum=TERMS["equity_value"],
              franking_credits_share=TERMS["franking_credits_value"])
 OTHER_TERMS = r"enterprise value|net debt|\bdebt\b|ebitda|revenue|capex|capital expenditure|tax rate"
-PCT_KEYS = {"discount_rate", "terminal_growth_rate", "franking_utilisation", "franking_credits_share"}
+PCT_KEYS = {"discount_rate", "terminal_growth_rate", "franking_utilisation", "franking_credits_share", "interest_valued"}
 
 
 def pct_like(f: dict) -> bool:
@@ -880,8 +883,12 @@ def run(markdown: str, model: str = "gpt-6-luna", reviewer_model: str = "gpt-6-s
 # cum-distribution; the rebuild can still switch to cum where only that figure ties (the model's cash flows are
 # cum-distribution by default).
 
-_EX = re.compile(r"\bex[- ]?(?:distribution|dividend|div)\b", re.I)
-_CUM = re.compile(r"\bcum[- ]?(?:distribution|dividend|div)\b", re.I)
+# the basis, as reports put it: ex- / cum-distribution, and in words (after / before, excluding / including, post- /
+# pre- the distribution or dividend, a word or two between: "before payment of the June distribution")
+_EX = re.compile(r"\bex[- ]?(?:distribution|dividend|div)s?\b|\b(?:after|post|excluding|excl\.?|net of)[- ]"
+                 r"(?:\w+[- ]){0,4}?(?:distribution|dividend)s?\b", re.I)
+_CUM = re.compile(r"\bcum[- ]?(?:distribution|dividend|div)s?\b|\b(?:before|pre|including|incl\.?|inclusive of)[- ]"
+                  r"(?:\w+[- ]){0,4}?(?:distribution|dividend)s?\b", re.I)
 OVERWHELMING = 3  # cum-distribution mentions per ex-distribution mention that make the report "overwhelmingly" cum
 
 

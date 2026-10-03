@@ -43,7 +43,7 @@ def _vocabulary() -> set[str]:
     import methods
     words |= set(methods.LABEL)
     import cashflows
-    words |= set(cashflows.IDS) | set(cashflows.KINDS)
+    words |= set(cashflows.IDS) | set(cashflows.KINDS) | {"interest", "interest-two", "inside", "after", "basis"}
     words |= {"waiting", "queued", "running", "done", "attention", "blocked", "failed", "error", "pending", "approved",
               "rejected", "agreed", "escalated", "withdrawn", "open", "ready", "processing", "unread", "verified",
               "flagged", "resolved", "edited", "figure", "confirmed", "confirmed by the reviewer", "corrected", "disputed",
@@ -252,6 +252,11 @@ def _result(eid: int, res: dict) -> dict:
                                                               if str(y)[2:].isdigit()]),
                    "undated": (res.get("chart") or {}).get("undated")},
          "flows": _flows(res),
+         "interest": {"stated": (res.get("interest") or {}).get("report") is not None,
+                      "applied": ((res.get("interest") or {}).get("model") or {}).get("where"),
+                      "same": None if (res.get("interest") or {}).get("report") is None
+                      or not (res.get("interest") or {}).get("model") else
+                      abs(res["interest"]["report"] - res["interest"]["model"]["value"]) < 1e-6},
          "scenario": _scenario(res.get("scenario"))}
     # the discountings traced under each end: how many, and how many can be read here
     try:
@@ -427,7 +432,7 @@ _KEYS = {"app", "generated", "files", "reports", "workbooks", "roles", "placed",
          "monthly", "quarterly", "semi-annual", "annual", "irregular",
          "flows", "cores", "recomputed", "both_years", "periods", "why", "checks", "id", "severity", "acked", "split",
          "client_rows", "compared", "changed", "outside_of_value", "revised", "added", "dropped", "cash_flows", "outside",
-         "convention", "ordered", "undated", "this_year"}
+         "convention", "ordered", "undated", "this_year", "interest", "stated", "applied"}
 
 
 def as_text(eid: int) -> str:

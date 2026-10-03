@@ -32,10 +32,11 @@ ISO = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
 DISCLAIMER = ("Prepared by software from the engagement's own files. Every figure here was read, rebuilt or rolled "
               "forward by the workbench, and is for the engagement team to check before relying on it. It is not a "
               "valuation report.")
-STEPS = ("report", "rounding", "prior_feed", "rebuilt", "roll", "time", "cash", "forecast", "held", "rate", "this_year")
+STEPS = ("report", "rounding", "prior_feed", "rebuilt", "roll", "time", "cash", "forecast", "held", "rate", "method",
+         "this_year")
 STEP_SHORT = {"report": "Report", "rounding": "Rounding", "prior_feed": "Client file", "rebuilt": "Rebuilt",
               "time": "Time value", "cash": "Cash flows paid", "forecast": "New forecast", "roll": "Roll-forward",
-              "held": "Held inputs", "rate": "Discount rate", "this_year": "This year"}
+              "held": "Held inputs", "rate": "Discount rate", "method": "Method", "this_year": "This year"}
 ROLES = {"prior_report": "Last year's report", "prior_overlay": "Last year's overlay",
          "prior_model": "Last year's client model", "current_model": "This year's client model"}
 INPUTS = {"rate": "Discount rate", "growth": "Terminal growth rate", "multiple": "Exit multiple",
@@ -174,7 +175,7 @@ def _summary(S: _Sheet, g: dict, res: dict, review: dict):
     S.text(DISCLAIMER, f["disc"], 5, height=42)
     S.gap()
     S.head("The equity value")
-    S.text(f"{_units(res)} · {_basis(res)} · the mid is the midpoint of the low and the high", f["muted"], 5)
+    S.text(f"{_units(res)} · {_basis(res)} · {_mid_words(res)}", f["muted"], 5)
     S.header("", "Low", "Mid", "High")
     row = lambda label, d, fl=None, fn=None: S.line(label, *[(d or {}).get(e) for e in ("low", "mid", "high")],
                                                    fs=[fl or f["wrap"]] + [fn or f["num"]] * 3)
@@ -251,8 +252,8 @@ def _bridge(S: _Sheet, book, res: dict):
     rt = ((res.get("inputs") or {}).get("rate") or {}).get("this_year") or {}
     at = f"at this year's discount rate, {_rates(rt)}" if rt.get("applied") else "at last year's discount rate"
     S.title("The value bridge: last year to this year",
-            f"{_units(res)} · equity value, {_basis(res)} · {at}{to}. The mid is the midpoint of "
-            f"the low and the high, step by step. A total is the value at that point; the other rows are the change.", 5)
+            f"{_units(res)} · equity value, {_basis(res)} · {at}{to}. {_mid_words(res).capitalize()}, step by "
+            f"step. A total is the value at that point; the other rows are the change.", 5)
     by = {e: {s["key"]: s for s in (B.get(e) or {}).get("steps") or []} for e in ("low", "mid", "high")}
     keys = [k for k in STEPS if any(k in by[e] for e in by)]
     keys += [k for e in by for k in by[e] if k not in keys]
@@ -593,6 +594,14 @@ def _review_of(g: dict) -> dict:
 
 
 # ---- all of it ----------------------------------------------------------------------------------------------------
+
+def _mid_words(res: dict) -> str:
+    """What the mid is: the midpoint of the low and the high (the convention), unless the method preferred for this
+    year's value works the mid out at the midpoint rate."""
+    if ((res.get("methods") or {}).get("preferred")) == "mid_rate":
+        return "this year's mid is at the midpoint rate (the method preferred), not the midpoint of the low and the high"
+    return "the mid is the midpoint of the low and the high"
+
 
 def ready(g: dict | None) -> bool:
     """The bridge is worked out, on the inputs as they are now (not an earlier result shown while it runs again)."""

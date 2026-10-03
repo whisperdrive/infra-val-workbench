@@ -117,12 +117,46 @@ def locate(summary: dict, head: dict) -> dict | None:
             got = _pair(ms)
             if got:
                 got["basis"] = basis
+                got["cell_basis"], got["cell_basis_why"] = cell_basis(db, got["low"])
                 got["how"] = (got["how"] + (f"; the report's {head['basis'] or 'ex'}-distribution figure isn't in the overlay, "
                                             f"its {basis}-distribution one is (the model gives {basis}-distribution values)"
                                             if k else ""))
                 got["switched"] = bool(k)
                 return got
     return None
+
+
+_DIST = re.compile(r"distribution|dividend", re.I)
+
+
+def cell_basis(db, cell: str) -> tuple[str | None, str]:
+    """The basis of an overlay cell's equity value, from the cell itself, not the report: its row's label (ex- or
+    cum-distribution, or after / before the distribution), else its formula: a distribution or dividend term deducted
+    is ex-distribution, one added cum. -> ("ex" / "cum" / None, why)."""
+    try:
+        s, r, _c = dcf._ref(cell, "")[:3]
+    except (TypeError, ValueError):
+        return None, ""
+    label = dcftrace._label(db, s, r) or ""
+    ex, cum = bool(keyfacts._EX.search(label)), bool(keyfacts._CUM.search(label))
+    if ex != cum:
+        return ("ex" if ex else "cum"), f"its label: {label}"
+    try:
+        w = dcftrace.trace(db, cell).get("words") or ""
+    except ValueError:
+        return None, ""
+    # a distribution term (not another equity value whose label mentions one) deducted or added
+    terms = re.findall(r"([+\-])\s*([^+\-]*)", "+" + w.lstrip("=").strip())
+    signs = {sg for sg, term in terms[1:] if _DIST.search(term) and not re.search(r"equity|value", term, re.I)}
+    if signs == {"-"}:
+        return "ex", f"its formula deducts a distribution: {w.lstrip('=')}"
+    if signs == {"+"}:
+        return "cum", f"its formula adds a distribution: {w.lstrip('=')}"
+    if len(terms) <= 1:  # the formula is one term: its own words say the basis
+        ex, cum = bool(keyfacts._EX.search(w)), bool(keyfacts._CUM.search(w))
+        if ex != cum:
+            return ("ex" if ex else "cum"), f"its formula: {w.lstrip('=')}"
+    return None, ""
 
 
 def _pair(ms: list[dict]) -> dict | None:
@@ -1403,13 +1437,29 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
     figs = ov.deep(figures, sess, summary, cells)
     figs["rate"] = rate_now
     figs["horizon"] = horizon
-    if where.get("basis") == "cum" and head["basis"] != "cum" and head.get("other"):
-        head = {**head, **{k: head["other"][k] for k in ("low", "high")}, "basis": "cum",
-                "texts": head["other"]["texts"], "why": head["why"] + ["the overlay gives the cum-distribution value"]}
+    if where.get("switched") and head.get("other") and where.get("basis") != head["basis"]:
+        # the report's other figure is the one in the overlay, ex or cum: the bridge starts from it, on its basis
+        b = where["basis"]
+        head = {**head, **{k: head["other"][k] for k in ("low", "high")}, "basis": b,
+                "texts": head["other"]["texts"], "why": head["why"] + [f"the overlay gives the {b}-distribution value"]}
         if head["low"] is not None and head["high"] is not None:
             head["mid"] = (head["low"] + head["high"]) / 2
         else:
             head["low"] = head["high"] = head["mid"] = head["other"]["value"]
+    basis_holds = []
+    cb, rb = where.get("cell_basis"), where.get("basis")
+    if cb and rb and cb != rb:
+        basis_holds.append(hold(summary, "basis", [where["low"], rb, cb],
+                                f"The report's figure is {rb}-distribution; the overlay cell it ties to is {cb}-distribution",
+                                f"{where['low']}: {where.get('cell_basis_why')}. The value rolled forward is on the "
+                                "overlay cell's basis: confirm which the report concludes"))
+    elif cb == "cum" and not rb:
+        basis_holds.append(hold(summary, "basis", [where["low"], None, cb],
+                                "The report doesn't say ex- or cum-distribution; the overlay cell is cum-distribution",
+                                f"{where['low']}: {where.get('cell_basis_why')}. Taken as cum-distribution, the "
+                                "overlay's: confirm the basis"))
+    if cb and not head.get("basis"):
+        head = {**head, "basis": cb, "why": head["why"] + [f"the overlay cell is {cb}-distribution ({where.get('cell_basis_why')})"]}
     unit = lambda v: v / (where["scale"] or 1.0) * (where["sign"] or 1) if isinstance(v, float) else None
     import cashflows
     try:  # this year's cash flows against last year's, period by period, and the checks on them
@@ -1420,6 +1470,13 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
             summary, "cf-error", [type(ex).__name__], "The cash-flow checks couldn't run",
             f"{type(ex).__name__}: {ex}: this year's cash flows weren't compared with last year's", severity="check")],
             "split": {}}
+    import interest
+    try:  # the interest valued: the report's against the share the overlay applies to the cash flows
+        inter = interest.check(summary, facts, fl.get("trees") or {})
+    except Exception as ex:
+        inter = {"report": None, "model": None, "holds": [], "error": f"{type(ex).__name__}: {ex}"}
+    held_inputs = ov.deep(held_list, sess, summary, where, figs)
+    cfc["holds"] = cfc["holds"] + inter["holds"] + basis_holds
     if figs.get("gaps") is not None:
         figs["gaps"]["holds"] = cfc["holds"]
         if holding(cfc["holds"]):
@@ -1448,7 +1505,6 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
     terminal = keyfacts.terminal_method(facts, context.terminal(markdown))  # how the report works out its terminal value
     inputs = ov.deep(sourced.check, sess, summary, where, facts, asm, traced, unit, terminal)
     inputs["rate"]["this_year"] = rate_now  # last year's is sourced and checked; this year's is a person's
-    held_inputs = ov.deep(held_list, sess, summary, where, figs)
     try:  # the scenario each client model was saved on, and when: beside the value, not in its way
         scenario = ov.deep(scenarios.settings, sess, summary)
     except Exception as ex:
@@ -1458,14 +1514,22 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
     inv = None
     if this_year and this_year["mid"] is not None:  # this year's value worked out the other ways (methods.py)
         import methods
+        # cum-distribution: this year's value keeps the period ending on the new date, as last year's kept its own
+        # (the default cuts it: ex-distribution); a person's preference overrides it
+        asked = summary.get("method") or ("overlay_on_date" if head.get("basis") == "cum" else None)
         try:
-            inv = ov.deep(methods.inventory, sess, summary, where, unit, rate_now, summary.get("method"))
+            inv = ov.deep(methods.inventory, sess, summary, where, unit, rate_now, asked)
+            if asked and not summary.get("method"):
+                inv["by"] = "basis"
+            elif summary.get("method_choice"):
+                inv["choice"] = {k: summary["method_choice"].get(k) for k in ("by", "at", "previous")}
             this_year = methods.apply(br, inv) or this_year  # the preferred method's, with its own bridge step
         except Exception as ex:  # beside the value, not in its way
             inv = {"methods": [], "default": methods.DEFAULT, "preferred": methods.DEFAULT, "asked": summary.get("method"),
                    "error": f"{type(ex).__name__}: {ex}"}
     return {"head": head, "where": where, "tie": tie, "figures": figs, "bridges": br, "chart": ch, "reconcile": rec,
             "flows": _flows_public(fl, unit), "flow_checks": {"split": cfc.get("split") or {}, "rows": cfc.get("rows")},
+            "interest": {k: inter.get(k) for k in ("report", "report_text", "model", "error")},
             "assumptions": asm, "inputs": inputs, "held": held_inputs, "terminal": terminal, "methods": inv,
             "scenario": scenario,
             "values": {"report": {e: head[e] for e in ("low", "mid", "high")},

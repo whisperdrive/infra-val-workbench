@@ -267,11 +267,20 @@ def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict 
             rs = [_row(db, a, here) for a in args]
             if not all(rs):
                 return None
-            df = [r for r in rs if valuation._is_df(db, (r[0], r[1], r[2], r[1], r[3]))]
-            masks = [r for r in rs if r not in df and set(_values(db, *r).values()) <= {0.0, 1.0}]
-            cfs = [r for r in rs if r not in df and r not in masks]
-            if len(df) != 1 or len(cfs) != 1 or not masks or any((m[2], m[3]) != (cfs[0][2], cfs[0][3]) for m in masks):
+            # an ownership share: a row of one figure between 0 and 1 (a 50% interest by period), multiplied in like a
+            # flag row; never a factor row, which falls period by period
+            shares = [r for r in rs if len(set(_values(db, *r).values())) == 1
+                      and 0 < next(iter(_values(db, *r).values())) < 1]
+            df = [r for r in rs if r not in shares and valuation._is_df(db, (r[0], r[1], r[2], r[1], r[3]))]
+            masks = [r for r in rs if r not in df and r not in shares and set(_values(db, *r).values()) <= {0.0, 1.0}]
+            cfs = [r for r in rs if r not in df and r not in masks and r not in shares]
+            masks += shares
+            if len(df) != 1 or len(cfs) != 1 or not masks or len(shares) > 1 \
+                    or any((m[2], m[3]) != (cfs[0][2], cfs[0][3]) for m in masks):
                 return None
+            if shares:
+                core["share"] = {"row": _range(*shares[0]), "value": next(iter(_values(db, *shares[0]).values())),
+                                 "label": _label(db, shares[0][0], shares[0][1])}
             cf, fac_row = cfs[0], df[0]
             cols = list(range(cf[2], cf[3] + 1))
             fv = list(_values(db, *fac_row).values())
@@ -282,7 +291,7 @@ def _core(db, sheet: str, row: int, col: int, call: tuple, whole: bool) -> dict 
             starts = {"cells": {c: (fac_row[0], fac_row[1], fac_row[2] + i) for i, c in enumerate(cols)}}
             m = _method(db, seen, cf[0], cols, starts=starts, flows={c: v * on.get(c, 0.0) for c, v in flows.items()})
             core.update(kind="sumproduct", what=f"SUMPRODUCT of a cash-flow row, a discount-factor row and {len(masks)} "
-                        "flag row(s) (0 or 1 by period)", factor_row=_range(*fac_row), mask=[_range(*x) for x in masks],
+                        "flag or share row(s)", factor_row=_range(*fac_row), mask=[_range(*x) for x in masks],
                         cashflow=_range(*cf), pv=sum(flows.get(c, 0.0) * f for c, f in fac.items()), factors=fac, method=m)
             if not m:
                 core["loose"] = valuation.loose_factors(db, cols, seen, cf[0], starts=starts)
@@ -704,6 +713,19 @@ def recompute(db, tree: dict, pv: dict[str, float]) -> float | None:
         if key in given:
             return given[key]
         if n["cell"] in pv:
+            cs = n.get("cores") or []
+            raw = _expand(db, n["formula"], names) if n.get("formula") else ""
+            if len(cs) == 1 and not cs[0].get("whole") and cs[0]["call"] in raw:
+                # the discounting is part of its cell's formula (=SUMPRODUCT(...) * share): its value in place of the
+                # call, the rest of the formula evaluated, not the cell replaced by the discounting alone
+                for c in n.get("children", []):
+                    v = value(c)
+                    if v is not None:
+                        rc = dcf._ref(c["cell"], "")
+                        given[(rc[0], rc[1], rc[2])] = v
+                expr = _STR.sub('""', raw.replace(cs[0]["call"], f"({float(pv[n['cell']])!r})", 1))
+                given[key] = float(evaluate(db, expr, key[0], given))
+                return given[key]
             given[key] = pv[n["cell"]]
             return given[key]
         if not n.get("on_path") or n.get("again") or not n.get("formula"):

@@ -819,6 +819,13 @@ def methods_check(eid: int) -> None:
     wait(eid, lambda v: finished() != t0 and not v["busy"] and status(v)["result"] in orc.SETTLED, "the result by mid-period")
     res = wb.get(eid)["result"]
     assert res["methods"]["preferred"] == "mid_period", res["methods"]["preferred"]
+    ch = res["methods"].get("choice") or {}
+    assert ch.get("by") == "you" and ch.get("at") and ch.get("previous") is None, ch  # who chose it, when, what it replaced
+    try:  # a method this engagement can't work out isn't taken
+        wb.set_method(eid, "own_flags")
+        raise AssertionError("a method not worked out here was preferred")
+    except ValueError as ex:
+        assert "can't be worked out here" in str(ex), ex
     for e in ("low", "mid", "high"):
         s = {x["key"]: x for x in res["bridges"][e]["steps"]}
         assert abs(s["method"]["value"] - move[e]) < 1e-6 and abs(res["values"]["this_year"][e] - s["this_year"]["value"]) < 1e-9
@@ -829,6 +836,7 @@ def methods_check(eid: int) -> None:
     wait(eid, lambda v: finished() != t0 and not v["busy"] and status(v)["review"] in orc.SETTLED, "the result back again")
     res = wb.get(eid)["result"]
     assert abs(res["values"]["this_year"]["mid"] - mid0) < 1e-9 and "method" not in [x["key"] for x in res["bridges"]["mid"]["steps"]]
+    assert wb.method_choice(eid)["previous"] == "mid_period", wb.method_choice(eid)  # "back to" the one before
     print(f"methods: ok ({sum(m['ok'] for m in inv['methods'])} of {len(inv['methods'])} worked out, the recompute tying to "
           f"the overlay; mid-period {move['mid']:+.1f} at the mid, preferred: a bridge step of its own; back, the first result)")
 

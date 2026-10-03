@@ -1601,7 +1601,7 @@ function viewResult() {
   return `${stale}<div class="card" id="bridgeCard"><div class="row" style="justify-content:space-between;align-items:flex-start">
       <div><h2>Last year to this year</h2><p class="sub" style="margin:0">${esc(u)} · equity value, ${R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution"} · ${rateNow(R)?.applied ? `at this year's discount rate, ${esc(rateRange(rateNow(R).low, rateNow(R).high))}` : "at last year's discount rate"}${B.valuation_date ? ` · to ${esc(B.valuation_date)}` : ""}${heldNote(R)}</p></div>
       <div class="row">${state.hl?.step ? hlNote(STEP_SHORT[state.hl.step] || state.hl.step) : ""}<a class="btn small" href="${workpaperUrl()}" download title="The result, the bridge, the cash flows, the inputs and their checks, the facts, the review and the run log, as an Excel file">Export workpaper</a><div class="seg" role="group" aria-label="Which end">${["low", "mid", "high"].map(k => `<button type="button" data-end="${k}" class="${end === k ? "on" : ""}" aria-pressed="${end === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div></div></div>
-    ${from != null && to != null && !B.held ? `<div class="move"><span class="from">${vN(from)}</span><span class="muted">→</span><span class="to">${vN(to)}</span><span class="${to - from >= 0 ? "okt" : "warnt"}">${signed(to - from)}</span><span class="small muted">the ${end}${end === "mid" ? ", the midpoint of the low and the high" : ""}</span></div>` : ""}
+    ${from != null && to != null && !B.held ? `<div class="move"><span class="from">${vN(from)}</span><span class="muted">→</span><span class="to">${vN(to)}</span><span class="${to - from >= 0 ? "okt" : "warnt"}">${signed(to - from)}</span><span class="small muted">the ${end}${end === "mid" ? (R.methods?.preferred === "mid_rate" ? ", at the midpoint rate (the method preferred)" : ", the midpoint of the low and the high") : ""}</span></div>` : ""}
     ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until what needs you is settled (rows to find, terms to confirm, cash flows to check): the bridge stops at last year's rebuilt value.</div>` : ""}
     <div class="grid2" style="margin-top:10px"><div id="brChart"></div><div class="scroll"><table class="bridge"><thead><tr><th>Step</th><th class="num">Change</th><th class="num">Value</th></tr></thead><tbody>${rows}</tbody></table>
     ${(B.notes || []).length ? `<p class="small muted">${esc(B.notes.join("; "))}</p>` : ""}</div></div></div>
@@ -1664,21 +1664,38 @@ function bindRate() {
 // year's value, with a bridge step of its own.
 function methodsCard(R) {
   const M = R.methods; if (!M?.methods?.length) return M?.error ? `<div class="card" id="methodsCard"><h2>Methods</h2><p class="small muted">${esc(M.error)}</p></div>` : "";
+  const rs = stageOf("result"), pending = busy(rs.status);
   const d = x => x == null ? `<span class="muted">–</span>` : Math.abs(x) < 0.05 ? `<span class="muted">same</span>` : signed(x);
+  const lab = k => (M.methods.find(m => m.key === k) || {}).label || k;
+  const tip = m => `Use ${m.label.toLowerCase()} for this year's value. The mid moves ${m.vs_default?.mid == null ? "–" : signed(m.vs_default.mid)} from the default; the bridge gets a "Method" step for the move, and you can go back at any time.`;
   const row = m => { const pref = M.preferred === m.key, def = m.key === M.default;
     return `<tr class="${pref ? "tot" : ""}"><td><b>${esc(m.label)}</b> ${def ? `<span class="pill">default</span>` : ""}${pref ? ` <span class="pill ok">this year's value</span>` : ""}<div class="small muted">${esc(m.ok ? m.what : m.why || m.what)}</div></td>
       <td class="num">${m.ok ? vN(m.low) : ""}</td><td class="num">${m.ok ? vN(m.mid) : ""}</td><td class="num">${m.ok ? vN(m.high) : ""}</td>
       <td class="num">${m.ok ? d(m.vs_default?.mid) : `<span class="muted">not worked out</span>`}</td>
-      <td>${m.ok && !pref ? `<button class="btn small" type="button" data-method="${esc(m.key)}">Prefer</button>` : ""}</td></tr>`; };
-  return `<div class="card" id="methodsCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Methods</h2>${M.ties ? `<span class="pill ok">the recompute ties to the overlay</span>` : `<span class="pill warn">the recompute doesn't tie</span>`}</div>
-    <p class="sub">This year's value worked out other ways, on the same rolled-forward model and rates. The default is the overlay's own formulas with the periods ending on or before the new date cut off; the one you prefer is this year's value, and the bridge has a step for the move to it.${M.flags?.length ? " The overlay's own forecast flags were found and rolled as a method of their own." : ""}</p>
+      <td>${m.ok && !pref ? `<button class="btn small" type="button" data-method="${esc(m.key)}" data-move="${m.vs_default?.mid ?? ""}" data-label="${esc(m.label)}" title="${esc(tip(m))}" aria-label="${esc(`Prefer ${m.label}`)}" ${pending ? "disabled" : ""}>Prefer</button>` : ""}</td></tr>`; };
+  const when = M.choice?.at ? new Date(M.choice.at * 1000).toLocaleDateString(undefined, {day: "numeric", month: "long", year: "numeric"}) : "";
+  const who = M.by === "basis" ? `Chosen by the basis: last year's value is cum-distribution, so this year's keeps the period ending on the new date. Prefer the default to cut it (ex-distribution).`
+    : M.preferred !== M.default && M.choice ? `Preferred by ${esc(M.choice.by || "you")}${when ? ` on ${esc(when)}` : ""}.` : "";
+  const back = [];
+  if (M.preferred !== M.default || (M.asked && M.asked !== M.default)) back.push(`<button class="linkbtn" type="button" data-method="" data-label="${esc(lab(M.default))}" ${pending ? "disabled" : ""}>Back to the default</button>`);
+  const prev = M.choice?.previous;
+  if (prev && prev !== M.preferred && prev !== M.default && M.methods.find(m => m.key === prev)?.ok) back.push(`<button class="linkbtn" type="button" data-method="${esc(prev)}" data-label="${esc(lab(prev))}" ${pending ? "disabled" : ""}>Back to ${esc(lab(prev).toLowerCase())}</button>`);
+  return `<div class="card" id="methodsCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Methods</h2><span class="row" style="gap:6px">${pending ? `<span class="pill info">recomputing the bridge</span>` : ""}${M.ties ? `<span class="pill ok">the recompute ties to the overlay</span>` : `<span class="pill warn" title="Recomputed in code, the overlay's own convention doesn't give the overlay's figure: the recomputed methods aren't like for like">the recompute doesn't tie</span>`}</span></div>
+    <p class="sub">This year's value worked out other ways, on the same rolled-forward model and rates. The default is the overlay's own formulas with the periods ending on or before the new date cut off. <b>Prefer</b> makes a method this year's value: the bridge gets a "Method" step for the move from the default, and the choice is recorded with who made it and when.${M.flags?.length ? " The overlay's own forecast flags were found and rolled as a method of their own." : ""}</p>
+    ${who ? `<p class="small" style="margin:0 0 8px">${who}</p>` : ""}
     <div class="scroll"><table class="stack-sm"><thead><tr><th>Method</th><th class="num">Low</th><th class="num">Mid</th><th class="num">High</th><th class="num">Mid vs default</th><th></th></tr></thead><tbody>${M.methods.map(row).join("")}</tbody></table></div>
-    ${M.preferred !== M.default ? `<p class="small" style="margin:8px 0 0"><button class="linkbtn" type="button" data-method="">Back to the default</button></p>` : ""}</div>`;
+    ${back.length ? `<p class="small" style="margin:8px 0 0">${back.join(" · ")}</p>` : ""}</div>`;
 }
 function bindMethods() {
-  document.querySelectorAll("[data-method]").forEach(b => b.onclick = () => act(async () => {
-    const r = await api(`/api/engagements/${E.id}/method`, {method: "POST", body: {key: b.dataset.method || null}});
-    toast(`This year's value by ${r.label.toLowerCase()}${r.default ? " (the default)" : ""}: the bridge runs again`); }));
+  document.querySelectorAll("[data-method]").forEach(b => b.onclick = () => {
+    const key = b.dataset.method || null, move = b.dataset.move;
+    const say = key ? `Make "${b.dataset.label}" this year's value?\n\nThe mid moves ${move === "" ? "by an amount not worked out" : `${signed(+move)} from the default`}. The bridge gets a "Method" step for the move. You can go back at any time.`
+      : `Go back to the default (${b.dataset.label}) for this year's value?`;
+    if (!confirm(say)) return;
+    act(async () => {
+      const r = await api(`/api/engagements/${E.id}/method`, {method: "POST", body: {key}});
+      toast(`This year's value by ${r.label.toLowerCase()}${r.default ? " (the default)" : ""}: the bridge is being worked out again`, 6000); });
+  });
 }
 // The inputs typed in the overlay outside its discountings (net debt, a cash balance, a declared distribution): held at
 // last year's until you set this year's, each with a suggestion from this year's client model, checked against last
@@ -2085,7 +2102,7 @@ function mountCharts(root) {
 // #all: where each engagement is and its value, a click to open it, two ticked to compare; #compare=A,B: their
 // equity values, inputs and dates, bridges (the mid, step by step) and this year's cash flows side by side.
 let OV = null, ovAt = 0, ovBusy = false, ovTimer = null, ovFail = 0, CMP = null, cmpBusy = false;
-const STEP_ORDER = ["report", "rounding", "prior_feed", "rebuilt", "roll", "time", "cash", "forecast", "held", "rate", "this_year"];
+const STEP_ORDER = ["report", "rounding", "prior_feed", "rebuilt", "roll", "time", "cash", "forecast", "held", "rate", "method", "this_year"];
 const globalOf = h => h.has("all") ? {view: "all"} : h.get("compare") ? {view: "compare", ids: h.get("compare").split(",").map(Number).filter(Boolean).slice(0, 2)}
   : !h.get("e") && !h.get("s") ? {view: "all"} : null;  // no engagement or page asked for: the app opens on every engagement
 function leave() { E = null; clearTimeout(pollTimer); }  // off an engagement: nothing of it polled
@@ -2202,7 +2219,7 @@ function bindGlobal() {
   if (state.global?.view !== "compare" || !CMP?.data) return;
   const [A, B] = CMP.data, u = A.result?.bridges?.units || A.result?.head?.units || "";
   const steps = X => Object.fromEntries((X.result?.bridges?.mid?.steps || []).filter(s => !s.total).map(s => [s.key, s.value]));
-  const moved = k => ["time", "cash", "forecast", "roll", "held"].includes(k) || [SA[k], SB[k]].some(v => Math.abs(v ?? 0) >= 0.05);
+  const moved = k => ["time", "cash", "forecast", "roll", "held", "method"].includes(k) || [SA[k], SB[k]].some(v => Math.abs(v ?? 0) >= 0.05);
   const SA = steps(A), SB = steps(B), keys = STEP_ORDER.filter(k => (k in SA || k in SB) && moved(k));
   if (keys.length) $("#cmpBridgeChart")?.append(chartCard({title: "What moved the value: the mid's steps", kind: "bar", units: u, labels: keys.map(k => STEP_SHORT[k] || k),
     series: [{name: A.name, data: keys.map(k => SA[k] ?? null)}, {name: B.name, data: keys.map(k => SB[k] ?? null)}]}));
