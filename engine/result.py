@@ -223,11 +223,13 @@ def _balances(sess, summary: dict) -> dict:
     labels = pri.labels()
     iso = lambda v: ov.to_date(v).isoformat()
     num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
-    moved = [{"row": f"{s_}!r{r_}", "col": c_, "label": labels.get((s_, r_), ""), "from": iso(a), "to": iso(b),
+    moved = [{"row": f"{s_}!r{r_}", "col": c_, "cell": ov._a1(s_, r_, pri.column_of(s_, a) or c_),
+              "label": labels.get((s_, r_), ""), "from": iso(a), "to": iso(b),
               "now": f"{s2}!r{r2}", "last": num(pri.value(s_, r_, pri.column_of(s_, a) or c_)), "this": num(cur.value(s2, r2, c3)),
-              "by": _by}
+              "by": _by,
+              "yours": (summary.get("balance_decisions") or {}).get(ov._a1(s_, r_, pri.column_of(s_, a) or c_), {}).get("keep") is False}
              for (s_, r_, c_), (a, b, s2, r2, c3, _by) in sorted(getattr(sess, "moved", {}).items())]
-    unmoved = [{"row": f"{s_}!r{r_}", "col": c_, "label": labels.get((s_, r_), ""), "why": why,
+    unmoved = [{"row": f"{s_}!r{r_}", "col": c_, "cell": ov._a1(s_, r_, c_), "label": labels.get((s_, r_), ""), "why": why,
                 "last": num(pri.value(s_, r_, c_))} for (s_, r_, c_), why in sorted(getattr(sess, "unmoved", {}).items())]
     after = []
     for x in (summary.get("roll") or {}).get("balance_cells") or []:
@@ -240,7 +242,19 @@ def _balances(sess, summary: dict) -> dict:
         after.append({"row": f"{s_}!r{r_}", "col": c_, "label": labels.get((s_, r_), ""), "date": x["date"],
                       "reader": x.get("reader"), "last": num(pri.value(s_, r_, c_)), "at": iso(at),
                       "this": num(cur.value(hit[0], hit[1], c2)) if c2 is not None else None})
-    return {"moved": moved, "unmoved": unmoved, "after": after}
+    kept = []
+    for x in (summary.get("roll") or {}).get("balance_cells") or []:
+        why = ov.balance_kept(x, summary.get("balance_decisions")) if isinstance(x, dict) and not x.get("after") else None
+        if not why:
+            continue
+        s_, r_, c_ = x["cell"]
+        d = ov.serial(ov.date.fromisoformat(x["date"]))
+        hit = sess.rowmap.locate(s_, r_) if sess.rowmap else None
+        c2 = cur.column_of(hit[0], d) if hit else None
+        kept.append({"row": f"{s_}!r{r_}", "col": c_, "cell": ov._a1(s_, r_, c_), "label": labels.get((s_, r_), ""),
+                     "date": x["date"], "why": why, "yours": why.endswith("by you"), "last": num(pri.value(s_, r_, c_)),
+                     "this": num(cur.value(hit[0], hit[1], c2)) if c2 is not None else None})
+    return {"moved": moved, "unmoved": unmoved, "after": after, "kept": kept}
 
 
 def _other_links(reads: dict) -> dict:
@@ -1552,6 +1566,14 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
                                   for x in bal["moved"][:6])
                         + ". In the client models' units. Last year the overlay read each in one column, last year's "
                           "valuation date's; this year's value reads this year's", severity="check" if app else "info"))
+    if bal.get("kept"):  # kept at their own date: a fixed date by its label, or a person's choice
+        fmt = lambda v: f"{v:,.1f}" if isinstance(v, float) else "–"
+        out.append(hold(summary, "balance-kept", [[x["row"], x["col"], x["why"]] for x in bal["kept"]],
+                        f"{len(bal['kept'])} balance(s) the overlay reads at the valuation date kept at their own date",
+                        "; ".join(f"{x['label'] or x['row']} at {x['date']} ({x['why']}): {fmt(x['this'])} this year"
+                                  for x in bal["kept"][:6])
+                        + ". In the client models' units. Read it at this year's date on the cash-flow card if the label "
+                          "misleads", severity="info"))
     if bal.get("after"):  # read at a date after last year's: not moved, what it was meant to be isn't clear
         fmt = lambda v: f"{v:,.1f}" if isinstance(v, float) else "–"
         out.append(hold(summary, "balance-after", [[x["row"], x["col"], x["this"]] for x in bal["after"]],

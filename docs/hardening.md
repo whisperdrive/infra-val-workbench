@@ -154,10 +154,12 @@ reviewer's own session.
   move as the balances' (the right roll is no longer held, the wrong one no longer passes); a point to check lists
   each move (a point to check where the app moved it, a note where the periods or the overlay's own date did, as they
   did before); no column at this year's date holds (so a three-month roll on an annual model now holds, where it
-  deducted last year's balance). Measured: 110.7, both ways of reading it. Not covered: a balance read at a date
-  between the two valuation dates (half-year actuals); a row read across its columns as cash flows and once at the
-  date (item 5); a balance at a fixed date that happens to be last year's valuation date (a financial close) is moved,
-  and only the point to check says so. Was (re-run): Net debt read as `=Client!D11` (last year's
+  deducted last year's balance). Measured: 110.7, both ways of reading it. Since: a balance read up to a year before
+  last year's date (the latest actuals) is read as far before this year's, and one after it is a point to check; a
+  cash-flow row read once more at the date by a cell of its own has only that read moved (the distribution declared at
+  the date); a balance labelled as at a fixed date (a financial close, a completion) stays at it, a note; and a person
+  can keep any balance at its own date, or read a kept one at this year's (the cash-flow card, `balances.json`). Was
+  (re-run): Net debt read as `=Client!D11` (last year's
   date's column) still deducts last year's 200, not this year's 180: 18% off, no hold. The same overlay written with
   INDEX/MATCH rolls right and is held by `cf-split`, which measures movement: the stale read passes, the right one is
   held.

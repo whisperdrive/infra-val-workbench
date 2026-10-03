@@ -1810,6 +1810,26 @@ function flowsCard(R) {
       ${line("convention", "Convention", "what the period-by-period sum doesn't account for in the discountings themselves (a first period's mid-point, say)")}
       ${line("outside", "Outside the discountings", "what moves the value that isn't the discounted cash flows: an input this year's model feeds outside them, or a roll the cash flows don't explain")}
     </tbody></table>` : sp?.why ? `<p class="small muted">${esc(sp.why)}</p>` : "";
+  // the balances the overlay reads at the valuation date (overlay.balance_cells): moved to this year's date, kept at
+  // their own (a fixed date by their label, or yours), or not moved; each one's choice yours to change
+  const BL = R.figures?.feed?.balances || {}, n1 = v => typeof v === "number" ? fmt(v, 1) : "–";
+  const balBtn = (cell, keep, label) => `<button class="btn small" type="button" data-bal-cell="${esc(cell)}" data-bal-keep="${keep}">${label}</button>`;
+  const balRows = [...(BL.moved || []).map(x => `<tr><td><b>${esc(x.label || x.row)}</b> <span class="mono small muted">${esc(x.cell || x.row)}</span></td>
+        <td class="num">${n1(x.last)} <span class="small muted">at ${esc(x.from)}</span></td><td class="num">${n1(x.this)} <span class="small muted">at ${esc(x.to)}</span></td>
+        <td class="small">${x.by === "the app" ? "moved by the app (a plain reference the periods don't move)" : x.by === "the periods" ? "moved with the periods" : "read by the overlay's own date"}${x.yours ? "; your choice" : ""}</td>
+        <td>${x.yours ? balBtn(x.cell, "null", "Back to the app's choice") : balBtn(x.cell, "true", "Keep at its own date")}</td></tr>`),
+    ...(BL.kept || []).map(x => `<tr><td><b>${esc(x.label || x.row)}</b> <span class="mono small muted">${esc(x.cell)}</span></td>
+        <td class="num">${n1(x.last)} <span class="small muted">at ${esc(x.date)}</span></td><td class="num">${n1(x.this)} <span class="small muted">at ${esc(x.date)}</span></td>
+        <td class="small">kept at its own date: ${esc(x.why)}</td>
+        <td>${x.yours ? balBtn(x.cell, "null", "Back to the app's choice") : balBtn(x.cell, "false", "Read at this year's date")}</td></tr>`),
+    ...(BL.unmoved || []).map(x => `<tr class="held"><td><b>${esc(x.label || x.row)}</b> <span class="mono small muted">${esc(x.cell || x.row)}</span></td>
+        <td class="num">${n1(x.last)}</td><td class="num">–</td><td class="small">${esc(x.why)}: stays at last year's</td><td>${balBtn(x.cell, "true", "Keep at its own date")}</td></tr>`),
+    ...(BL.after || []).map(x => `<tr><td><b>${esc(x.label || x.row)}</b> <span class="mono small muted">${esc(x.row)}</span></td>
+        <td class="num">${n1(x.last)} <span class="small muted">at ${esc(x.date)}</span></td><td class="num">${n1(x.this)} <span class="small muted">at ${esc(x.at)}</span></td>
+        <td class="small">read at a date after last year's valuation date: not moved; check which date it means</td><td></td></tr>`)];
+  const balances = balRows.length ? `<h3 style="font-size:14px;margin:14px 0 4px">Balances read at the valuation date</h3>
+    <p class="small muted" style="margin:0 0 6px">Read once by the overlay, at last year's valuation date or near it (a net debt, a cash balance, a distribution declared at the date): this year at this year's date, as far before it as last year's was. A balance at a fixed date (a financial close) stays at it. In the client models' units.</p>
+    <div class="scroll"><table class="stack-sm"><thead><tr><th>Balance</th><th class="num">Last year</th><th class="num">This year</th><th>How</th><th></th></tr></thead><tbody>${balRows.join("")}</tbody></table></div>` : "";
   const main = F.cores.find(c => c.last && c.this);
   let per = "";
   if (main) {
@@ -1823,7 +1843,7 @@ function flowsCard(R) {
     <p class="sub">Each discounting under the value, as last year's model gives it and as this year's does (at last year's rate), compared period by period: that this year's revisions reach the value, that the forecast step is the cash flows' change, and that this year's forecast and the overlay's columns end together.</p>
     ${ns.length ? needsList(ns) : ""}
     <div class="scroll" style="margin-top:8px"><table class="stack-sm"><thead><tr><th>Discounting</th><th>Function</th><th>Convention</th><th>On the roll</th><th class="num">Last year PV</th><th class="num">This year PV</th></tr></thead><tbody>${F.cores.map(core).join("")}</tbody></table></div>
-    ${split}${per}</div>`;
+    ${split}${balances}${per}</div>`;
 }
 // The models side by side, like comparing products' specifications (specs.py): last year's report, overlay as saved and
 // rebuild should agree (a row where they don't is flagged); last year's and this year's client models give the rows the
@@ -1973,8 +1993,15 @@ async function rowPicker(row, root = document) {
     act(async () => { await api(`/api/engagements/${E.id}/overlay/rowpick`, {method: "POST", body: {prior: row, current: pick}}); toast("Picked: the bridge runs again"); }); };
   box.querySelector("[data-rowkeep]").onclick = () => act(async () => { await api(`/api/engagements/${E.id}/overlay/rowpick`, {method: "POST", body: {prior: row, current: "-"}}); toast("Last year's values kept for that row"); });
 }
+function bindBalances() {
+  document.querySelectorAll("[data-bal-cell]").forEach(b => b.onclick = () => act(async () => {
+    const keep = b.dataset.balKeep === "null" ? null : b.dataset.balKeep === "true";
+    const r = await api(`/api/engagements/${E.id}/balances`, {method: "POST", body: {cell: b.dataset.balCell, keep}});
+    toast(`${r.label || r.cell}: ${keep ? "kept at its own date" : keep === false ? "read at this year's date" : "back to the app's choice"}; the bridge runs again`); }));
+}
 function bindResult() {
   bindHeld();
+  bindBalances();
   bindTerms();
   bindRate();
   bindMethods();

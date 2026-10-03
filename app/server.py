@@ -262,6 +262,21 @@ class Held(BaseModel):
     source: str = "typed"
 
 
+class Balance(BaseModel):
+    cell: str
+    keep: bool | None = None
+
+
+@app.post("/api/engagements/{eid}/balances")
+async def set_balance(eid: int, body: Balance):
+    """A balance the overlay reads at the valuation date: kept at its own date (keep true), read at this year's
+    (false), or back to the app's choice (null)."""
+    got = await _run(workbench.set_balance, eid, body.cell, body.keep)
+    orchestrator.person(eid, "result", f"{got['label'] or body.cell}: " + (
+        "kept at its own date" if body.keep else "read at this year's date" if body.keep is False else "back to the app's choice"))
+    return got
+
+
 @app.post("/api/engagements/{eid}/held")
 async def set_held(eid: int, body: Held):
     """This year's figure for an input held at last year's (value null: back to last year's)."""

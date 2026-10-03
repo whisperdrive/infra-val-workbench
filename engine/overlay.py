@@ -305,6 +305,7 @@ class Session:
         self.holds = {}  # (sheet, row, col) -> value: cells held at Excel's value on every feed (the doctor's fixes)
         self.balances = {}  # client (sheet, row) -> {"cols", "series"}: read as a balance at the valuation date
         self.balances_at_last = False  # read them at last year's date instead: what their move adds (result.figures)
+        self.kept_balances = {}  # client (sheet, row) -> cols: balances kept at their own date (a fixed date, or a person)
         self.moved, self.unmoved = {}, {}  # those read at this year's date on the current feed, and those not
         self.cutoffs = []  # (sheet, row, col, period end serial[, its date cell]): the discountings' per-period cells (cutoff_cells)
         self.cut = set()  # those of them cut off on the current feed (_cut_off)
@@ -415,6 +416,10 @@ class Session:
             return self._stand_in(prior, s, r, c, want)
         s2, r2 = hit
         c2 = c
+        if c in self.kept_balances.get((s, r), ()) and want is not None and round(want) != round(tl_p[c]):
+            c4 = cur.column_of(s2, tl_p[c])  # kept at its own date: not moved by the periods either
+            if c4 is not None:
+                want = tl_p[c]
         bal = self.balances.get((s, r))
         if bal and want is not None and self.base_vd is not None and c in tl_p:
             # a balance at last year's valuation date (balance_cells): this year's at this year's date. On a fixed
@@ -976,7 +981,11 @@ ZERO_ROLL = (0.75, 1.33)  # this year's model at last year's date, against last 
 REBUILT = 0.5  # the two client models share fewer line-item labels than this (rowfind.family): this year's is rebuilt
 ZERO_ROLL_CHECK = (0.87, 1.15)  # inside ZERO_ROLL but outside this, the value runs and a person is asked to confirm
                                 # the move is the new forecast (a judgment call: forecasts move, a mismatched row too)
-BALANCES = 3  # balance_cells' version: the cells a session found by older rules are found again when it loads
+BALANCES = 4  # balance_cells' version: the cells a session found by older rules are found again when it loads
+# a balance labelled as at a fixed date (its overlay cell's label, or the client row's): it stays at that date, which
+# last year's valuation date only happened to be. Short on purpose: "opening" and "closing" are a period's, not fixed
+FIXED_DATE = re.compile(r"\b(financial close|at close|close date|completion|acquisition|acquired|inception|"
+                        r"transaction date|commissioning|handover|signing|at fc|fc date)\b", re.I)
 
 
 def balance_cells(sess: Session, summary: dict) -> list[dict]:
@@ -987,8 +996,9 @@ def balance_cells(sess: Session, summary: dict) -> list[dict]:
     one too, where a separate cell reads it once at the date (the distribution declared at the date, deducted): only
     that read is the balance ("series": the row is also read as cash flows). This year each is read as far before
     this year's date as it was before last year's (Session._rolled). One read at a date after last year's (a forecast
-    balance) isn't moved ("after": a point to check). Walked down from the overlay's outputs on last year's feed.
-    -> [{"cell": [sheet, row, col], "series", "reader", "date", "after"}]."""
+    balance) isn't moved ("after": a point to check). One whose overlay cell or client row is labelled as at a fixed
+    date (FIXED_DATE: a financial close, a completion) stays at it ("fixed": the label). Walked down from the overlay's
+    outputs on last year's feed. -> [{"cell": [sheet, row, col], "series", "reader", "date", "after", "fixed"}]."""
     if sess.base_vd is None:
         return []
     outs = [parse_a1(o["cell"]) for o in summary.get("outputs") or [] if o.get("cell")]
@@ -1034,7 +1044,7 @@ def balance_cells(sess: Session, summary: dict) -> list[dict]:
                 rows[(s, r)]["aligned"] = True
             else:
                 rows[(s, r)]["single"].add((c, x))
-    out = []
+    out, olab, plab = [], sess.ov.labels(), prior.labels()
     for (s, r), v in rows.items():
         tl = prior.timeline(s)
         if sum(1 for cc in tl if isinstance(prior.value(s, r, cc), (int, float))) < 2:
@@ -1045,16 +1055,29 @@ def balance_cells(sess: Session, summary: dict) -> list[dict]:
             d = tl[c]
             if add_months(sess.base_vd, -12) <= d <= add_months(sess.base_vd, 12) and not (
                     round(d) > round(sess.base_vd) and v["aligned"]):  # (a cash-flow row's later column: its periods')
+                said = next((t for t in (olab.get((x[0], x[1]), ""), plab.get((s, r), "")) if FIXED_DATE.search(t or "")), None)
                 out.append({"cell": [s, r, c], "series": v["aligned"], "reader": _a1(*x), "date": to_date(d).isoformat(),
-                            "after": round(d) > round(sess.base_vd)})
+                            "after": round(d) > round(sess.base_vd), "fixed": said})
     return sorted(out, key=lambda d: d["cell"])
 
 
-def set_balances(sess: Session, cells: list) -> None:
-    """The session's balances from balance_cells' list: {(sheet, row): {"cols", "series"}}."""
-    sess.balances = {}
+def balance_kept(x: dict, decisions: dict | None) -> str | None:
+    """Why a balance stays at its own date, or None where it's read at this year's: a person's choice (decisions:
+    {"Sheet!A1": {"keep": bool}}) first, else its label naming a fixed date."""
+    d = (decisions or {}).get(_a1(*x["cell"])) or {}
+    if "keep" in d:
+        return "kept at its date by you" if d["keep"] else None
+    return f"labelled '{x['fixed']}': a fixed date" if x.get("fixed") else None
+
+
+def set_balances(sess: Session, cells: list, decisions: dict | None = None) -> None:
+    """The session's balances from balance_cells' list: {(sheet, row): {"cols", "series"}}, but those after last
+    year's date and those kept at their own date (balance_kept)."""
+    sess.balances, sess.kept_balances = {}, {}
     for x in cells or []:
-        if isinstance(x, dict) and not x.get("after"):
+        if isinstance(x, dict) and not x.get("after") and balance_kept(x, decisions):
+            sess.kept_balances.setdefault(tuple(x["cell"][:2]), set()).add(x["cell"][2])
+        if isinstance(x, dict) and not x.get("after") and not balance_kept(x, decisions):
             b = sess.balances.setdefault(tuple(x["cell"][:2]), {"cols": set(), "series": False})
             b["cols"].add(x["cell"][2])
             b["series"] = b["series"] or bool(x.get("series"))

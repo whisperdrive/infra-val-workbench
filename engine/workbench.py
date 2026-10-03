@@ -1126,6 +1126,41 @@ def _dates(eid: int) -> dict:
     return {"dates": out, "confirmed": confirmed}
 
 
+def balances_file(eid: int) -> Path:
+    return OUT / "overlays" / f"e{eid}" / "balances.json"
+
+
+def balance_decisions(eid: int) -> dict:
+    """A person's choices for the balances the overlay reads at the valuation date (overlay.balance_cells): {"Sheet!A1":
+    {"keep": True (at its own date) / False (at this year's), "label", "by", "at"}}."""
+    got = store.read(balances_file(eid), {})
+    return got if isinstance(got, dict) else {}
+
+
+def set_balance(eid: int, cell: str, keep: bool | None) -> dict:
+    """Keep a balance at its own date (keep True), read it at this year's (False), or back to the app's choice (None).
+    Only a balance the result lists."""
+    res = (get(eid) or {}).get("result") or {}
+    bal = (((res.get("figures") or {}).get("feed") or {}).get("balances")) or {}
+    item = next((x for k in ("moved", "kept", "unmoved") for x in bal.get(k) or [] if x.get("cell") == cell), None)
+    if not item:
+        raise ValueError(f"{cell} isn't a balance the value reads at the valuation date")
+
+    def change(got):
+        got = got if isinstance(got, dict) else {}
+        if keep is None:
+            got.pop(cell, None)
+        else:
+            got[cell] = {"keep": bool(keep), "label": item.get("label") or "", "by": "you", "at": time.time()}
+        return got
+    store.update(balances_file(eid), change, {})
+    if eid in _SESSIONS:
+        sess, summary = _SESSIONS[eid]
+        _sync_roll(eid, sess, summary)
+    _touch(eid)  # the result's inputs changed: the orchestrator works it out again
+    return {"cell": cell, "label": item.get("label") or "", "keep": keep}
+
+
 def held_file(eid: int) -> Path:
     return OUT / "overlays" / f"e{eid}" / "held.json"
 
@@ -1421,7 +1456,8 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
         # the balances the value reads at last year's valuation date: read at this year's date (overlay.balance_cells)
         roll["balance_cells"] = ovmod.deep(ovmod.balance_cells, sess, summary) if sess.base_vd is not None else []
         roll["balances_plan"], roll["balances_vd"] = ovmod.BALANCES, roll.get("prior_valuation_date")
-    ovmod.set_balances(sess, roll.get("balance_cells"))
+    summary["balance_decisions"] = balance_decisions(eid)  # and the balances a person keeps at their own date, or not
+    ovmod.set_balances(sess, roll.get("balance_cells"), summary["balance_decisions"])
     roll["confirmed"] = now["confirmed"]
 
 

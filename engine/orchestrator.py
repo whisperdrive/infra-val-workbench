@@ -167,6 +167,7 @@ def inputs(eid: int, name: str, snap: dict, holds: bool = True, rows_version: in
     res = [rows, equity_pick(eid), (snap.get("profile") or {}).get("fy_end_month"),
            sorted([f["key"], f.get("value_text"), f.get("status")] for f in snap["facts"]),
            _file_state(wb.held_file(eid)),  # this year's figures a person set for held inputs
+           _file_state(wb.balances_file(eid)),  # and the balances a person keeps at their own date, or not
            _file_state(wb.rate_file(eid)),  # and this year's discount rate
            _file_state(wb.method_file(eid)),  # and the method this year's value is worked out by
            _file_state(wb.terms_file(eid)),  # and the new terms a person confirmed belong in it

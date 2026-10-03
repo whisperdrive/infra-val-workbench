@@ -1035,7 +1035,7 @@ def balances_check() -> None:
     from xlsxwriter.utility import xl_col_to_name as col_
     vd, new, rate = date(2025, 6, 30), date(2026, 6, 30), 0.09
 
-    def run(ref: str, current_ends=None, to=None, declared=False, nd_at=None):
+    def run(ref: str, current_ends=None, to=None, declared=False, nd_at=None, nd_label="Net debt", decisions=None):
         out = Path(tempfile.mkdtemp(prefix="balances_"))
         ends = {w: [date(2025 + k, 6, 30) for k in range(10)] for w in ("prior", "current")}
         if current_ends:
@@ -1072,7 +1072,7 @@ def balances_check() -> None:
                 va.write(4, 1, "Discount rate")
                 va.write_number(4, 2, rate)
                 for r, label in ((5, "Period ending"), (9, "Cash flow"), (12, "Discount factor"), (13, "Present value"),
-                                 (15, "Enterprise PV"), (16, "Net debt"), (17, "Equity value")):
+                                 (15, "Enterprise PV"), (16, nd_label), (17, "Equity value")):
                     va.write(r, 1, label)
                 total = 0.0
                 for k, e in enumerate(ends["prior"]):
@@ -1107,9 +1107,10 @@ def balances_check() -> None:
         roll.update(ov.date_cells(db, [{"cell": "Val!C18"}], ["Val"], None))
         sess.cutoffs = [(*ov.parse_a1(c), serial(date.fromisoformat(d)), *[ov.parse_a1(x) for x in at]) for c, d, *at in roll["cutoff"]]
         summary = {"wiring": {"overlay": {"db_path": db}, "current": {"db_path": paths["current"]}}, "sheets": ["Val"],
-                   "roll": roll, "held_values": {}, "outputs": [{"cell": "Val!C18", "label": "Equity value"}]}
+                   "roll": roll, "held_values": {}, "outputs": [{"cell": "Val!C18", "label": "Equity value"}],
+                   "balance_decisions": decisions or {}}
         roll["balance_cells"] = ov.deep(ov.balance_cells, sess, summary)
-        ov.set_balances(sess, roll["balance_cells"])
+        ov.set_balances(sess, roll["balance_cells"], decisions)
         figs = ov.deep(result.figures, sess, summary, ["Val!C18"])
         where = {"low": "Val!C18", "high": "Val!C18", "scale": 1, "sign": 1}
         fl = ov.deep(cashflows.layer, sess, summary, where, figs)
@@ -1157,6 +1158,17 @@ def balances_check() -> None:
     a = bal["after"][0]
     assert (a["date"], a["last"], a["at"], a["this"]) == ("2025-12-31", 280.0, "2026-12-31", 260.0), a
     assert ("balance-after", "check") in [(h["id"], h["severity"]) for h in gate], gate
+    # net debt at a fixed date that last year's valuation date only happened to be (labelled at financial close): kept
+    # there, a note; read at this year's date where a person says so; and a person can keep any balance at its date
+    roll, figs, cfc, gate = run("plain", nd_label="Net debt at financial close")
+    bal = figs["feed"]["balances"]
+    assert not bal["moved"] and bal["kept"] and "financial close" in bal["kept"][0]["why"], bal
+    assert figs["this_year"]["Val!C18"] < v_plain - 19.9 and ("balance-kept", "info") in [(h["id"], h["severity"]) for h in gate]
+    roll, figs, cfc, gate = run("plain", nd_label="Net debt at financial close", decisions={"Client!D11": {"keep": False}})
+    assert figs["feed"]["balances"]["moved"][0]["yours"] and abs(figs["this_year"]["Val!C18"] - v_plain) < 1e-9
+    roll, figs, cfc, gate = run("plain", decisions={"Client!D11": {"keep": True}})
+    k = figs["feed"]["balances"]["kept"]
+    assert k and k[0]["why"] == "kept at its date by you" and k[0]["yours"] and not figs["feed"]["balances"]["moved"], k
     # rolling horizon (this year's model a year further on): the plain reference moves with the periods, as before;
     # the same value, a note, not a point to check
     roll, figs, cfc, gate = run("plain", current_ends=[date(2026 + k, 6, 30) for k in range(10)])

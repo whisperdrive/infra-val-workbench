@@ -49,7 +49,7 @@ def _vocabulary() -> set[str]:
                                                           "rebuild-low", "rebuild-high", "tie-low", "tie-high", "roll-assumed",
                                                           "terms-error", "lines-error", "other-link", "role-check",
                                                           "basis-method", "interest-error", "damaged", "rows-models",
-                                                          "balance-moved", "balance-unmoved", "balance-after", "balances"}
+                                                          "balance-moved", "balance-unmoved", "balance-after", "balance-kept", "balances"}
     words |= {"waiting", "queued", "running", "done", "attention", "blocked", "failed", "error", "pending", "approved",
               "rejected", "agreed", "escalated", "withdrawn", "open", "ready", "processing", "unread", "verified",
               "flagged", "resolved", "edited", "figure", "confirmed", "confirmed by the reviewer", "corrected", "disputed",
@@ -256,7 +256,7 @@ def _result(eid: int, res: dict) -> dict:
                                           if not x.get("now"))},
          # balances read at the valuation date, read at this year's date, and those that couldn't be
          "balances": {k: len((((res.get("figures") or {}).get("feed") or {}).get("balances") or {}).get(k) or [])
-                      for k in ("moved", "unmoved", "after")},
+                      for k in ("moved", "unmoved", "after", "kept")},
          "rate_this_year": {"set": bool(((res.get("inputs") or {}).get("rate") or {}).get("this_year")),
                             "applied": bool((((res.get("inputs") or {}).get("rate") or {}).get("this_year") or {}).get("applied"))},
          "cut_off": (res.get("figures") or {}).get("cut_off"),
@@ -448,7 +448,7 @@ _KEYS = {"app", "generated", "files", "reports", "workbooks", "roles", "placed",
          "date", "ok", "run", "stages", "needs", "facts", "n", "by_status", "failing_checks", "image", "keys", "result",
          "worked_out", "stopped", "basis", "located", "tied", "rebuilt_tied", "held", "this_to_last", "bridge_steps",
          "bridge_notes", "terminal", "inputs", "not_applicable", "sourced", "held_inputs", "still_held", "suggestions",
-         "moved", "set_aside", "balances", "unmoved", "after",
+         "moved", "set_aside", "balances", "unmoved", "after", "kept",
          "chart", "years", "found", "discountings", "readable", "calls", "roll", "months", "date_check", "fixed_horizon",
          "date_cells_moved", "date_cells_read", "gate", "reliable", "no_reads", "reads", "unmatched", "found_share",
          "dcf_rows", "dcf_missing", "blank_rows", "weak_rows", "timing_open", "zero_roll", "date_cells_off",
