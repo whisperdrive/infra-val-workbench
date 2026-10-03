@@ -294,3 +294,64 @@ low ≤ high not checked after the roll; `time` and `new-terms` holds shown as "
 8. ~~The failing variants in `tests/variants.py`~~ — done: 99 of 136 rows right, 32 left open where nothing in the
    model decides, the 5 wrong all in the 2 kinds listed in `variants.KNOWN_WRONG` (small copies swapped with close
    figures; a merged row), each taken off the list when it's fixed.
+
+## Reading the models: issue shapes tested, 3 October 2026
+
+Each shape built on synthetic workbooks (the pack's, changed at the XML level as Excel or another tool saves a file,
+or small workbooks of its own) and run end to end with the models stubbed; the rule each time: the right cells and
+value, or the value held saying why, never a different figure in silence. `tests/check_ingest.py` keeps the cases.
+
+**Files.** An encrypted package (a compound file), a document renamed as a workbook and a Strict Open XML workbook are
+refused, saying what to do; protected sheets and a locked structure read as normal (real encryption with a password
+isn't exercised, only its signature). About 68,000 cells a second: a million in 15 s and 360 MB, so 2.3 million in about
+35 s and 700 MB; files are read one at a time. The same bytes under two names, or in two engagements, are one file
+(the library keeps the first name it saw). Macro-enabled workbooks read as normal; macros never run. Formulas saved
+with no result (a workbook saved without being calculated) are recorded as such: one the value reads this year holds
+it, naming the cells and saying to calculate and save; last year's model's or the overlay's are a point to check
+beside the rebuild's own check; a calculation that didn't finish is a point to check; manual calculation and data
+tables read as saved. Every cell is read, however small the size a sheet declares.
+
+**Structure.** Hidden and very hidden sheets, and hidden rows, are found and used (their state isn't shown on the
+page). The overlay as a separate linked workbook, as the adviser's tabs behind a divider in a copy of the client model
+(a divider is recognised once the adviser's names are set; one in a style the names don't cover isn't, though the roles came out
+right without it), as one added sheet, or as sheets with plain names: roles and values right; a valuation date alone no longer files the client's inputs sheet as the overlay's (it froze a
+client-linked assumption at last year's in that form, so the same overlay gave two values). Sheets renamed and rows
+moved between years are found again. Odd sheet names (spaces, brackets, an apostrophe, leading digits, "<END>") and an
+add-in's sheets read as normal; hidden sheets with no formulas no longer make this year's model look rebuilt. A row the
+value reads typed this year where last year's model worked it out, equal to last year's in place or one period off,
+holds as pasted (one period off passed every check before). Forty thousand names, a third broken, some external: the
+same value, about twice as slow as the pack (10 s); a broken name or a deleted reference under the value holds, naming
+the cell where the error starts. A link to a file that wasn't uploaded leaves last year's model empty, saying so; a
+renamed link target is matched by its values. A copy's client sheets are last year's client model's.
+
+**Layout.** Monthly, quarterly and annual sheets, a timeline row far down, 285 quarterly columns and a terminal value
+far right: right. A client figure right of last year's timeline (the model's own terminal value, a total) is read as
+far right of this year's timeline, else held (last year's was read in silence). Periods dated by their first day
+against periods dated by their last are matched. Static input sheets, labels and units in other columns, decorated,
+prefixed and misspelt labels, merged cells and array formulas: right. **Left**: a sheet with two timelines (a
+quarterly block above an annual one) dates every row by one of them; such a roll is held by the time and rows checks,
+not passed.
+
+**Key datapoints.** Valuation dates: every date in a labelled row is a candidate (this year's and last year's side by
+side, in either order), an implausible one (a concession's end, a small number formatted as a date) last, the later of
+equally good ones; time-only and log rows are never taken. The equity value: a row reading another candidate's cells (a
+report table, a 100% or scaled copy, an adjustment of nothing) gives way to the row it reads; two rows as likely, or
+only some of the report's figures in the overlay, ask with the candidates and never switch the basis (both had valued
+cum-distribution, +25.0, with only points to check); whole labels keep "- Base case" and "(ex-distribution)" in view,
+and "Less:" reads as deducting. Discount rate decoys and per-year rates: right (**left**: a rate typed as text or as a
+whole number of percent isn't sourced; a point to check, the value ties). Terminal growth: as text or a whole number of
+percent, sourced; one the report states that nothing under the value reads (an exit multiple instead) is a point to
+check. A terminal value added after the discounting, in the enterprise value's formula or a cell of its own, splits
+with the discountings (it held as "moving outside" them) and its inputs aren't inputs held at last year's. Franking: a
+switch of 1, a tax rate labelled as franking and a CHOOSE of two gammas no longer stop the utilisation being sourced;
+checks across thousands and millions agree. A CHOOSE on a typed selector is traced, sourced and recomputed as the case
+it picks (an inactive case's rate was sourced, depending on the run). An input of the valuation's own that reads the
+client model (a growth rate that is the client's CPI) is a point to check when it moves.
+
+**Formulas.** OFFSET, XLOOKUP, XNPV and XIRR match Excel; INDIRECT, FILTER and LET hold the value (`unknown-fn`). Array
+SUM(cash flows × factors), SUM(range × 1) and SUM over a fixed OFFSET read as the discountings they are (each held
+falsely). A lookup's table cells it doesn't pick aren't inputs held at last year's. An iterative loop under the value
+holds it. Excel's errors where the value doesn't read them change nothing; under it, the value holds. Units starting
+with # stay text. Dates with a time of day are that day; serials before March 1900 count as Excel counts them;
+durations are numbers. 1E9 is a billion, not cell E9 (it pulled the high end's discountings under the low end), and
+LOG10( is a function.

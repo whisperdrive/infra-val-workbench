@@ -53,6 +53,84 @@ def _unit_cells(db) -> set[str]:
     return out
 
 
+def _range_cells(db, text: str, here: str) -> list[str] | None:
+    """A range's cells in order ("Sheet!A1", row by row), or None where text isn't one range."""
+    r = dcf._ref(text.strip(), here)
+    if not r or (r[3] - r[1] + 1) * (r[4] - r[2] + 1) > 2000:
+        return None
+    return [ov._a1(r[0], rr, cc) for rr in range(r[1], r[3] + 1) for cc in range(r[2], r[4] + 1)]
+
+
+def _saved(db, cell: str):
+    s, r, c = ov.parse_a1(cell)
+    got = db.execute("SELECT value FROM cells WHERE sheet=? AND row=? AND col=?", (s, r, c)).fetchone()
+    return got[0] if got else None
+
+
+def _key(db, text: str, here: str):
+    """A lookup's key as Excel saved it: a literal, or a single cell's saved value."""
+    t = text.strip()
+    if len(t) >= 2 and t[0] == t[-1] == '"':
+        return t[1:-1]
+    if re.fullmatch(r"-?\d+(?:\.\d+)?", t):
+        return float(t)
+    r = dcf._ref(t, here)
+    return _saved(db, ov._a1(r[0], r[1], r[2])) if r and r[1:3] == r[3:5] else None
+
+
+def _same(a, b) -> bool:
+    if isinstance(a, str) and isinstance(b, str):
+        return a.strip().lower() == b.strip().lower()
+    try:
+        return a is not None and b is not None and abs(float(a) - float(b)) < 1e-9
+    except (TypeError, ValueError):
+        return False
+
+
+def _unpicked(db, n: dict) -> frozenset:
+    """The cells of a lookup's table that n's formula reads but doesn't pick, with the saved values: an exact XLOOKUP,
+    VLOOKUP / HLOOKUP (FALSE) or INDEX(table, MATCH(key, column, 0)). Where the pick can't be worked out, none (every
+    cell stays an input, as before)."""
+    here = n["cell"].split("!")[0]
+    out = set()
+    for fn, args, _text in dcftrace._calls(n.get("formula") or ""):
+        try:
+            if fn == "XLOOKUP" and len(args) >= 3 and (len(args) < 5 or args[4].strip() in ("", "0")):
+                look, ret = _range_cells(db, args[1], here), _range_cells(db, args[2], here)
+                k = _key(db, args[0], here)
+                if look and ret and len(look) == len(ret) and k is not None:
+                    i = next((j for j, c in enumerate(look) if _same(_saved(db, c), k)), None)
+                    if i is not None:
+                        out |= set(ret) - {ret[i]}
+            elif fn in ("VLOOKUP", "HLOOKUP") and len(args) >= 4 and args[3].strip().upper() in ("FALSE", "0"):
+                r = dcf._ref(args[1].strip(), here)
+                k, idx = _key(db, args[0], here), float(args[2]) if re.fullmatch(r"\d+", args[2].strip()) else None
+                if r and k is not None and idx:
+                    rows = range(r[1], r[3] + 1)
+                    cols = range(r[2], r[4] + 1)
+                    if fn == "VLOOKUP":
+                        hit = next((rr for rr in rows if _same(_saved(db, ov._a1(r[0], rr, r[2])), k)), None)
+                        pick = ov._a1(r[0], hit, r[2] + int(idx) - 1) if hit else None
+                    else:
+                        hit = next((cc for cc in cols if _same(_saved(db, ov._a1(r[0], r[1], cc)), k)), None)
+                        pick = ov._a1(r[0], r[1] + int(idx) - 1, hit) if hit else None
+                    if pick:
+                        out |= {ov._a1(r[0], rr, cc) for rr in rows for cc in cols} - {pick}
+            elif fn == "INDEX" and args:
+                m = re.match(r"\s*MATCH\s*\((.*)\)\s*$", args[1] if len(args) > 1 else "", re.I | re.S)
+                inner = [a.strip() for _, a in valuation._split(m[1], ",")] if m else []
+                table = _range_cells(db, args[0], here)
+                if table and len(inner) == 3 and inner[2] in ("0", "FALSE"):
+                    look, k = _range_cells(db, inner[1], here), _key(db, inner[0], here)
+                    if look and k is not None and len(look) == len(table):
+                        i = next((j for j, c in enumerate(look) if _same(_saved(db, c), k)), None)
+                        if i is not None:
+                            out |= set(table) - {table[i]}
+        except (TypeError, ValueError, IndexError):
+            continue
+    return frozenset(out)
+
+
 def find(db, cells: list[str], sheets, exclude: set | None = None) -> list[dict]:
     """The typed inputs the equity value cells read outside their discountings, on the overlay's own sheets (a cell
     on a client sheet, or behind a link to another workbook, is fed from this year's model: not held). A discounting's
@@ -74,12 +152,13 @@ def find(db, cells: list[str], sheets, exclude: set | None = None) -> list[dict]
                     theirs.add(ov._a1(r[0], r[1], r[2]))
         leaves = []
 
-        def walk(n):
+        def walk(n, passed=frozenset()):
             kids = n.get("children") or []
             if kids:
+                skip = _unpicked(db, n)  # a lookup's table cells it doesn't pick (XLOOKUP, VLOOKUP, INDEX/MATCH)
                 for k in kids:
-                    walk(k)
-            elif not n.get("cores"):
+                    walk(k, skip)
+            elif not n.get("cores") and n["cell"] not in passed:
                 leaves.append(n)
         walk(t)
         for leaf in leaves:
@@ -87,7 +166,10 @@ def find(db, cells: list[str], sheets, exclude: set | None = None) -> list[dict]
             got = db.execute("SELECT formula, value FROM cells WHERE sheet=? AND row=? AND col=?", (s, r, c)).fetchone()
             typed = {leaf["cell"]: {"sheet": s, "row": r, "col": c, "formula": None, "value": got[1]}} \
                 if got and not got[0] else valuation.reads(db, cells=[(s, r, c)])
+            skip = _unpicked(db, {"cell": leaf["cell"], "formula": got[0]}) if got and got[0] else frozenset()
             for ref, x in typed.items():
+                if ref in skip:  # a lookup's table cell the lookup doesn't pick
+                    continue
                 if x["formula"] or not _number(x["value"]) or x["sheet"] not in own or ref in theirs or "[" in ref \
                         or ref in units or ref in (exclude or ()):
                     continue

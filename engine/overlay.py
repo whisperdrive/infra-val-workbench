@@ -75,6 +75,34 @@ def _ro(path) -> sqlite3.Connection:
     return rodb.connect(path, check_same_thread=False)
 
 
+def _plen(tl: dict) -> int | None:
+    """A timeline's period in months (the commonest step between its dates)."""
+    ds = sorted(tl.values())
+    gaps = [round((b - a) / 30.4375) for a, b in zip(ds, ds[1:])]
+    return Counter(gaps).most_common(1)[0][0] or None if gaps else None
+
+
+def _other_convention(tl_last: dict, tl_this: dict, want: float):
+    """This year's column for the period last year's timeline dates want, where one model dates each period by its
+    first day (1 July) and the other by its last (30 June): the period ending on want begins a period's length before
+    it, the day after; the one beginning on want ends a period's length after it, the day before. None where the two
+    date them alike, or it isn't there."""
+    if len(tl_last) < 2 or len(tl_this) < 2:
+        return None
+    first = lambda tl: all(to_date(v).day == 1 for v in tl.values())
+    last = lambda tl: all(to_date(v + 1).day == 1 for v in tl.values())
+    n = _plen(tl_this)
+    if not n:
+        return None
+    if last(tl_last) and first(tl_this):
+        at = add_months(want + 1, -n)
+    elif first(tl_last) and last(tl_this):
+        at = add_months(want, n) - 1
+    else:
+        return None
+    return next((c for c, v in tl_this.items() if round(v) == round(at)), None)
+
+
 def _a1(sheet, row, col) -> str:
     from openpyxl.utils import get_column_letter
     return f"{sheet}!{get_column_letter(col)}{row}"
@@ -514,6 +542,8 @@ class Session:
             return was
         if want is not None:
             c2 = cur.column_of(s2, want)
+            if c2 is None:  # one model dates its periods by their first day, the other by their last: the same period
+                c2 = _other_convention(tl_p, cur.timeline(s2), want)
             tl_c = cur.timeline(s2)
             if c2 is None and tl_c and want > max(tl_c.values()) and rule is None:
                 # past the last period this year's model has: its forecast has ended there, nothing to stand in for

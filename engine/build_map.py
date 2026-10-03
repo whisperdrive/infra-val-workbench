@@ -393,6 +393,7 @@ def main(path: str, out: str | None = None, progress=None) -> dict:
         CREATE INDEX ix_cells ON cells(sheet,row,col);
         CREATE INDEX ix_rows ON rows(sheet,row);
         CREATE INDEX ix_unsaved ON unsaved(sheet,row,col);
+        CREATE INDEX ix_names ON names(lower(name));
     """)
     db.commit()
     # Row-to-row edges with OFFSET resolved and lookups narrowed to the current scenario (edges.py).

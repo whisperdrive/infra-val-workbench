@@ -42,6 +42,18 @@ def _num(v) -> float | None:
     return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
+def num_text(v) -> float | None:
+    """A number, or numeric text as Excel reads it in arithmetic ("2.5%" is 0.025, "7.75" is 7.75)."""
+    n = _num(v)
+    if n is not None or not isinstance(v, str):
+        return n
+    t = v.strip().replace(",", "")
+    try:
+        return float(t[:-1]) / 100 if t.endswith("%") else float(t)
+    except ValueError:
+        return None
+
+
 def _col(letters: str) -> int:
     from openpyxl.utils.cell import column_index_from_string
     return column_index_from_string(letters)

@@ -489,6 +489,11 @@ def ask(eid: int, name: str, issue: str, key: str, prompt: str, schema: dict) ->
 _S = {"type": "string"}
 
 
+def _fig(v) -> str:
+    """A figure for a person: to one decimal, but a small one (a rate, a share) to its own digits, not 0.0."""
+    return f"{v:,.1f}" if abs(v) >= 10 or v == int(v) else f"{v:.4g}"
+
+
 def _schema(name: str, choices: list[str], extra: dict | None = None) -> dict:
     props = {"choice": {"type": "string", "enum": choices}, "reason": _S, "question": _S, **(extra or {})}
     return {"type": "json_schema", "name": name, "strict": True, "schema": {
@@ -634,8 +639,16 @@ def _roles_job(eid: int, key: str):
     so = res.get("second_opinion") or {}
     yes, no = [c["text"] for c in checks if c["ok"] is True], [c["text"] for c in checks if c["ok"] is False]
     agree = not so.get("error") and not so.get("differs") and so.get("confidence") in ("high", "medium")
+    # neither client model dated (no valuation date, no dated file name): which is last year's is a guess by the order
+    # they came in, which no one should confirm but a person
+    order = next((c["text"] for c in checks if c["ok"] is None and "check the order" in c["text"]), None)
     evidence = lambda extra: {role: {"why": (res["roles"].get(role) or {}).get("why") or [], "checks": yes, **extra}
                               for role in a}
+    if order and not mine.keys() >= {"prior_model", "current_model"}:
+        return "blocked", "a person confirms which client model is which", {"needs": [{
+            "id": "roles", "stage": "roles", "severity": "block", "title": "Which client model is last year's?",
+            "detail": f"{order}: the suggestion follows the order the files came in. Confirm or change it on Roles",
+            "go": {"step": "workbench", "anchor": "rolesCard"}}]}
     if len(a) == 4 and not no and len(yes) >= 2 and agree and not verify_roles(eid, a):
         settle(a, evidence({"second_opinion": f"{so.get('model')} agrees ({so.get('confidence')} confidence)"}))
         return "done", f"confirmed on {len(yes)} checks and a second opinion that agrees", {"evidence": yes}
@@ -755,6 +768,8 @@ def _rebuild_job(eid: int, key: str):
     else:
         pick = equity_pick(eid)
         where = pick or result.locate(summary, head)
+        tied = where.get("rows") if where and where.get("ambiguous") else None
+        where = None if tied else where
         if where:
             notes.append(f"the equity value is at {where['low']} / {where['high']} ({where['how']})")
         else:
@@ -781,8 +796,11 @@ def _rebuild_job(eid: int, key: str):
         if not where:
             needs.append({"id": "equity", "stage": "rebuild", "severity": "block",
                           "title": "Where is last year's equity value in the overlay?",
-                          "detail": (out or {}).get("question") or "no pair of cells holding the report's low and high was "
-                                    "found: pick them on Rebuild", "go": {"step": "rebuild", "anchor": "equityPick"},
+                          "detail": (out or {}).get("question") or (
+                              f"two rows hold the report's low and high as likely ({', '.join(tied)}), neither reading the "
+                              "other: pick the equity value's on Rebuild" if tied else
+                              "no pair of cells holding the report's low and high was found: pick them on Rebuild"),
+                          "go": {"step": "rebuild", "anchor": "equityPick"},
                           "candidates": cands})
     blocked = any(n["severity"] == "block" for n in needs)
     moved = (summary.get("feeds") or {}).get("prior")
@@ -1071,8 +1089,8 @@ def _result_job(eid: int, key: str):
             sg = {**sg, "text": (sg.get("text") or "") + " This year's value is ex-distribution: the distribution to "
                   "deduct is the one declared at this year's date, not last year's."}
         needs.append({"id": f"held-{i}", "stage": "result", "severity": "check",
-                      "title": f"{h['label']}: {h['value']:,.1f} held at last year's" + (
-                          f"; {sg['value']:,.1f} in this year's model" + (", checked" if sg["status"] == "checked" else "")
+                      "title": f"{h['label']}: {_fig(h['value'])} held at last year's" + (
+                          f"; {_fig(sg['value'])} in this year's model" + (", checked" if sg["status"] == "checked" else "")
                           if sg.get("value") is not None else ""),
                       "detail": sg.get("text") or "", "go": {"step": "result", "anchor": "heldCard"}})
     inv = res.get("methods") or {}
@@ -1092,14 +1110,23 @@ def _result_job(eid: int, key: str):
     names = {"rate": "discount rate", "growth": "terminal growth rate", "multiple": "exit multiple",
              "franking": "franking credit utilisation"}
     for key, what in names.items():
-        for end, r in (((res.get("inputs") or {}).get(key) or {}).get("ends") or {}).items():
+        inp = (res.get("inputs") or {}).get(key) or {}
+        for end, r in (inp.get("ends") or {}).items():
+            if r.get("ok") is None and not inp.get("na") and inp.get("report") and r.get("value") is None:
+                # the report states it, and nothing under the value is it (a terminal value built another way, a figure
+                # in another form): a point to check, not silence
+                needs.append({"id": f"{key}-{end}", "stage": "result", "severity": "check",
+                              "title": f"The report's {what} ({' – '.join(inp['report'])}) isn't found under the {end} end's value",
+                              "detail": r.get("why") or r.get("note") or "nothing the equity value reads is it",
+                              "go": {"step": "rebuild", "anchor": "inputsCard"}})
+                continue
             if r.get("ok") is not False:
                 continue
             at = ((f"{r['value']:.2f}x" if key == "multiple" else f"{100 * r['value']:.2f}%") if r.get("value") is not None
                   else "") + (f" in {r['cell']}" if r.get("cell") else "")
             bad = [c["text"] for c in r.get("checks") or [] if c["ok"] is False]
             needs.append({"id": f"{key}-{end}", "stage": "result", "severity": "check",
-                          "title": f"The {end} end's {what} ({at.strip()}) " + (
+                          "title": f"The {end} end's {what}" + (f" ({at.strip()})" if at.strip() else "") + " " + (
                               "isn't sourced to a cell" if not r.get("sourced") else "doesn't check out"),
                           "detail": "; ".join(bad) or r.get("note") or "", "go": {"step": "rebuild", "anchor": "inputsCard"}})
     # a figure typed into the overlay that the terminal value grows from (a maintainable cash flow): last year's,

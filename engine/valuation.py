@@ -239,15 +239,38 @@ SHORT = 12  # a range of at most this many cells is followed cell by cell; a lon
 _IDENT = re.compile(r"(?<![\w.!$'\]])([A-Za-z_][\w.]*)(?![\w(!])")
 
 
+_NAMES: dict = {}
+
+
+def names_of(db, cells_only: bool = False) -> dict:
+    """{lower-case name: what it refers to} for a row map, read once per file (a large model has tens of thousands of
+    names, and every trace and walk looks them up). cells_only: those that refer to cells (Sheet!A1), not constants."""
+    import os
+    try:
+        path = db.execute("PRAGMA database_list").fetchone()[2]
+        key = (path, os.path.getmtime(path)) if path else None
+    except Exception:
+        key = None
+    if key and key in _NAMES:
+        return _NAMES[key][cells_only]
+    try:
+        out = {n.lower(): r for n, r in db.execute("SELECT name, ref FROM names") if n}
+    except sqlite3.OperationalError:
+        out = {}
+    both = (out, {n: r for n, r in out.items() if r and "!" in r})
+    if key:
+        if len(_NAMES) > 32:
+            _NAMES.clear()
+        _NAMES[key] = both
+    return both[cells_only]
+
+
 def reads(db, cells=(), expr: str | None = None, here: str | None = None, depth: int = 4, limit: int = 300) -> dict:
     """The cells formulas read, followed through those cells' own formulas (single cells, short ranges and defined
     names; a long range is a row of operands and isn't followed): starting from cells' formulas and/or expr (a formula
     text on sheet here). -> {"Sheet!A1": {"sheet", "row", "col", "value", "formula", "depth", "via"}}, via the cell
     that read it (None for the start)."""
-    try:
-        names = {n.lower(): r for n, r in db.execute("SELECT name, ref FROM names")}
-    except sqlite3.OperationalError:
-        names = {}
+    names = names_of(db)
     out, queue = {}, []
 
     import dcftrace

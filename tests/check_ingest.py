@@ -419,6 +419,36 @@ def _no_high(d: Path) -> None:
                                                       count=1, flags=re.S))
 
 
+def _summary_formulas(d: Path, cells: dict[str, str], array: bool = False) -> None:
+    """Summary cells written another way, their saved values as they were (an array formula: t="array")."""
+    def fn(x):
+        for a, f in cells.items():
+            v = cached(x, a)
+            tag = f'<f t="array" ref="{a}">' if array else "<f>"
+            x, n = re.subn(r'(<c r="%s"[^>]*>)\s*<f>[^<]*</f>\s*<v>[^<]*</v>' % a,
+                           lambda m: f"{m[1]}{tag}{f}</f><v>{v!r}</v>", x)
+            assert n == 1, a
+        return x
+    cell_xml(d / OVERLAY, "Summary", fn)
+
+
+def _first_days(d: Path) -> None:
+    """This year's model dating each period by its first day (1 July 2026 for the year to 30 June 2027)."""
+    from datetime import timedelta
+    epoch = date(1899, 12, 30)
+
+    def fn(x):
+        for c in COLS:
+            end = epoch + timedelta(days=int(cached(x, f"{c}3")))
+            start = (date(end.year - 1, end.month, 1) + timedelta(days=32)).replace(day=1) if end.month == 12 else \
+                date(end.year - 1, end.month + 1, 1)
+            x = re.sub(r'(<c r="%s3"[^>]*>(?:\s*<f>[^<]*</f>)?\s*<v>)[^<]*(</v>)' % c,
+                       lambda m: f"{m[1]}{float((start - epoch).days)!r}{m[2]}", x, count=1)
+        return x
+    for sh in ("Operations", "CashFlow"):
+        cell_xml(d / CURRENT, sh, fn)
+
+
 SAME = {}  # the same value and cells, and nothing new to look at
 CASES = {
     "protected sheets": (lambda d: _protect(d), SAME),
@@ -455,6 +485,14 @@ CASES = {
     "period dates with a time of day": (_timeline_times, SAME),
     "a decoy row reading the equity value's": (_decoy_reads_real, SAME),
     "the equity value's high end missing": (_no_high, {"equity": "block", "cells": False}),
+    "the discountings as array SUMs": (lambda d: _summary_formulas(d, {"C4": "SUM(DCF!D11:W11*DCF!D12:W12)",
+                                                                       "E4": "SUM(DCF!D18:W18*DCF!D19:W19)"}, True), SAME),
+    "the discountings over a fixed OFFSET": (lambda d: _summary_formulas(d, {"C4": "SUM(OFFSET(DCF!D13,0,0,1,20))",
+                                                                             "E4": "SUM(OFFSET(DCF!D20,0,0,1,20))"}), SAME),
+    "net debt by a lookup on the inputs' labels": (lambda d: _summary_formulas(d, {
+        a: '-_xlfn.XLOOKUP("Net debt at valuation date",Val_Inputs!$A$1:$A$10,Val_Inputs!$C$1:$C$10)' for a in ("C6", "E6")}),
+        SAME),
+    "this year's periods dated by their first day": (_first_days, SAME),
 }
 ORACLE = {"where": {"low": "Summary!C9", "high": "Summary!E9"}, "rate": {"low": ["Val_Inputs!C5"], "high": ["Val_Inputs!E5"]},
           "growth": {"low": "Val_Inputs!C6", "high": "Val_Inputs!C6"},
@@ -522,7 +560,9 @@ def pack_check(only: list[str] | None = None) -> None:
         own = change(d)  # a list: the files this case uploads (the overlay inside a copy); else the pack A four
         files = own if isinstance(own, list) else [d / REPORT, d / PRIOR, d / OVERLAY if (d / OVERLAY).exists()
                                                    else d / OVERLAY.replace(".xlsx", ".xlsm"), d / CURRENT]
+        t0 = time.time()
         got = run(files, name)
+        print(f"  {name}: {time.time() - t0:.0f}s", flush=True)
         new = {k: s for k, s in got["needs"].items() if k not in BASE}
         if "mid" in expect:  # another value by design: that value, the cell named, and the needs expected
             assert got["mid"] is not None and abs(got["mid"] - expect["mid"]) < 1e-6, (name, got["mid"], new)

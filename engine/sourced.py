@@ -149,13 +149,25 @@ def rate(asm: dict, facts: list[dict]) -> dict:
 
 # ---- the terminal growth rate --------------------------------------------------------------------------------------
 
+def _per_cent(formula: str, cell: str, here: str) -> bool:
+    """Does the formula read cell as a percentage typed as a whole number (cell/100, cell%)?"""
+    sh, addr = cell.split("!", 1) if "!" in cell else (here, cell)
+    m = re.match(r"([A-Z]{1,3})(\d+)$", addr)
+    if not m:
+        return False
+    at = (rf"(?:'?{re.escape(sh)}'?!)" + ("?" if sh == here else "")) + rf"\$?{m[1]}\$?{m[2]}(?!\d)"
+    return bool(re.search(at + r"\s*(?:/\s*100(?![\d.])|%)", formula))
+
+
 def _fit(db, ref: str, tv: float, term: str | None = None) -> dict | None:
     """A terminal value's formula as X x (1 + g) / (r - g) (or X / (r - g)): g, r and X among the cells it reads,
     or figures typed into it (then not sourced). term: one term of the cell's formula, where the terminal value is
     added to the last cash flow in it (=W8 + W8 * (1 + g) / (r - g)), tv that term's value."""
     f = re.sub(r'"[^"]*"', "", term or _formula(db, ref) or "")
     w = valuation.reads(db, expr=f, here=_key(ref)[0], depth=1) if term else valuation.reads(db, cells=[_key(ref)], depth=1)
-    cells = [(k, dcf._num(n["value"])) for k, n in w.items() if dcf._num(n["value"]) is not None]
+    cells = [(k, dcf.num_text(n["value"])) for k, n in w.items() if dcf.num_text(n["value"]) is not None]
+    # a percentage typed as a whole number, the formula dividing it by 100 or applying % to it (C6/100, C6%): the fraction
+    cells += [(k, v / 100) for k, v in list(cells) if v and _per_cent(f, k, _key(ref)[0])]
     typed = [(None, float(m[1]) / (100 if m[2] else 1)) for m in _LIT.finditer(dcf._FREF.sub(" ", f))]
     small = [(k, v) for k, v in cells + typed if 0 <= v < 0.3]
     for gk, g in small:
@@ -379,9 +391,10 @@ def multiple(db, traced: dict, facts: list[dict], terminal: dict, where: dict | 
 
 # ---- franking credit utilisation -----------------------------------------------------------------------------------
 
-def _utilisation(db, cores: list[dict]) -> tuple[dict | None, str | None]:
+def _utilisation(db, cores: list[dict], want: tuple | None = None) -> tuple[dict | None, str | None]:
     """The fraction every period's franking credits read (the first and the last period's with any), followed to
-    its input: (sighted, None) or (None, why not)."""
+    its input: (sighted, None) or (None, why not). A 1 read beside a fraction is a switch (franking applied), not the
+    utilisation; where several are read, the one holding the report's figure (want: (percent, its text))."""
     found = {}
     for c in cores:
         try:
@@ -393,18 +406,26 @@ def _utilisation(db, cores: list[dict]) -> tuple[dict | None, str | None]:
             continue
         walks = [valuation.reads(db, cells=[(sh, row, col)]) for col in dict.fromkeys((live[0], live[-1]))]
         for k in set.intersection(*(set(w) for w in walks)):
-            v = dcf._num(walks[0][k]["value"])
+            v = dcf.num_text(walks[0][k]["value"])
+            if v is not None and want and 1 < v <= 100 and abs(v - want[0]) < 1e-9:
+                v = v / 100  # the utilisation typed as a whole number (50 for 50%)
             if v is not None and 0 < v <= 1:
                 s = follow(db, k, v)
-                found[s["cell"]] = (s, v)
+                found[s["cell"]] = ({**s, "fraction": v}, v)  # (the fraction: a cell typed 50 for 50% holds 0.5)
     if not found:
         return None, "no fraction is read by every period's franking credits"
+    if any(v < 1 for _s, v in found.values()):  # a 1 beside a fraction: a switch (franking applied), not the utilisation
+        found = {c: x for c, x in found.items() if x[1] < 1}
     named = [x for x in found.values() if FRANKING.search(x[0]["label"] or "")]
-    if len(named) == 1:
-        return named[0][0], None
-    if not named and len(found) == 1:
-        s = next(iter(found.values()))[0]
-        return {**s, "why": "the only fraction every period's franking credits read (its line item doesn't say)"}, None
+    pool = named or list(found.values())
+    if len(pool) == 1:
+        s = pool[0][0]
+        return (s if named else {**s, "why": "the only fraction every period's franking credits read (its line item "
+                                             "doesn't say)"}), None
+    hit = [x for x in pool if want and abs(100 * x[1] - want[0]) < 1e-6]
+    if len(hit) == 1:
+        return {**hit[0][0], "why": "of the fractions every period's franking credits read, the one holding the report's "
+                                    "figure"}, None
     return None, "several fractions every period's franking credits read: " + ", ".join(sorted(found))
 
 
@@ -425,7 +446,7 @@ def franking(sess, summary: dict, db, traced: dict, where: dict, facts: list[dic
         fw = forward.franking(db, starts, where[end], cs) if starts else None
         up = None
         if fr:
-            s, why = _utilisation(db, fr)
+            s, why = _utilisation(db, fr, rep)
             fr_pv = result._end_split(db, cs).get("franking")
             if fw and s:
                 same = follow(db, fw["cell"], dcf._num(dcf._cell(db, *_key(fw["cell"]))) or 0.0)["cell"] == s["cell"]
@@ -446,7 +467,7 @@ def franking(sess, summary: dict, db, traced: dict, where: dict, facts: list[dic
                 ", and the report's figure, traced up, doesn't reach the equity value through franking credits it can "
                 "value" if starts else "")}
             continue
-        value = dcf._num(dcf._cell(db, *_key(s["cell"]))) if s else None
+        value = (s["fraction"] if s.get("fraction") is not None else dcf._num(dcf._cell(db, *_key(s["cell"])))) if s else None
         rerun = None
         if s and fr_pv is not None:
             eq = ov.parse_a1(where[end])
@@ -460,8 +481,11 @@ def franking(sess, summary: dict, db, traced: dict, where: dict, facts: list[dic
             after = dcf._num(sess.B.get("", *eq))
             if None not in (base, nil, after):
                 drop = base - nil
-                rerun = {"drop": unit(drop), "franking": unit(fr_pv), "restored": abs(after - base) < 1e-9,
-                         "ok": abs(drop - fr_pv) <= 1e-6 * max(1.0, abs(fr_pv))}
+                # the discountings can be in other units than the equity value (thousands under millions): as the
+                # reconciliation does, the drop against the franking credits' value in each of them
+                k = next((f for f in (1.0, 1e-3, 1e-6, 1e3) if abs(drop - fr_pv * f) <= 1e-6 * max(1.0, abs(fr_pv * f))), None)
+                rerun = {"drop": unit(drop), "franking": unit(fr_pv * (k or 1.0)), "restored": abs(after - base) < 1e-9,
+                         "ok": k is not None}
         ties = _tie(100 * value, rep) if rep and value is not None else None
         checks = [(bool(s), ("Sourced: every period's franking credits read this cell, the first and the last period's "
                              "alike" if fr else "Sourced: the franking credits used read this cell, and through them the "

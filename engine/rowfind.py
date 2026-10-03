@@ -72,6 +72,16 @@ def _words(label: str) -> set[str]:
     return set(re.findall(r"[a-z][a-z0-9]+", (label or "").lower())) - {"the", "and", "of", "for", "to", "in"}
 
 
+def _artefacts(wb) -> set[str]:
+    """A workbook's hidden sheets with no formulas (an add-in's cache, its undo sheet): not the model's line items."""
+    try:
+        hidden = {s for s, st in wb.db.execute("SELECT sheet, state FROM sheets") if st and st != "visible"}
+        live = {s for (s,) in wb.db.execute("SELECT sheet FROM rows GROUP BY sheet HAVING SUM(n_formula) > 0")}
+        return hidden - live
+    except Exception:
+        return set()
+
+
 def _jaccard(a: set, b: set) -> float:
     return len(a & b) / len(a | b) if a and b else 0.0
 
@@ -996,8 +1006,9 @@ class RowFinder:
         model shares most; a model rebuilt from the ground up, few)."""
         idx = self._index()
         if "family" not in idx:
-            mine = {_norm(l) for l in self.prior.labels().values() if l}
-            theirs = {_norm(l) for l in idx["labels"].values() if l}
+            skip_p, skip_c = _artefacts(self.prior), _artefacts(self.current)
+            mine = {_norm(l) for (s, _r), l in self.prior.labels().items() if l and s not in skip_p}
+            theirs = {_norm(l) for (s, _r), l in idx["labels"].items() if l and s not in skip_c}
             idx["family"] = round(_jaccard(mine, theirs), 3)
         return idx["family"]
 

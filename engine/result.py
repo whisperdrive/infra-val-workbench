@@ -122,7 +122,7 @@ def locate(summary: dict, head: dict) -> dict | None:
             ranged = bool(texts.get("low_text") and texts.get("high_text"))
             got = _pair(ms, db, ranged)
             if got and got.get("ambiguous"):
-                return None  # two rows as likely on the report's basis: picked between (gpt-sol, a person), not switched
+                return got  # two rows as likely on the report's basis: picked between (gpt-sol, a person), not switched
             if not got and not k:
                 t = _typed_pair(ms)
                 mid = _worked_mid(ms) if t else None
@@ -1637,14 +1637,14 @@ def reconcile(sess, summary: dict, where: dict, facts: list[dict], figs: dict) -
             x = split.get(e) or {}
             out[e] = {f: unit(x[f] * k) if isinstance(x.get(f), float) else None
                       for f in ("pv", "pv_forecast", "pv_tv", "tv", "franking")}
-            eq = equity.get(e) if k == 1.0 else None  # in other units than the figure (a share of it, say): no share of it
-            out[e]["franking_share"] = 100 * x["franking"] / eq if x.get("franking") is not None and isinstance(eq, float) \
+            eq = equity.get(e)  # (k a unit's factor: the share is a ratio, the same in thousands as in millions)
+            out[e]["franking_share"] = 100 * x["franking"] * k / eq if x.get("franking") is not None and isinstance(eq, float) \
                 and eq else None
             out[e]["tv_share"] = 100 * x["pv_tv"] / x["pv"] if x.get("pv_tv") is not None and x.get("pv") else None
         out["mid"] = {k: (out["low"][k] + out["high"][k]) / 2 if out["low"][k] is not None and out["high"][k] is not None
                       else None for k in out["low"]}
         # a share at the mid is the mid's figure over the mid's total (as the report works it), not the average share
-        m, eq = out["mid"], [unit(equity.get(e)) if k == 1.0 else None for e in ("low", "high")]
+        m, eq = out["mid"], [unit(equity.get(e)) for e in ("low", "high")]
         eq_mid = (eq[0] + eq[1]) / 2 if None not in eq else None
         m["franking_share"] = 100 * m["franking"] / eq_mid if m["franking"] is not None and eq_mid else None
         m["tv_share"] = 100 * m["pv_tv"] / m["pv"] if m["pv_tv"] is not None and m["pv"] else None
@@ -1665,7 +1665,9 @@ def reconcile(sess, summary: dict, where: dict, facts: list[dict], figs: dict) -
             if f:
                 v = f.get("final") or f
                 texts = {"low": v.get("low_text"), "high": v.get("high_text"), "mid": v.get("value_text")}
-                checks = {e: _ties(row["python"][e], t) for e, t in texts.items() if t and keyfacts.numbers(t)}
+                # (a figure Python couldn't work out is "can't tell", not a figure that doesn't tie)
+                checks = {e: _ties(row["python"][e], t) for e, t in texts.items() if t and keyfacts.numbers(t)
+                          and row["python"][e] is not None}
                 row.update(report={e: t for e, t in texts.items() if t}, page=v.get("page"), ties=checks,
                            ok=all(checks.values()) if checks else None, basis=v.get("basis"))
             rows.append(row)

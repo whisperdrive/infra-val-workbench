@@ -406,6 +406,10 @@ uv run python tests/check_trace.py      # reading a DCF back from its factors (f
                                         # balances at the valuation date; copies and the row tools on the synthetic
                                         # pairs in tests/variants.py; the doctor; the store
 uv run python tests/check_xlruntime.py  # Excel functions in the Python runtime
+uv run python tests/check_ingest.py     # the shapes a workbook can arrive in: the pack run end to end with one file
+                                        # changed (saved uncalculated, protected, macro-enabled, pasted over, renamed,
+                                        # a report table, a terminal value added after the discounting, ...): the same
+                                        # value and cells, or held saying why
 ```
 
 ## Layout

@@ -61,7 +61,7 @@ def _label(db, sheet: str, row: int) -> str:
 
 def _names(db) -> dict[str, str]:
     try:
-        return {n.lower(): ref for n, ref in db.execute("SELECT name, ref FROM names") if ref and "!" in ref}
+        return valuation.names_of(db, cells_only=True)
     except Exception:
         return {}
 
@@ -93,6 +93,47 @@ def _args(text: str, i: int) -> tuple[list[str], int] | None:
 
 
 _CHOOSE = re.compile(r"(?<![\w.])CHOOSE\s*\(", re.I)
+_SUM = re.compile(r"(?<![\w.])SUM\s*\(", re.I)
+_OFFSET = re.compile(r"(?<![\w.])OFFSET\s*\(\s*((?:'[^']+'|[A-Za-z_][\w.]*)?!?\$?[A-Z]{1,3}\$?\d+)\s*,\s*0\s*,\s*0\s*,"
+                     r"\s*(\d+)\s*,\s*(\d+)\s*\)", re.I)
+
+
+def _plain(db, text: str, here: str) -> str:
+    """A discounting written another way, as the plain form the tracer reads: OFFSET(cell, 0, 0, h, w) with figures
+    for its size is the range it spans; SUM(a*b) over two ranges (an array formula) is SUMPRODUCT(a, b), and
+    SUM(a*1) is SUM(a)."""
+    def offset(m):
+        r = dcf._ref(m[1], here)
+        if not r or r[1:3] != r[3:5]:
+            return m[0]
+        h, w = int(m[2]), int(m[3])
+        if not (h and w):
+            return m[0]
+        from openpyxl.utils import get_column_letter as col
+        pre = m[1][:m[1].index("!") + 1] if "!" in m[1] else ""
+        return f"{pre}{col(r[2])}{r[1]}:{col(r[2] + w - 1)}{r[1] + h - 1}"
+    text = _OFFSET.sub(offset, text)
+    out, pos = [], 0
+    for _ in range(50):
+        m = _SUM.search(text, pos)
+        if not m:
+            break
+        got = _args(text, m.end() - 1)
+        if not got:
+            break
+        args, end = got
+        new = None
+        if len(args) == 1:
+            parts = [x.strip() for _, x in valuation._split(args[0], "*")]
+            ranges = [x for x in parts if (lambda r: r and r[1:3] != r[3:5])(dcf._ref(x, here))]
+            if len(parts) == 2 and len(ranges) == 2:
+                new = f"SUMPRODUCT({parts[0]},{parts[1]})"
+            elif len(parts) == 2 and len(ranges) == 1 and parts[1 - parts.index(ranges[0])] == "1":
+                new = f"SUM({ranges[0]})"
+        out.append(text[pos:m.start()] + (new if new else text[m.start():end]))
+        pos = end
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def _chosen(db, body: str, here: str) -> str:
@@ -613,9 +654,9 @@ def trace(db, cell: str) -> dict:
         seen[key] = node
         if not f or depth > MAX_DEPTH or len(seen) > MAX_NODES:
             return node
-        body = _chosen(db, _expand(db, _STR.sub('""', f), names), sheet)
+        body = _plain(db, _chosen(db, _expand(db, _STR.sub('""', f), names), sheet), sheet)
         node["words"] = words(db, body, sheet)
-        raw = _expand(db, f, names)  # its strings kept for the calls: a SUMIF's criterion is one
+        raw = _plain(db, _expand(db, f, names), sheet)  # its strings kept for the calls: a SUMIF's criterion is one
         whole = raw.strip().lstrip("=").lstrip("+").strip()
         for call in _calls(raw):
             c = _core(db, sheet, row, col, call, whole == call[2])
@@ -771,7 +812,7 @@ def recompute(db, tree: dict, pv: dict[str, float]) -> float | None:
             return given[key]
         if n["cell"] in pv:
             cs = n.get("cores") or []
-            raw = _expand(db, n["formula"], names) if n.get("formula") else ""
+            raw = _plain(db, _expand(db, n["formula"], names), key[0]) if n.get("formula") else ""
             if len(cs) == 1 and not cs[0].get("whole") and cs[0]["call"] in raw:
                 # the discounting is part of its cell's formula (=SUMPRODUCT(...) * share): its value in place of the
                 # call, the rest of the formula evaluated, not the cell replaced by the discounting alone
