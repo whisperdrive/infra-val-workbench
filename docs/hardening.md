@@ -89,9 +89,10 @@ cards found again in a corrected model; a person's picks logged, anonymised, for
 High: a wrong value can still reach the result unflagged.
 
 1. ~~Row agents settle "by the numbers" on the candidate nearest last year's~~ — done: by meaning, numbers a band.
-2. ~~Same-label matching when a block is inserted, or a case column~~ — done: block copies by heading; case columns.
-3. ~~Row picks keyed by address, not by file~~ — done: each pick keeps a card and is found again; so does a figure set
-   for a held input (its label and last year's figure), set aside where it can't be found.
+2. **Same-label matching when a block is inserted** — re-opened by the second review (S1 below): done only where the
+   right copy's heading repeats last year's heading words. Case columns: done.
+3. **Row picks keyed by address, not by file** — re-opened in part (S1): a card is kept at its address when its label,
+   heading and kind match, without comparing its figures or position. Held figures: done.
 4. **A mid-period valuation date** keeps the whole straddling period (half a year's cash flow already earned). Point
    to check with the elapsed fraction; a proration method.
 5. **A distribution declared at this year's date in the client model** that the overlay doesn't deduct.
@@ -119,3 +120,87 @@ Low.
     the last bar.
 18. NPV over a range with blanks counts the blank columns; a row of cash flows in billions can be read as factors.
 19. Typed per-period overlay rows inside the cash flows slide a period on a rolling horizon.
+
+## Second review, 3 October 2026
+
+Five reviewers, one per part (intake and roles; last year's rebuild and inputs; the roll-forward and row finding; the
+result and its outputs; cross-cutting robustness), each reproducing on synthetic workbooks. Ranked: a wrong value
+through on ordinary inputs, then after an internal failure, then the rest. "Re-run" marks the ones re-run outside the
+reviewer's own session.
+
+### A wrong value through on ordinary inputs, unflagged
+
+- **S1. A copy of a block settled on the wrong copy** (re-run). A downside or P90 case inserted above the base, the
+  base's heading renamed ("Management forecast" shares "case" with "Downside case"), no headings, or the base moved to
+  another sheet: every row settled on the copy at confidence 1.0, identity, place and role all agreeing; this year's
+  value 10.6% low, the zero roll inside the silent band. `structure.which_copy` takes any heading sharing a word;
+  `rowfind._copies` lets lineage rescue the first occurrence (identical in every copy); `in_place` is set on a row
+  whose block has copies; a pick card's `matches()` ignores figures and position. `tests/variants.py` had none of
+  these cases.
+- **S2. A balance at the valuation date on a fixed horizon** (re-run). Net debt read as `=Client!D11` (last year's
+  date's column) still deducts last year's 200, not this year's 180: 18% off, no hold. The same overlay written with
+  INDEX/MATCH rolls right and is held by `cf-split`, which measures movement: the stale read passes, the right one is
+  held.
+- **S3. Equity ends typed in** (re-run). A low and high pasted from a sensitivity run (or data-table cells, which load
+  as constants) tie to the report and pass as reliable; this year's value is last year's to the cent, with only two
+  "held at last year's" notes, which also push the real held inputs off the list.
+- **S4. The doctor's holds applied without a person** (code re-read; reviewer reproduced). A top-level OFFSET, or an
+  IF returning one, records only its arguments as reads; the doctor calls it safe and the orchestrator holds it at
+  Excel's value: a terminal base frozen at last year's, this year's value about 20% low, no hold.
+- **S5. A shared workbook's date set in another engagement** (re-run). Workbooks are shared by content; a date
+  corrected in one engagement re-rolls every other engagement using the file: 3,384.7 became 3,542.4 with no hold,
+  its date still shown as confirmed by the agents.
+- **S6. Decisions lost or corrupted** (re-run). The decision files (acks, terms, rate, method, row picks, held) are
+  written in place without locks and read as empty when damaged: eight acknowledgements at once lost 151 of 160; a
+  damaged rate file drops this year's rate with no flag; two quick row picks while the overlay thread is busy keep
+  one; the rows job drops the agents' earlier picks on every rerun.
+- **S7. Decisions outlive their inputs**. Acknowledgements of `cf-stale`, `cf-exact`, `cf-tv-nil`, `other-link` and
+  `roll-assumed` are keyed without this year's figures, and survive a replaced client model; a confirmed term is keyed
+  by row address, so another line at that row enters the value "confirmed by you".
+- **S8. A person's edits to approved facts** (code re-read). The rebuild's fingerprint carries only an edit's value
+  text; the result's none of it: a growth rate or a rate range edited reruns nothing, and the page calls the result
+  current.
+- **S9. The rebuilt-model fallback** takes the only row within the numbers band: a low case beside a central case
+  revised 20% up.
+
+### After an internal failure
+
+- **S10. Cum becomes ex** (code re-read). If the methods inventory raises, `asked` falls back to the person's
+  preference, dropping the basis's on-date method: a cum value published on the ex basis, no method need. A natural
+  trigger: `methods.py` sorting `(date, None)` flags.
+- **S11. The cash-flow checks crashing** collapse into one `cf-error` point to check, removing `cf-split`; an interest
+  check failing raises nothing.
+- **S12. A damaged `equity.json` or `holds.json`** freezes the engagement silently (the loop swallows the error).
+- **S13. Azure down** leaves the rows "done"; nothing reruns them when it's back.
+
+### Medium
+
+- The agents confirm this year's date on expectations alone (a year on, the financial year's end), not the file.
+- The facts come from every report uploaded, not only last year's report's role; on a tie, a draft's lead.
+- A report's folder is shared across engagements and deleted with either.
+- A SUMPRODUCT's factor row is laid on the columns by position: a blank factor shifts every later one.
+- A merged row ("Operating costs and tax") settled on its words alone, one kind of evidence agreeing.
+- The overview and compare views show an earlier result's value while it's being worked out again.
+- Circular references on this year's feed take last year's saved value; an unknown function in a branch not taken
+  last year falls through IFERROR silently.
+- Every fact edit reruns the roles' second opinion (cost).
+- Model calls don't pass `store=False`: Azure keeps requests and responses (up to 30 days by default).
+- A single figure off the timeline stands in at last year's where its case column's heading is reworded (reviewer).
+
+### Low
+Folders deleted with errors ignored; charts and fonts from public CDNs; the diagnostics' version pattern too broad;
+low ≤ high not checked after the roll; `time` and `new-terms` holds shown as "a note"; the review prompt's wording.
+
+### What would make it harder to get wrong
+1. One store for decisions: locked, atomic, a damaged file a blocking need (never read as empty); each decision
+   carries a card and the files it was made on, and one made on another file is set aside to confirm again.
+2. Copies a doubt by default: settled only where the heading decides by a margin, or this year's own equity value or
+   NPV reads that copy; cards compared on figures and position too.
+3. A stale-read check beside `cf-split`: each client read outside the discountings that moves the value, against this
+   year's model at the new date (covers S2, S3 and the stand-in).
+4. A check that can't run is a hold, section by section; post-conditions on the result (low ≤ high, the mid, the
+   bridge's total, cum with the on-date method).
+5. Judgements per engagement; the library holds only what's true of a file.
+6. Fingerprints of what each job read, with a test editing each field a person can edit.
+7. The doctor's holds a person's decision; runtime health (cycles, unsupported calls) checked on this year's feed.
+8. The failing variants in `tests/variants.py`, so its measure is honest.
