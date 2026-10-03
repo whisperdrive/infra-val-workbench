@@ -64,7 +64,10 @@ def _cell(db, sheet: str, row: int, col: int):
 
 
 def _row_label(db, sheet: str, row: int) -> str:
-    r = db.execute("SELECT label, units FROM rows WHERE sheet=? AND row=?", (sheet, row)).fetchone()
+    try:  # whole where the row map has it
+        r = db.execute("SELECT COALESCE(full_label, label), units FROM rows WHERE sheet=? AND row=?", (sheet, row)).fetchone()
+    except Exception:
+        r = db.execute("SELECT label, units FROM rows WHERE sheet=? AND row=?", (sheet, row)).fetchone()
     return (r[0] + (f" [{r[1]}]" if r[1] else "")) if r and r[0] else ""
 
 

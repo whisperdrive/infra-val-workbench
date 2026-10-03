@@ -86,18 +86,27 @@ def _candidates(db) -> dict:
         if want_date:
             found.sort(key=lambda x: label_rank(x[2]))
         for sheet, row, label in found[:40]:
+            seen_dates = set()
             for addr, v in db.execute("SELECT addr, value FROM cells WHERE sheet=? AND row=? ORDER BY col",
                                       (sheet, row)):
                 ok = _as_date(v) if want_date else (isinstance(v, str) and 1 < len(v) <= 80 and v != label)
-                if ok:
-                    hit = {"value": _as_date(v) if want_date else v, "where": f"{sheet}!{addr}",
-                           "why": f"row labelled '{label}'"}
-                    if want_date:
-                        hit["rank"] = label_rank(label)
-                        hit["why"] += {0: " (the valuation date's own row)", 1: "", 2: " (mentions it in passing)",
-                                       3: " (its label names another date: not this row's)"}[hit["rank"]]
+                if not ok:
+                    continue
+                hit = {"value": _as_date(v) if want_date else v, "where": f"{sheet}!{addr}",
+                       "why": f"row labelled '{label}'"}
+                if not want_date:
                     yield hit
                     break
+                # every date in the row, not only the first (this year's and last year's side by side, in either order)
+                if hit["value"] in seen_dates or len(seen_dates) >= 4:
+                    continue
+                seen_dates.add(hit["value"])
+                hit["rank"] = label_rank(label)
+                hit["why"] += {0: " (the valuation date's own row)", 1: "", 2: " (mentions it in passing)",
+                               3: " (its label names another date: not this row's)"}[hit["rank"]]
+                if not plausible(hit["value"]):
+                    hit["why"] += " (implausible as a valuation date: decades away)"
+                yield hit
     dates += labelled(VAL_DATE_LABELS, True)
     texts += labelled(TARGET_LABELS, False)
 
@@ -125,11 +134,25 @@ def _candidates(db) -> dict:
     return {"valuation_date": dates[:15], "target": texts[:50], "other_dates": other_dates[:15]}
 
 
+def plausible(iso: str | None) -> bool:
+    """A date that could be a valuation date: from 1990 to five years from now (not a concession's end in 2065, nor a
+    small number formatted as a date in 1900)."""
+    from datetime import date
+    try:
+        y = int(str(iso)[:4])
+    except (TypeError, ValueError):
+        return False
+    return 1990 <= y <= date.today().year + 5
+
+
 def fallback(c: dict, filename: str) -> dict:
     """Best guess without a model: the most-cited date and the most-repeated header text."""
     votes = Counter(d["value"] for d in c["valuation_date"])
     # the best-labelled first (a named range, or a row labelled exactly "Valuation date"), then the most cited
-    best = min(c["valuation_date"], key=lambda d: (d.get("rank", 0), -votes[d["value"]]), default=None)
+    # (as well labelled and cited, the later: this year's and last year's side by side, last year's is the earlier)
+    later = lambda iso: -int(str(iso).replace("-", "")[:8]) if str(iso)[:4].isdigit() else 0
+    best = min(c["valuation_date"], key=lambda d: (not plausible(d["value"]), d.get("rank", 0), -votes[d["value"]],
+                                                   later(d["value"])), default=None)
     vd = best["value"] if best else None
     heads = [t for t in c["target"] if t["why"].startswith("in the header")]
     tgt = (heads or c["target"] or [{"value": filename, "where": None}])[0]

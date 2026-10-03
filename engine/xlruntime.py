@@ -66,6 +66,8 @@ def from_db(v):
                 s = (date(y, mo, d) - EPOCH).days
             except ValueError:
                 return v
+            if s <= 60:  # before 1 March 1900: Excel counts a 29 February 1900 that never was, so its serial is a day less
+                s -= 1
             if m.group(4):
                 s += (int(m.group(4)) * 3600 + int(m.group(5)) * 60 + int(m.group(6) or 0)) / 86400
             return float(s)

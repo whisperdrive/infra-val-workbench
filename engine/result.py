@@ -38,6 +38,7 @@ import rowfind
 import scenarios
 import sourced
 import valuation
+import xlruntime
 
 TV_WORDS = re.compile(r"terminal|continuing value|residual|perpetuity|gordon|exit value", re.I)
 FRANKING = re.compile(r"frank|imputation|gamma", re.I)
@@ -118,7 +119,22 @@ def locate(summary: dict, head: dict) -> dict | None:
         typed = None  # the report's figures typed in the overlay (pasted): passed over, and said so
         for k, (basis, texts) in enumerate(tries):
             ms = linkmap.match_fact(_fact_for(texts, head.get("units")), nums, labels, set(), limit=200)["matches"]
-            got = _pair(ms)
+            ranged = bool(texts.get("low_text") and texts.get("high_text"))
+            got = _pair(ms, db, ranged)
+            if got and got.get("ambiguous"):
+                return None  # two rows as likely on the report's basis: picked between (gpt-sol, a person), not switched
+            if not got and not k:
+                t = _typed_pair(ms)
+                mid = _worked_mid(ms) if t else None
+                if mid:  # its low and high typed in (pasted), its mid worked out: that cell, the typed ones named (held)
+                    got = {"low": mid["cell"], "high": mid["cell"], "mid": mid["cell"], "scale": mid["scale"],
+                           "sign": mid["sign"], "label": mid["label"],
+                           "how": "the report's mid, worked out (its low and high are typed in)",
+                           "typed": {"cells": t, "basis": basis}}
+                elif _any_end(ms):
+                    # cells on the report's basis hold some of its figures (an end, the mid) but don't pair: a pick, not
+                    # the other basis (which would value this year on a basis the report didn't conclude on)
+                    return None
             if not got and typed is None:
                 t = _typed_pair(ms)
                 typed = {"cells": t, "basis": basis} if t else None
@@ -156,7 +172,9 @@ def cell_basis(db, cell: str) -> tuple[str | None, str]:
         return None, ""
     # a distribution term (not another equity value whose label mentions one) deducted or added
     terms = re.findall(r"([+\-])\s*([^+\-]*)", "+" + w.lstrip("=").strip())
-    signs = {sg for sg, term in terms[1:] if _DIST.search(term) and not re.search(r"equity|value", term, re.I)}
+    # (a term labelled "Less: ..." holds a negative figure: added, it deducts)
+    signs = {("-" if sg == "+" and re.match(r"\s*(?:less|deduct|minus)\b", term, re.I) else sg) for sg, term in terms[1:]
+             if _DIST.search(term) and not re.search(r"equity|value", term, re.I)}
     if signs == {"-"}:
         return "ex", f"its formula deducts a distribution: {w.lstrip('=')}"
     if signs == {"+"}:
@@ -185,7 +203,43 @@ def _typed_pair(ms: list[dict]) -> list[str] | None:
     return None
 
 
-def _pair(ms: list[dict]) -> dict | None:
+def _worked_mid(ms: list[dict]) -> dict | None:
+    """The best formula cell on an equity value's row holding the report's mid: {"cell", "scale", "sign", "label"}."""
+    xs = sorted((m for m in ms if m["part"] == "value" and m["formula"] and m["located"]
+                 and not NOT_EQUITY.search(m.get("label") or "")), key=lambda m: -m["score"])
+    return {"cell": f"{xs[0]['sheet']}!{xs[0]['addr']}", "scale": xs[0]["scale"], "sign": xs[0]["sign"],
+            "label": xs[0]["label"]} if xs else None
+
+
+def _any_end(ms: list[dict]) -> bool:
+    """A formula cell on a row labelled as the equity value holding one of the report's figures (its low, its high,
+    its mid)."""
+    return any(m["formula"] and m["located"] and not NOT_EQUITY.search(m.get("label") or "") for m in ms)
+
+
+def _reads(db, m: dict) -> set[str]:
+    """The cells a match's cell reads directly ("Sheet!A1"): its formula's references."""
+    if db is None:
+        return set()
+    row = db.execute("SELECT formula FROM cells WHERE sheet=? AND addr=?", (m["sheet"], m["addr"])).fetchone()
+    out = set()
+    for x in dcf._FREF.finditer(re.sub(r'"[^"]*"', "", (row[0] or "") if row else "")):
+        r = dcf._ref(x[0], m["sheet"])
+        if r and r[1:3] == r[3:5]:
+            out.add(f"{r[0]}!{_col(r[2])}{r[1]}")
+    return out
+
+
+def _col(c: int) -> str:
+    from openpyxl.utils import get_column_letter
+    return get_column_letter(c)
+
+
+def _pair(ms: list[dict], db=None, ranged: bool = False) -> dict | None:
+    """The report's low and high paired on one row, best first; {"ambiguous": True, "rows"} where two rows are as
+    likely. A row whose cells read another candidate's (a report table carrying the summary's figures, a rounding, an
+    adjustment of nothing) gives way to the row it reads: that one is what the model works out. ranged: the report
+    gives a low and a high, so one cell holding its mid isn't the equity value's ends."""
     cell = lambda m: f"{m['sheet']}!{m['addr']}"
     lows, highs, mids = ([m for m in ms if m["part"] == p] for p in ("low", "high", "value"))
     cands = []
@@ -202,9 +256,15 @@ def _pair(ms: list[dict]) -> dict | None:
             score = a["score"] + b["score"] + 2 * (a["formula"] and b["formula"]) + (a["label_match"] and b["label_match"])
             cands.append((score, a, b))
     cands.sort(key=lambda x: -x[0])
-    if len(cands) > 1 and cands[1][0] == cands[0][0] and \
-            (cands[1][1]["sheet"], cands[1][1]["row"]) != (cands[0][1]["sheet"], cands[0][1]["row"]):
-        return None  # two rows as likely: gpt-sol or a person picks between them, not the order they're listed in
+    if len(cands) > 1 and db is not None:  # a row reading another candidate's cells gives way to it (upstream first)
+        reads = [(_reads(db, a), _reads(db, b)) for _s, a, b in cands]
+        down = {i for i, (ra, rb) in enumerate(reads)
+                if any(j != i and cell(a2) in ra and cell(b2) in rb for j, (_s2, a2, b2) in enumerate(cands))}
+        cands = [c for i, c in enumerate(cands) if i not in down] or cands
+    top = [c for c in cands if c[0] == cands[0][0]] if cands else []
+    if len({(a["sheet"], a["row"]) for _s, a, _b in top}) > 1:
+        # two rows as likely, neither reading the other: gpt-sol or a person picks, not the order they're listed in
+        return {"ambiguous": True, "rows": sorted({f"{a['sheet']}!r{a['row']}" for _s, a, _b in top})}
     if cands:
         _, a, b = cands[0]
         mid = next((cell(m) for m in mids if (m["sheet"], m["row"]) == (a["sheet"], a["row"])), None)
@@ -219,7 +279,7 @@ def _pair(ms: list[dict]) -> dict | None:
         return {"low": cell(lo[0]), "high": cell(hi[0]), "mid": None, "scale": lo[0]["scale"], "sign": lo[0]["sign"],
                 "label": lo[0]["label"], "how": "low and high found by their labels, on different rows"}
     one = located(mids)
-    if one and not lows and not highs:  # the report gives one figure
+    if one and not lows and not highs and not ranged:  # the report gives one figure
         m = one[0]
         return {"low": cell(m), "high": cell(m), "mid": cell(m), "scale": m["scale"], "sign": m["sign"],
                 "label": m["label"], "how": "the report's one figure"}
@@ -326,6 +386,101 @@ def _calc(db_path: str) -> dict:
         return {}
 
 
+PASTED_SHARE = 0.8  # this share of a row's figures equal to last year's: pasted from it
+
+
+def _pasted_rows(sess) -> list[dict]:
+    """The client rows the value reads that this year's model has as typed figures where last year's had formulas,
+    equal to last year's: by period (pasted in place, the forecast not updated) or by column (pasted one period off, so
+    each period carries the period before's). Every check lines periods up by date, so a copy one period off looks
+    like a revised forecast. -> [{"row", "found", "label", "how", "n"}]."""
+    pri, cur, rm = sess.prior or sess.ov, sess.current, sess.rowmap
+    if not cur or not rm:
+        return []
+    num = lambda v: v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    kinds = lambda db: {(s_, r_): (f or 0, k or 0) for s_, r_, f, k in db.execute("SELECT sheet, row, n_formula, n_const FROM rows")}
+    try:
+        was_k, now_k = kinds(pri.db), kinds(cur.db)
+    except Exception:
+        return []
+    labels, out = pri.labels(), []
+    for s_, r_ in sorted({(s_, r_) for s_, r_, _c in sess.client_reads}):
+        hit = rm.locate(s_, r_)
+        copies = (rm.explain(s_, r_) or {}).get("copies") or []
+        if not hit and copies:  # its line this year passed over by the row finder as last year's figures pasted in
+            out.append({"row": f"{s_}!r{r_}", "found": copies[0], "label": labels.get((s_, r_), ""),
+                        "how": "by period (so the row finder passed it over)", "n": len(pri.timeline(s_))})
+            continue
+        f1, k1 = now_k.get(hit, (1, 0)) if hit else (1, 0)
+        if not hit or not was_k.get((s_, r_), (0, 0))[0] or not k1 or f1 > 0.2 * (f1 + k1):
+            continue  # last year's row worked out by formulas, this year's typed figures (a formula or two left)
+        tl_p, tl_c = pri.timeline(s_), cur.timeline(hit[0])
+        if len(tl_p) < 3 or len(tl_c) < 3:
+            continue
+        last = {c: num(pri.value(s_, r_, c)) for c in tl_p}
+        now = {c: num(cur.value(hit[0], hit[1], c)) for c in tl_c}
+        by_date = {round(tl_p[c]): v for c, v in last.items()}
+        for how, pairs in (("by period", [(v, by_date.get(round(tl_c[c]))) for c, v in now.items()]),
+                           ("by column, one period off", [(v, last.get(c)) for c, v in now.items()
+                                                          if c in tl_p and round(tl_p[c]) != round(tl_c[c])])):
+            xs = [(a, b) for a, b in pairs if a is not None and b is not None and (a or b)]
+            same = [a for a, b in xs if abs(a - b) <= 1e-9 * max(1.0, abs(b))]
+            if len(xs) >= 3 and len(set(round(a, 6) for a in same)) >= 3 and len(same) >= PASTED_SHARE * len(xs):
+                out.append({"row": f"{s_}!r{r_}", "found": f"{hit[0]}!r{hit[1]}", "label": labels.get((s_, r_), ""),
+                            "how": how, "n": len(same)})
+                break
+    return out
+
+
+def _error_root(sess, key: tuple) -> str:
+    """Where an error under a cell starts, on the feed as configured: down through the cells it reads that are errors
+    to one whose own reads aren't (its own formula makes it: a #REF!, a name that refers to nothing, a function Python
+    lacks), or a typed error. -> "Sheet!A1 (=its formula)"."""
+    k, seen = key, set()
+    while k not in seen and len(seen) < 400:
+        seen.add(k)
+        if not sess.B.is_formula(*k):
+            break
+        reads, _ = sess.B.reads(*k)
+        bad = [x[1:] for x in sorted(reads, key=str) if x[0] == "" and isinstance(sess.value(*x[1:]), xlruntime.XLError)]
+        if not bad:
+            break
+        k = bad[0]
+    f = sess.ov.db.execute("SELECT formula FROM cells WHERE sheet=? AND row=? AND col=?", k).fetchone() \
+        if hasattr(sess.ov, "db") else None
+    return ov._a1(*k) + (f" ({f[0]})" if f and f[0] else "")
+
+
+def inputs_moved(sess, summary: dict, inputs: dict) -> list[dict]:
+    """The valuation's own inputs (the discount rate, the growth rate, the exit multiple, the franking utilisation)
+    whose figure this year differs from last year's because the cell reads the client model (a growth rate that is the
+    client's CPI, say): this year's value takes the new figure, which a person should see. This year's rate a person
+    set isn't one (it's left out, at last year's). -> [{"cell", "what": [[key, end]], "last", "this"}]."""
+    w = summary.get("wiring") or {}
+    if not (w.get("current") and sess.rowmap):
+        return []
+    cells = {}
+    for key in ("rate", "growth", "multiple", "franking"):
+        for end, r in ((inputs.get(key) or {}).get("ends") or {}).items():
+            for c in (r.get("cells") or ([r["cell"]] if r.get("cell") else [])):
+                cells.setdefault(c, []).append([key, end])
+    if not cells:
+        return []
+    names = list(cells)
+    keys = [ov.parse_a1(c) for c in names]
+    try:
+        last, _, _, _ = _read(sess, summary, "prior" if w.get("prior") else "workbook", keys)
+        now, _, _, _ = _read(sess, summary, "current", keys, held=False, rates=False)
+    finally:
+        sess.configure("workbook")
+    out = []
+    for c, k in zip(names, keys):
+        a, b = last.get(k), now.get(k)
+        if isinstance(a, float) and isinstance(b, float) and abs(a - b) > 1e-9 * max(1.0, abs(a)):
+            out.append({"cell": c, "what": cells[c], "last": a, "this": b})
+    return out
+
+
 def _unusable(sess) -> list[dict]:
     """The client cells the last read took that hold no figure (overlay.Session.unusable): [{"row", "col", "model",
     "cell", "what"}], "row"/"col" last year's cell, "cell" the one read (this year's, on this year's feed)."""
@@ -354,6 +509,8 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
     got, _, _, _ = _read(sess, summary, base_feed, keys)
     out["rebuilt"] = {c: ov._show(got[k]) for c, k in zip(cells, keys)}
     out["unusable_prior"] = _unusable(sess)  # last year's client cells read with no saved result
+    # an error rebuilt where Excel saved a figure: where it starts (a #REF!, a broken name, a function Python lacks)
+    out["rebuilt_errors"] = {c: _error_root(sess, k) for c, k in zip(cells, keys) if isinstance(got[k], xlruntime.XLError)}
     out["this_year"], out["roll"], out["gaps"] = None, None, None
     if w.get("current") and sess.rowmap:
         out["feeds"]["this_year"] = "current"
@@ -368,14 +525,18 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
         # year's) and functions it lacks (#NAME?, which an IFERROR turns into a figure): neither is this year's
         loops, lacks = sorted({ov._a1(*k) for k in sess.B.cycles}), dict(sess.B.unsupported)
         unusable = _unusable(sess)
+        pasted = _pasted_rows(sess)
         out["this_year"] = {c: ov._show(got[k]) for c, k in zip(cells, keys)}
         # last year's figures standing in on this year's feed, and the periods past this year's forecast (read nil)
         out["feed"] = {"stood_in": [{"row": f"{s_}!r{r_}", "col": c_, "value": float(v)}
                                     for (s_, r_, c_), v in sess.stood_in.items() if isinstance(v, (int, float))],
                        "beyond": [{"row": f"{s_}!r{r_}", "col": c_, "why": str(w)} for (s_, r_, c_), w in sess.beyond.items()],
+                       # right of last year's timeline (a total, the model's own terminal value) and not found this year
+                       "beyond_stood": [{"row": f"{s_}!r{r_}", "col": c_, "cell": ov._a1(s_, r_, c_), "value": float(v)}
+                                        for (s_, r_, c_), v in getattr(sess, "beyond_stood", {}).items()],
                        "other_links": _other_links(getattr(sess, "other_reads", {})),
                        "balances": _balances(sess, summary), "circular": loops, "unknown": lacks,
-                       "unusable": unusable}
+                       "unusable": unusable, "pasted": pasted}
         out["cut_off"] = len(sess.cut)  # the discountings' periods before the new date, cut off on this year's feed
         out["holds_moved"] = _holds_moved(sess, summary)  # cells held at Excel's value whose inputs move this year
         if summary.get("rate_values"):
@@ -803,6 +964,9 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
                       and not weak_rows and not timing_open and not date_hold and not vd_off and zr["ok"]}
 
     def why_missing(k):
+        if not sess.rowmap.locate(*k) and ex(*k).get("copies"):
+            return (f"this year's {ex(*k)['copies'][0]} is last year's figures pasted in (typed where last year's model "
+                    "worked them out), so it isn't taken")
         if ex(*k).get("stand_in"):
             return "the agents couldn't find it this year (last year's values stand in)"
         if sess.rowmap.locate(*k) is None:
@@ -1322,6 +1486,26 @@ def _tv_place(db, summary: dict, facts: list[dict], cell: str, cs: list[dict]) -
     return None
 
 
+def tv_after(summary: dict, facts: list[dict], where: dict) -> dict:
+    """A terminal value added after the discounting (its present value a term of its own: =SUM(present values) +
+    TV x the last factor, or a cell of its own; forward.py), per end: {end: {"pv_cell", "pv_term"}}. The split counts
+    its move with the discountings' (cashflows.checks), not as something moving outside them."""
+    out = {}
+    try:
+        db = rodb.connect(summary["wiring"]["overlay"]["db_path"])
+    except Exception:
+        return out
+    for e in ("low", "high"):
+        try:
+            tr = _traced(db, where[e])
+            tv = _tv_place(db, summary, facts, where[e], tr[1]) if tr else None
+        except Exception:
+            tv = None
+        if tv and tv["where"] == forward.AFTER and tv.get("pv_cell") and tv.get("pv_term"):
+            out[e] = {"pv_cell": tv["pv_cell"], "pv_term": tv["pv_term"]}
+    return out
+
+
 def _tv_cells(db, tv: dict) -> set:
     """The cells a terminal value placed by _tv_place is worked out from, to read on another feed."""
     out = set()
@@ -1555,13 +1739,19 @@ def assumptions(summary: dict, where: dict) -> dict:
 
 # ---- the inputs held at last year's ------------------------------------------------------------------------------
 
-def held_list(sess, summary: dict, where: dict, figs: dict) -> list[dict]:
+def held_list(sess, summary: dict, where: dict, figs: dict, tv: dict | None = None) -> list[dict]:
     """The inputs typed in the overlay outside its discountings (held.py), each with this year's figure where a person
     set it, else held at last year's, and the suggestion from this year's client model (checked against last
-    year's). In the overlay's units, as typed."""
+    year's). In the overlay's units, as typed. tv: a terminal value added after the discounting (tv_after), whose
+    inputs (its growth rate, its factor's rate and date) are the sourced inputs', not figures held at last year's."""
     cells = [(e, where[e]) for e in ("low", "high") if where.get(e)]
     with rodb.connect(summary["wiring"]["overlay"]["db_path"]) as db:
-        items = held.find(db, cells, summary.get("sheets"))
+        tv_inputs = set()
+        for x in (tv or {}).values():
+            here = dcf._ref(x["pv_cell"], "")[0]
+            tv_inputs |= {ref for ref, n in valuation.reads(db, expr=x["pv_term"], here=here, depth=8).items()
+                          if not n.get("formula")}
+        items = held.find(db, cells, summary.get("sheets"), tv_inputs)
     roll, set_ = figs.get("roll") or {}, summary.get("held_values") or {}
     prior_vd = (summary.get("roll") or {}).get("prior_valuation_date")
     out = []
@@ -1594,6 +1784,13 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
     for e in ("low", "high"):
         c = where.get(e)
         s0, r0 = (figs.get("saved") or {}).get(c), (figs.get("rebuilt") or {}).get(c)
+        if isinstance(s0, float) and not isinstance(r0, float):  # an error (or nothing) where Excel saved a figure
+            root = (figs.get("rebuilt_errors") or {}).get(c)
+            out.append(hold(summary, f"rebuild-error-{e}", [c, str(r0), root],
+                            f"Last year's {e} rebuilt in Python is {r0 or 'no figure'}, where Excel saved {unit(s0):,.2f}",
+                            (f"it starts at {root}" if root else f"{c} gives no figure") + ": a reference to nothing (#REF!), a "
+                            "name that refers to nothing, or a function Python lacks. The saved figures were Excel's before "
+                            "it broke: fix the overlay and upload it again, or say why"))
         if isinstance(s0, float) and isinstance(r0, float) and s0:
             off = abs(r0 - s0) / abs(s0)
             if off > REBUILT_CHECK:
@@ -1680,6 +1877,22 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
                         f"{'; '.join(stale)}: Excel's last calculation of it didn't finish, so the figures it saved may "
                         "be stale. Open it in Excel, let it calculate, save it and upload it again", severity="check"))
     fd = figs.get("feed") or {}
+    pasted = fd.get("pasted") or []
+    if pasted:  # typed figures this year where last year's model worked them out, equal to last year's: a paste
+        out.append(hold(summary, "pasted", [[x["found"], x["how"], x["n"]] for x in pasted],
+                        f"{len(pasted)} row(s) the value reads are last year's figures pasted into this year's model",
+                        "; ".join(f"{x['found']} ({x['label'] or x['row']}): typed figures equal to last year's "
+                                  f"{x['how']}, {x['n']} periods" for x in pasted[:6])
+                        + ". Last year's model worked them out by formulas: this year's value would carry last year's "
+                          "forecast. Ask for the model as the client keeps it, or say why the figures are right"))
+    bs = fd.get("beyond_stood") or []
+    if bs:  # a client figure right of last year's timeline this year's model has nothing for: last year's in the value
+        said = "; ".join(f"{x['cell']}: {x['value']:,.1f}" for x in bs[:6])
+        out.append(hold(summary, "beyond-standin", [[x["cell"], x["value"]] for x in bs],
+                        f"{len(bs)} figure(s) right of last year's timeline not found in this year's model",
+                        f"{said} in last year's client model, past its last period (a total, the model's own terminal "
+                        "value): this year's model has nothing as far right of its timeline, so last year's figure "
+                        "stands in. Find this year's, or say why last year's is right"))
     cur = fd.get("unusable") or []
     for which, xs, name, sev in (("current", cur, "this year's client model", "block"),
                                  ("prior", figs.get("unusable_prior") or [], "last year's client model", "check")):
@@ -1974,6 +2187,7 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
     import cashflows
     try:  # this year's cash flows against last year's, period by period, and the checks on them
         fl = ov.deep(cashflows.layer, sess, summary, where, figs)
+        fl["tv_after"] = tv_after(summary, facts, where)  # a terminal value added after the discounting: the split's
         cfc = ov.deep(cashflows.checks, sess, summary, where, figs, fl, unit)
     except Exception as ex:  # the checks not running holds the value: a person says why it's right without them
         fl, cfc = {"cores": [], "error": f"{type(ex).__name__}: {ex}"}, {"holds": [hold(
@@ -1989,7 +2203,7 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
             summary, "interest-error", [type(ex).__name__, str(ex)[:200]], "The interest valued couldn't be checked",
             f"{type(ex).__name__}: {ex}: the share of the cash flows the overlay values (100% or the interest held) "
             "wasn't compared with the report's")]}
-    held_inputs = ov.deep(held_list, sess, summary, where, figs)
+    held_inputs = ov.deep(held_list, sess, summary, where, figs, fl.get("tv_after"))
     try:  # a distribution declared at this year's date the overlay doesn't deduct
         declared = ov.deep(_declared_holds, sess, summary, head, figs, held_inputs, where)
     except Exception as ex:
@@ -2029,6 +2243,23 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
     terminal = keyfacts.terminal_method(facts, context.terminal(markdown))  # how the report works out its terminal value
     inputs = ov.deep(sourced.check, sess, summary, where, facts, asm, traced, unit, terminal)
     inputs["rate"]["this_year"] = rate_now  # last year's is sourced and checked; this year's is a person's
+    try:  # an input of the valuation's own that reads the client model, and so moves with it this year
+        moved = ov.deep(inputs_moved, sess, summary, inputs)
+    except Exception:
+        moved = []
+    if moved:
+        names = {"rate": "discount rate", "growth": "terminal growth rate", "multiple": "exit multiple",
+                 "franking": "franking credit utilisation"}
+        fmt = lambda x, v: f"{v:.2f}x" if x["what"][0][0] == "multiple" else f"{100 * v:.2f}%"
+        said = "; ".join(f"the {names[x['what'][0][0]]} ({x['cell']}): {fmt(x, x['last'])} last year, "
+                         f"{fmt(x, x['this'])} this year" for x in moved[:4])
+        cfc["holds"].append(hold(summary, "assumption-moved", [[x["cell"], x["last"], x["this"]] for x in moved],
+                                 f"{len(moved)} of the valuation's inputs move with this year's client model",
+                                 f"{said}. The overlay reads it from the client model, so this year's value takes the new "
+                                 "figure: check the valuation should follow it, or set it on the overlay",
+                                 severity="check"))
+        if figs.get("gaps") is not None:
+            figs["gaps"]["holds"] = cfc["holds"]
     import lineage
     try:  # what drives the value: every input under it, by what it does, with the effect of a 1% move in each
         drives = ov.deep(lineage.value_inputs, sess, summary, where, figs, inputs, held_inputs, unit)

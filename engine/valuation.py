@@ -250,8 +250,11 @@ def reads(db, cells=(), expr: str | None = None, here: str | None = None, depth:
         names = {}
     out, queue = {}, []
 
+    import dcftrace
+
     def push(text, sh, d, via):
-        text = re.sub(r'"[^"]*"', "", text or "")
+        # (a CHOOSE whose selector is typed in reads the case it picks, not the others: dcftrace._chosen)
+        text = dcftrace._chosen(db, re.sub(r'"[^"]*"', "", text or ""), sh)
         found = [dcf._ref(m[0], sh) for m in dcf._FREF.finditer(text) if text[m.end():m.end() + 1] != "("]
         found += [dcf._ref(names[m[1].lower()].lstrip("="), "") for m in _IDENT.finditer(text) if m[1].lower() in names]
         for r in found:
@@ -304,7 +307,7 @@ def source_rate(db, walks: list[dict], rate: float) -> dict | None:
         hold = [(ref, w[ref]) for ref in (common or hold)]
         if not hold:
             return None
-        ref, n = min(hold, key=lambda x: (bool(x[1]["formula"]), x[1]["depth"]))
+        ref, n = min(hold, key=lambda x: (bool(x[1]["formula"]), x[1]["depth"], x[1]["sheet"], x[1]["row"], x[1]["col"]))
         chain, at = [ref], n["via"]
         while at and at in w and at not in chain:
             chain.append(at)

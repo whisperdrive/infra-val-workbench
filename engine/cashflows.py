@@ -219,6 +219,27 @@ def _tail_zeros(periods: dict, after: str | None) -> int:
     return n if n < len(xs) else 0
 
 
+def _term_on(sess, summary: dict, db, term: str, here: str, feed: str, **kw) -> float | None:
+    """A formula term's value on a feed (the terminal value's present value, TV x the last factor): the cells it
+    reads worked out on that feed, the term evaluated. None where it reads a range or doesn't evaluate."""
+    import result
+    refs = [dcf._ref(m[0], here) for m in dcf._FREF.finditer(term) if term[m.end():m.end() + 1] != "("]
+    if not refs or any(not x or x[1:3] != x[3:5] for x in refs):
+        return None
+    keys = sorted({x[:3] for x in refs})
+    try:
+        got, _, _, _ = result._read(sess, summary, feed, keys, **kw)
+    finally:
+        sess.configure("workbook")
+    given = {k: v for k, v in got.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    if len(given) != len(keys):
+        return None
+    try:
+        return float(dcftrace.evaluate(db, term, here, given))
+    except (ValueError, TypeError, ZeroDivisionError):
+        return None
+
+
 def checks(sess, summary: dict, where: dict, figs: dict, fl: dict, unit) -> dict:
     """The cash-flow checks on the layer: {"holds": [result.hold], "split": {end: {...}}, "compare": {...}}."""
     import result
@@ -396,13 +417,27 @@ def checks(sess, summary: dict, where: dict, figs: dict, fl: dict, unit) -> dict
             # the balances at the valuation date read at this year's date (a net debt, a cash balance): known, not
             # something else moving outside the discountings
             bal = before[cell] - unmoved[cell] if isinstance(unmoved.get(cell), float) else 0.0
+            # a terminal value added after the discounting (TV x the last factor, a term of its own): its move, last
+            # year's present value to this year's at last year's rate, is the terminal value's, not something outside
+            tva, tv_after = (fl.get("tv_after") or {}).get(end), 0.0
+            if tva:
+                kw = {"held": False, "rates": False} if figs.get("this_year_held") else \
+                    {"rates": False} if figs.get("this_year_last_rate") else {}
+                here = dcf._ref(tva["pv_cell"], "")[0]
+                p1 = _term_on(sess, summary, db, tva["pv_term"], here, "current", **kw)
+                p0 = _term_on(sess, summary, db, tva["pv_term"], here, figs["feeds"]["rebuilt"])
+                if p1 is not None and p0 is not None:
+                    tv_after = p1 - p0
+                    parts["terminal"] = (parts.get("terminal") or 0.0) + tv_after
             known = sum(v for v in parts.values() if v is not None)
             ref = abs(v0s.get(cell) or 0.0) or abs(v1) or 1.0
-            out = {"step": unit(step), "cash_flows": unit(d_cf), "balances": unit(bal), "outside": unit(step - d_cf - bal),
-                   "convention": unit(d_cf - known), **{k: unit(v) if v is not None else None for k, v in parts.items()},
-                   "share_outside": (step - d_cf - bal) / ref}
+            rest = step - d_cf - bal - tv_after
+            out = {"step": unit(step), "cash_flows": unit(d_cf + tv_after), "balances": unit(bal), "outside": unit(rest),
+                   "convention": unit(d_cf - (known - tv_after)),
+                   **{k: unit(v) if v is not None else None for k, v in parts.items()}, "share_outside": rest / ref,
+                   "tv_after": unit(tv_after) if tva else None}
             split[end] = out
-            off = abs(step - d_cf - bal) / ref
+            off = abs(rest) / ref
             if off > SPLIT_CHECK:
                 holds.append(result.hold(summary, f"cf-split-{end}", [cell, step, d_cf],
                                          f"The {end} end's new-forecast step isn't the cash flows' change: "
@@ -416,7 +451,7 @@ def checks(sess, summary: dict, where: dict, figs: dict, fl: dict, unit) -> dict
                                          "model moves (an input read from it outside the discountings) or a roll the cash "
                                          "flows don't explain",
                                          severity="block" if off > SPLIT_HOLD else "check"))
-            if abs(d_cf) / ref > SIGN_MIN and step * d_cf < 0:
+            if abs(d_cf + tv_after) / ref > SIGN_MIN and step * (d_cf + tv_after) < 0:
                 holds.append(result.hold(summary, f"cf-sign-{end}", [cell, step, d_cf],
                                          f"The {end} end's new-forecast step goes the other way to the cash flows' change",
                                          f"this year's discounted cash flows move the value {out['cash_flows']:+,.1f}, the "

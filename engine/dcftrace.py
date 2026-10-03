@@ -51,7 +51,11 @@ def _cell(db, sheet, row, col):
 
 
 def _label(db, sheet: str, row: int) -> str:
-    r = db.execute("SELECT label FROM rows WHERE sheet=? AND row=?", (sheet, row)).fetchone()
+    """A row's label, whole where the row map has it."""
+    try:
+        r = db.execute("SELECT COALESCE(full_label, label) FROM rows WHERE sheet=? AND row=?", (sheet, row)).fetchone()
+    except Exception:
+        r = db.execute("SELECT label FROM rows WHERE sheet=? AND row=?", (sheet, row)).fetchone()
     return (r[0] or "").strip() if r else ""
 
 
@@ -68,6 +72,59 @@ def _expand(db, formula: str, names: dict) -> str:
         return formula
     return re.sub(r"(?<![\w.!$'])([A-Za-z_][\w.]*)(?![\w(!])",
                   lambda m: names.get(m[1].lower(), m[1]).lstrip("="), formula)
+
+
+def _args(text: str, i: int) -> tuple[list[str], int] | None:
+    """The arguments of the call whose "(" is at text[i], split at its own commas -> (args, the index after its ")")."""
+    depth, start, out = 0, i + 1, []
+    for j in range(i, len(text)):
+        ch = text[j]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                out.append(text[start:j])
+                return out, j + 1
+        elif ch == "," and depth == 1:
+            out.append(text[start:j])
+            start = j + 1
+    return None
+
+
+_CHOOSE = re.compile(r"(?<![\w.])CHOOSE\s*\(", re.I)
+
+
+def _chosen(db, body: str, here: str) -> str:
+    """A formula with each CHOOSE(k, a, b, ...) whose k is a figure typed in (a scenario's selector, a number) left as
+    the argument it picks: the cases it doesn't pick aren't under the figure (their discountings aren't the value's).
+    A k worked out by a formula (from the dates, say: it can pick another this year) leaves the CHOOSE whole."""
+    out, pos = [], 0
+    for _ in range(50):
+        m = _CHOOSE.search(body, pos)
+        if not m:
+            break
+        got = _args(body, m.end() - 1)
+        if not got or len(got[0]) < 2:
+            break
+        args, end = got
+        k = args[0].strip()
+        n = None
+        if re.fullmatch(r"\d+(?:\.\d+)?", k):
+            n = float(k)
+        else:
+            r = dcf._ref(k, here)
+            if r and r[1:3] == r[3:5]:
+                f, v = _cell(db, r[0], r[1], r[2])
+                if not f and isinstance(v, (int, float)) and not isinstance(v, bool):
+                    n = float(v)
+        if n is not None and 1 <= int(n) < len(args):
+            out.append(body[pos:m.start()] + "(" + args[int(n)] + ")")
+        else:
+            out.append(body[pos:end])
+        pos = end
+    out.append(body[pos:])
+    return "".join(out)
 
 
 def _row(db, text: str, here: str):
@@ -556,7 +613,7 @@ def trace(db, cell: str) -> dict:
         seen[key] = node
         if not f or depth > MAX_DEPTH or len(seen) > MAX_NODES:
             return node
-        body = _expand(db, _STR.sub('""', f), names)
+        body = _chosen(db, _expand(db, _STR.sub('""', f), names), sheet)
         node["words"] = words(db, body, sheet)
         raw = _expand(db, f, names)  # its strings kept for the calls: a SUMIF's criterion is one
         whole = raw.strip().lstrip("=").lstrip("+").strip()
@@ -736,7 +793,7 @@ def recompute(db, tree: dict, pv: dict[str, float]) -> float | None:
                 raise ValueError(c["cell"])
             rc = dcf._ref(c["cell"], "")
             given[(rc[0], rc[1], rc[2])] = v
-        out = evaluate(db, _expand(db, _STR.sub('""', n["formula"]), names), key[0], given)
+        out = evaluate(db, _chosen(db, _expand(db, _STR.sub('""', n["formula"]), names), key[0]), key[0], given)
         given[key] = float(out)
         return given[key]
     try:

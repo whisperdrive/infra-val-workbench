@@ -5,6 +5,7 @@ the file refused with a reason); never a different figure in silence, never a cr
 
   references   a number in scientific notation (1E9, 2.5E-3) isn't a cell, nor a function's name (LOG10() however
                like a cell it looks; a figure typed into a formula is read with its exponent
+  choose       a CHOOSE whose selector is typed in (a scenario's) reads the case it picks, not the others
   saved state  what the sheet XML says that the values reader can't: formulas saved with no result (a workbook saved
                without being calculated; not a formula whose result is empty text), Excel's own errors, the last
                calculation's settings (one that didn't finish), and every cell however small the size the sheet
@@ -37,6 +38,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 PACK = ROOT / "tests" / "pack"
 REPORT, PRIOR, OVERLAY, CURRENT = ("AssetA_valuation_report_FY25.pdf", "AssetA_BP25_client_model_Jun25.xlsx",
                                    "Alpha_valuation_overlay_FY25.xlsx", "AssetA_BP26_client_model_Jun26.xlsx")
+SLIDES, WITH_OVERLAY = "AssetA_valuation_report_FY25.pptx", "AssetA_BP25_with_overlay.xlsx"  # the overlay inside a copy
 
 import xlsxwriter  # noqa: E402
 
@@ -134,6 +136,35 @@ def references_check() -> None:
     typed = lambda f: [float(m[1]) for m in sourced._LIT.finditer(dcf._FREF.sub(" ", f))]
     assert typed("=C5*1E-2") == [0.01] and typed("=B2*2.5e+3") == [2500.0] and typed("=1/(1+0.0775)^D3") == [1, 1, 0.0775]
     print("references: ok (1E9 and 2.5E-3 are numbers, not cells; LOG10( is a function; a typed 1E-2 is 0.01)")
+
+
+def choose_check() -> None:
+    """A CHOOSE whose selector is typed in (a scenario's) reads the case it picks: the tracer and the walk the
+    inputs are sourced by follow that one, not the others (a downside case's rate holding the same figure)."""
+    import sqlite3
+    import dcftrace
+    import valuation
+    out = Path(tempfile.mkdtemp(prefix="ingest_"))
+    p = out / "AssetA_cases.xlsx"
+    wbk = xlsxwriter.Workbook(p)
+    ws = wbk.add_worksheet("Inputs")
+    for r, (label, a, b, c) in enumerate((("Discount rate", 0.0775, 0.0775, 0.07), ("Growth", 0.025, 0.02, 0.03)), 3):
+        ws.write(r, 0, label)
+        for k, v in enumerate((a, b, c)):
+            ws.write_number(r, 2 + k, v)
+    ws.write(1, 0, "Case (1 base, 2 down, 3 up)")
+    ws.write_number(1, 2, 1)
+    ws.write(7, 0, "Discount rate (live)")
+    ws.write_formula(7, 2, "=CHOOSE($C$2,C4,D4,E4)", None, 0.0775)
+    ws.write(8, 0, "Case worked out")
+    ws.write_formula(8, 2, "=CHOOSE(1+0*C4,C5,D5,E5)", None, 0.025)
+    wbk.close()
+    db = sqlite3.connect(build_map.main(str(p), str(out / "db"))["db"])
+    assert dcftrace._chosen(db, "=CHOOSE($C$2,C4,D4,E4)*2", "Inputs") == "=(C4)*2"
+    assert dcftrace._chosen(db, "=CHOOSE(1+0*C4,C5,D5,E5)", "Inputs") == "=CHOOSE(1+0*C4,C5,D5,E5)"  # worked out: whole
+    got = valuation.reads(db, cells=[("Inputs", 8, 3)])
+    assert "Inputs!C4" in got and "Inputs!D4" not in got and "Inputs!E4" not in got, sorted(got)
+    print("choose: ok (a typed selector's CHOOSE read as the case it picks; one worked out by a formula left whole)")
 
 
 def saved_state_check() -> None:
@@ -256,6 +287,138 @@ def _data_table(d: Path) -> None:
     set_calc(d / OVERLAY, calcId="191029", calcMode="autoNoTable")
 
 
+def cached(x: str, a: str) -> float:
+    """A cell's saved value in a sheet's XML."""
+    return float(re.search(r'<c r="%s"[^>]*>(?:\s*<f>[^<]*</f>)?\s*<v>([^<]*)</v>' % a, x)[1])
+
+
+def set_cell(x: str, a: str, formula: str, value: float) -> str:
+    """A formula cell's formula and saved value, in place."""
+    x, n = re.subn(r'(<c r="%s"[^>]*>)\s*<f>[^<]*</f>\s*<v>[^<]*</v>' % a,
+                   lambda m: f"{m[1]}<f>{formula}</f><v>{value!r}</v>", x)
+    assert n == 1, a
+    return x
+
+
+def add_rows(x: str, rows: dict[int, list[tuple]]) -> str:
+    """New rows at the end of a sheet: {row: [(addr, text) or (addr, formula, value)]}."""
+    def cell(t):
+        if len(t) == 2:
+            return f'<c r="{t[0]}" t="inlineStr"><is><t>{t[1]}</t></is></c>'
+        return f'<c r="{t[0]}"><f>{t[1]}</f><v>{t[2]!r}</v></c>'
+    new = "".join(f'<row r="{r}">' + "".join(cell(t) for t in cs) + "</row>" for r, cs in sorted(rows.items()))
+    return x.replace("</sheetData>", new + "</sheetData>", 1)
+
+
+def _tv_after(d: Path, own_cell: bool) -> None:
+    """The terminal value added after the discounting, as many overlays have it: the last cash flow without it, the
+    enterprise value the present values' sum plus the terminal value times the last factor (in its formula, or in a
+    cell of its own beside the present values). The same value."""
+    ps = parts(d / OVERLAY)
+    sp = sheet_part(ps, "DCF")
+    x = ps[sp].decode()
+    pv = {}
+    for tv_r, vcf_r, df_r, pv_r in ((10, 11, 12, 13), (17, 18, 19, 20)):
+        for c in "DEFGHIJKLMNOPQRSTUVW":  # the cash flows without the terminal value, every period
+            x = set_cell(x, f"{c}{vcf_r}", f"{c}5", cached(x, f"{c}5"))
+        f, w = cached(x, "W5"), cached(x, f"W{df_r}")
+        x = set_cell(x, f"W{pv_r}", f"W{vcf_r}*W{df_r}", f * w)
+        pv[pv_r] = cached(x, f"W{tv_r}") * w
+    if own_cell:  # its present value in the column right of the present values
+        for tv_r, df_r, pv_r in ((10, 12, 13), (17, 19, 20)):
+            x = re.sub(r'(<row r="%d"[^>]*>.*?)(</row>)' % pv_r,
+                       lambda m: m[1] + f'<c r="Y{pv_r}"><f>W{tv_r}*W{df_r}</f><v>{pv[pv_r]!r}</v></c>' + m[2], x,
+                       count=1, flags=re.S)
+    ps[sp] = x.encode()
+    sm = sheet_part(ps, "Summary")
+    y = ps[sm].decode()
+    for c, tv_r, df_r, pv_r in (("C", 10, 12, 13), ("E", 17, 19, 20)):
+        tail = f"DCF!Y{pv_r}" if own_cell else f"DCF!W{tv_r}*DCF!W{df_r}"
+        y = set_cell(y, f"{c}4", f"SUM(DCF!D{pv_r}:W{pv_r})+{tail}", cached(y, f"{c}4"))
+    ps[sm] = y.encode()
+    save(d / OVERLAY, ps)
+
+
+def _equity_twice(d: Path, copy: bool) -> None:
+    """A second row holding the report's low and high: a report table carrying the summary's cells (=C9), or a row
+    working them out again (=C7+C8)."""
+    def fn(x):
+        lo, hi = cached(x, "C9"), cached(x, "E9")
+        f = ("C9", "E9") if copy else ("C7+C8", "E7+E8")
+        return add_rows(x, {13: [("A13", "Equity value (ex-distribution)"), ("B13", "A$m"), ("C13", f[0], lo),
+                                 ("E13", f[1], hi)]})
+    cell_xml(d / OVERLAY, "Summary", fn)
+
+
+COLS = "DEFGHIJKLMNOPQRSTUVW"  # the pack's periods
+
+
+def _pasted(d: Path, off: bool) -> None:
+    """This year's tax and free cash flow typed in as last year's figures (the formulas pasted over as values): in
+    place, each period last year's for that period (the last, which last year's model hasn't, left as it was), or
+    one period off, each column last year's same column."""
+    last = parts(d / PRIOR)[sheet_part(parts(d / PRIOR), "CashFlow")].decode()
+
+    def fn(x):
+        for r in (8, 9):
+            for i, c in enumerate(COLS):
+                src = c if off else (COLS[i + 1] if i + 1 < len(COLS) else None)
+                if src is None:
+                    continue
+                v = cached(last, f"{src}{r}")
+                x, n = re.subn(r'<c r="%s%d"([^>]*)>\s*<f>[^<]*</f>\s*<v>[^<]*</v>\s*</c>' % (c, r),
+                               lambda m: f'<c r="{c}{r}"{m[1]}><v>{v!r}</v></c>', x)
+                assert n == 1, (c, r)
+        return x
+    cell_xml(d / CURRENT, "CashFlow", fn)
+
+
+def _client_cpi_growth(d: Path) -> list[Path]:
+    """The overlay inside a copy of the client model, its terminal growth rate the client's CPI (Inputs!B7: 2.5%
+    last year, 3.0% this year). The copy's Inputs sheet is the client's, so this year's model's CPI is read."""
+    cell_xml(d / WITH_OVERLAY, "Val_Inputs", lambda x: re.sub(
+        r'<c r="C6"([^>]*)>\s*(?:<f>[^<]*</f>)?\s*<v>([^<]*)</v>\s*</c>', r'<c r="C6"\1><f>Inputs!$B$7</f><v>\2</v></c>', x,
+        count=1))
+    return [d / SLIDES, d / WITH_OVERLAY, d / CURRENT]
+
+
+def _ref_under_value(d: Path) -> None:
+    """A cell under the value whose reference was deleted (=#REF!, saved as the error; what it fed saved before)."""
+    cell_xml(d / OVERLAY, "DCF", lambda x: re.sub(r'<c r="H5"([^>]*)>\s*<f>[^<]*</f>\s*<v>[^<]*</v>\s*</c>',
+                                                  r'<c r="H5"\1 t="e"><f>#REF!</f><v>#REF!</v></c>', x, count=1))
+
+
+def _timeline_times(d: Path) -> None:
+    """This year's period dates saved with a time of day (30 June 23:59), as a model built from timestamps has them."""
+    def fn(x):
+        for c in COLS:
+            v = cached(x, f"{c}3")
+            x = re.sub(r'(<c r="%s3"[^>]*>(?:\s*<f>[^<]*</f>)?\s*<v>)[^<]*(</v>)' % c, lambda m: f"{m[1]}{v + 0.999}{m[2]}", x,
+                       count=1)
+        return x
+    for sh in ("Operations", "CashFlow"):
+        cell_xml(d / CURRENT, sh, fn)
+
+
+def _decoy_reads_real(d: Path) -> None:
+    """The equity value's row labelled otherwise (a fair market value), and a row labelled as the equity value that
+    reads it (with an adjustment of nothing much): the row it reads is the one the model works out."""
+    def fn(x):
+        x = re.sub(r'<c r="A9"[^>]*?(?:/>|>.*?</c>)', '<c r="A9" t="inlineStr"><is><t>Fair market value (ex-distribution)'
+                   '</t></is></c>', x, count=1, flags=re.S)
+        lo, hi = cached(x, "C9"), cached(x, "E9")
+        return add_rows(x, {13: [("A13", "Equity value"), ("B13", "A$m"), ("C13", "C9+0.04", lo + 0.04),
+                                 ("E13", "E9+0.04", hi + 0.04)]})
+    cell_xml(d / OVERLAY, "Summary", fn)
+
+
+def _no_high(d: Path) -> None:
+    """The equity value's high end gone from the overlay (its cell a note): the low and the mid only."""
+    cell_xml(d / OVERLAY, "Summary", lambda x: re.sub(r'<c r="E9"[^>]*?(?:/>|>.*?</c>)',
+                                                      '<c r="E9" t="inlineStr"><is><t>see the note</t></is></c>', x,
+                                                      count=1, flags=re.S))
+
+
 SAME = {}  # the same value and cells, and nothing new to look at
 CASES = {
     "protected sheets": (lambda d: _protect(d), SAME),
@@ -280,6 +443,18 @@ CASES = {
                                        {"errors-current": "block"}),
     "an iterative loop under the value": (lambda d: _loop(d), {"circular": "block"}),
     "an encrypted client model": (lambda d: (d / CURRENT).write_bytes(OLE + b"\0" * 4088), {"files": "failed"}),
+    "a report table carrying the equity cells": (lambda d: _equity_twice(d, True), SAME),
+    "a second row working out the equity value": (lambda d: _equity_twice(d, False), {"equity": "block", "cells": False}),
+    "the terminal value added after the discounting": (lambda d: _tv_after(d, False), SAME),
+    "the terminal value's present value in a cell of its own": (lambda d: _tv_after(d, True), SAME),
+    "last year's cash flows pasted in place": (lambda d: _pasted(d, False), {"pasted": "block"}),
+    "last year's cash flows pasted one period off": (lambda d: _pasted(d, True), {"pasted": "block"}),
+    "the client's CPI as the growth rate, the overlay inside": (_client_cpi_growth, {
+        "mid": 3601.2849538954897, "growth": "Inputs!B7", "assumption-moved": "check"}),
+    "a reference deleted under the value": (_ref_under_value, {"rebuild-error-low": "block", "rebuild-error-high": "block"}),
+    "period dates with a time of day": (_timeline_times, SAME),
+    "a decoy row reading the equity value's": (_decoy_reads_real, SAME),
+    "the equity value's high end missing": (_no_high, {"equity": "block", "cells": False}),
 }
 ORACLE = {"where": {"low": "Summary!C9", "high": "Summary!E9"}, "rate": {"low": ["Val_Inputs!C5"], "high": ["Val_Inputs!E5"]},
           "growth": {"low": "Val_Inputs!C6", "high": "Val_Inputs!C6"},
@@ -318,26 +493,42 @@ def run(files: list[Path], name: str, timeout: float = 600) -> dict:
             "errors": {w["filename"]: w.get("error") for w in e.get("workbooks") or [] if w["status"] == "error"}}
 
 
-def pack_check() -> None:
+def pack_check(only: list[str] | None = None) -> None:
     import check_workbench as cw
     import library
     if not PACK.exists():
         sys.exit("run tests/make_pack.py first")
     cw.sandbox()
     cw.stub_models()
+    import llm
+    stubbed = llm.create
+
+    def create(client, model, input, text=None, **kw):  # the equity cells in doubt: gpt-sol can't tell either
+        if text and text["format"]["name"] == "equity_cells":
+            return cw.Reply({"choice": "escalate", "reason": "two rows hold the report's figures", "question":
+                             "Which row is last year's equity value?", "low_cell": "", "high_cell": ""})
+        return stubbed(client, model, input, text=text, **kw)
+    llm.create = create
     library.start()
     cw.orc.start()
     clean = run([PACK / f for f in (REPORT, PRIOR, OVERLAY, CURRENT)], "clean")
     assert clean["mid"] and {k: clean[k] for k in ORACLE} == ORACLE and set(clean["needs"]) == BASE, clean
     for name, (change, expect) in CASES.items():
+        if only and name not in only:
+            continue
         d = Path(tempfile.mkdtemp(prefix="pack_"))
-        for f in (REPORT, PRIOR, OVERLAY, CURRENT):
+        for f in (REPORT, PRIOR, OVERLAY, CURRENT, SLIDES, WITH_OVERLAY):
             shutil.copy(PACK / f, d / f)
-        change(d)
-        files = sorted((p for p in d.iterdir() if p.suffix in (".pdf", ".xlsx", ".xlsm")), key=lambda p: p.name)
+        own = change(d)  # a list: the files this case uploads (the overlay inside a copy); else the pack A four
+        files = own if isinstance(own, list) else [d / REPORT, d / PRIOR, d / OVERLAY if (d / OVERLAY).exists()
+                                                   else d / OVERLAY.replace(".xlsx", ".xlsm"), d / CURRENT]
         got = run(files, name)
         new = {k: s for k, s in got["needs"].items() if k not in BASE}
-        if expect is SAME or expect.get("") == "same":  # the same value and cells; only the need expected, if any
+        if "mid" in expect:  # another value by design: that value, the cell named, and the needs expected
+            assert got["mid"] is not None and abs(got["mid"] - expect["mid"]) < 1e-6, (name, got["mid"], new)
+            assert got["growth"]["low"] == expect["growth"], (name, got["growth"])
+            assert all(new.get(k) == s for k, s in expect.items() if k not in ("mid", "growth")), (name, expect, new)
+        elif expect is SAME or expect.get("") == "same":  # the same value and cells; only the need expected, if any
             assert got["mid"] is not None and abs(got["mid"] - clean["mid"]) < 1e-6, (name, got["mid"], new)
             assert {k: got[k] for k in ORACLE} == ORACLE, (name, {k: got[k] for k in ORACLE})
             assert set(new) == {k for k in expect if k}, (name, new)
@@ -346,14 +537,19 @@ def pack_check() -> None:
             assert any("password" in (x or "") for x in got["errors"].values()), (name, got["errors"])
         else:  # held, saying why: each expected need at its severity, the value not given
             assert got["mid"] is None, (name, got["mid"], new)
-            assert all(new.get(k) == s for k, s in expect.items()), (name, expect, new)
-            assert {k: got[k] for k in ("where", "rate", "growth", "franking")} == ORACLE, (name, got)
+            assert all(new.get(k) == s for k, s in expect.items() if k != "cells"), (name, expect, new)
+            if expect.get("cells", True):
+                assert {k: got[k] for k in ("where", "rate", "growth", "franking")} == ORACLE, (name, got)
     print(f"pack: ok ({len(CASES)} ways a model arrives: {sum(1 for _n, (_c, x) in CASES.items() if x is SAME)} give the "
           f"same value and cells; the rest held or refused, each saying why)")
 
 
 if __name__ == "__main__":
+    if sys.argv[1:]:  # some of the pack's cases, by name
+        pack_check(sys.argv[1:])
+        sys.exit()
     references_check()
+    choose_check()
     saved_state_check()
     containers_check()
     pack_check()

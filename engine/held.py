@@ -53,11 +53,12 @@ def _unit_cells(db) -> set[str]:
     return out
 
 
-def find(db, cells: list[str], sheets) -> list[dict]:
+def find(db, cells: list[str], sheets, exclude: set | None = None) -> list[dict]:
     """The typed inputs the equity value cells read outside their discountings, on the overlay's own sheets (a cell
     on a client sheet, or behind a link to another workbook, is fed from this year's model: not held). A discounting's
     own inputs (its rate, dates, growth, franking utilisation) are the sourced inputs' business, not these, and a
-    units constant (the cell a name like "thousand" stands for) isn't a figure.
+    units constant (the cell a name like "thousand" stands for) isn't a figure. exclude: other cells that aren't (a
+    terminal value's inputs where it's added after the discounting: its growth rate, its factor's).
     -> [{"cell", "label", "value", "lines": [{"cell", "label"}] (the lines of the equity value it feeds), "ends"}]."""
     own, out, units = set(sheets or []), {}, _unit_cells(db)
     for end, cell in cells:
@@ -87,7 +88,8 @@ def find(db, cells: list[str], sheets) -> list[dict]:
             typed = {leaf["cell"]: {"sheet": s, "row": r, "col": c, "formula": None, "value": got[1]}} \
                 if got and not got[0] else valuation.reads(db, cells=[(s, r, c)])
             for ref, x in typed.items():
-                if x["formula"] or not _number(x["value"]) or x["sheet"] not in own or ref in theirs or "[" in ref                         or ref in units:
+                if x["formula"] or not _number(x["value"]) or x["sheet"] not in own or ref in theirs or "[" in ref \
+                        or ref in units or ref in (exclude or ()):
                     continue
                 item = out.setdefault(ref, {"cell": ref, "label": _label(db, x["sheet"], x["row"]) or ref,
                                             "value": float(x["value"]), "lines": [], "ends": []})

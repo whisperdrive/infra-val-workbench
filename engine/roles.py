@@ -34,6 +34,10 @@ ROLES = {"prior_report": "Prior report", "prior_model": "Prior client model", "p
          "current_model": "Current client model"}
 VALUATION_KEYS = re.compile(r"discount|wacc|terminal|exit_multiple|rab|valuation_date|enterprise_value|equity_value|"
                             r"sensitivity|cost_of_equity", re.I)
+# a sheet's own sign of valuation work: the valuation's figures, not its date (a client model's inputs carry the
+# valuation date too: on its own it would file the client's Inputs sheet as the overlay's)
+SHEET_KEYS = re.compile(r"discount|wacc|terminal|exit_multiple|rab|enterprise_value|equity_value|sensitivity|"
+                        r"cost_of_equity", re.I)
 NAME_HINT = re.compile(r"val|dcf|wacc|overlay|sensitiv", re.I)
 DIVIDER = re.compile(r"^\s*<.*|.*>\s*$")  # a tab that only heads the sheets after it: "Adviser>>", "Client>", "<< Inputs"
 # the adviser's own names are a setting (likeness.markers: Settings, or .env), so the code names no firm
@@ -117,7 +121,7 @@ def profile(wb: dict, fact_matches: list[dict]) -> dict:
     except Exception:
         pass
     for fm in fact_matches:
-        if not VALUATION_KEYS.search(fm["key"] or ""):
+        if not SHEET_KEYS.search(fm["key"] or ""):
             continue
         # A bare number is weak evidence (CPI 2.5% equals a 2.5% terminal growth rate): the cell's label must
         # agree with the fact, or the cell must be a DCF result valuation.py reproduces.
@@ -292,7 +296,9 @@ def suggest(reports: list[dict], workbooks: list[dict], facts: list[dict]) -> di
         prof = profile(wb, fm)
         sp = st["shape"][wb["id"]]
         sig = st["sigs"][wb["id"]]
-        shared = {s for s in prof["sheets"] if _shared(sig, [st["sigs"][j] for j in sp["family"]], s)}
+        # (the model a copy extends counts too, however much the two have drifted apart: its sheets are the client's)
+        kin = list(dict.fromkeys([*sp["family"], *([sp["host"]] if sp.get("host") is not None else [])]))
+        shared = {s for s in prof["sheets"] if _shared(sig, [st["sigs"][j] for j in kin], s)}
         # extra sheets count as the overlay only with some sign of valuation work (a new client sheet isn't)
         seed = {s: r for s, r in sp["extra"].items() if r or prof["sheets"].get(s, {}).get("anchors")}
         # the adviser's tabs ("Adviser>>" up to "Client>>") in a copy of a client model another workbook here has: one more
@@ -377,14 +383,19 @@ def suggest(reports: list[dict], workbooks: list[dict], facts: list[dict]) -> di
                                        "model as sent" for j in o["family"] if info[j]["tabs"]]}
         else:
             # The workbook the overlay's external links read: same file name, or the cached values match.
-            best, why = None, []
+            best, why, link_to = None, [], None
             others = [w for w in workbooks if w["id"] != ov_id]
             for w in others:
                 res = linkmap.overlay_to_client({**by_id[ov_id], "sheets": None}, {**w, "sheets": None})
                 hit = next((b for b in res["books"] if b.get("is_client")), None)
                 if hit:
+                    link_to = link_to or hit["filename"]
                     chk = hit.get("cached_check") or {}
                     rank = (linkmap._norm_file(hit["filename"]) == linkmap._norm_file(w["filename"]), chk.get("matched", 0))
+                    # the file the link names, or one holding at least half the values the overlay last read through it:
+                    # not just the best of files that match nothing (this year's model, last year's not uploaded)
+                    if not rank[0] and (not chk.get("cells") or chk.get("matched", 0) < 0.5 * chk["cells"]):
+                        continue
                     if best is None or rank > best[0]:
                         best = (rank, w["id"])
                         why = [f"the overlay's external link [{hit['idx']}] points to {hit['filename']}"]
@@ -393,6 +404,8 @@ def suggest(reports: list[dict], workbooks: list[dict], facts: list[dict]) -> di
             if best:
                 prior_id = best[1]
                 roles["prior_model"] = {"kind": "workbook", "id": prior_id, "sheets": None, "why": why}
+            elif link_to:
+                info[ov_id]["link_missing"] = link_to
     rest = [w for w in workbooks if w["id"] not in (ov_id, prior_id) or (w["id"] == ov_id and info[ov_id]["mode"] == "client model")]
     rest = [w for w in rest if info[w["id"]]["mode"] == "client model"]
     rest.sort(key=lambda w: when[w["id"]]["key"])  # valuation date, then the date in the file name, then the timeline
@@ -503,6 +516,9 @@ def _checks(roles: dict, info: dict, st: dict, when: dict, names: dict, facts: l
             add(None, "no valuation date or file date to tell the prior and current models apart; check the order")
     elif not cu:
         add(False, "no current client model found")
+    if ov and info[ov].get("link_missing") and not pr:
+        add(False, f"the overlay reads {info[ov]['link_missing']} through its external link, and no file uploaded holds "
+                   "the values it last read from it: upload last year's client model")
     if ov:
         o = info[ov]
         if o["mode"] == "standalone overlay" and pr:

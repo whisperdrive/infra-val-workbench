@@ -55,7 +55,7 @@ def _vocabulary() -> set[str]:
                                                           "declared", "declared-error", "method-unapplied", "balance-off",
                                                           "own-inputs", "tie-loose-low", "tie-loose-high", "circular", "unknown-fn",
                                                           "unsaved-current", "unsaved-prior", "unsaved-overlay", "errors-current", "errors-prior",
-                                                          "calc-incomplete"}
+                                                          "calc-incomplete", "beyond-standin", "pasted", "rebuild-error-low", "rebuild-error-high", "assumption-moved"}
     words |= {"waiting", "queued", "running", "done", "attention", "blocked", "failed", "error", "pending", "approved",
               "rejected", "agreed", "escalated", "withdrawn", "open", "ready", "processing", "unread", "verified",
               "flagged", "resolved", "edited", "figure", "confirmed", "confirmed by the reviewer", "corrected", "disputed",
@@ -467,7 +467,7 @@ def _red(n: list) -> str:
 # the export's own field names: never the client's
 _KEYS = {"app", "generated", "files", "reports", "workbooks", "roles", "placed", "by", "confirmed", "same_file_as_overlay",
          "models", "sheets", "line_items", "formula_cells", "timelines", "periods_max", "first", "last",
-         "saved", "errors", "hidden_sheets", "unsaved_formulas", "calc_mode", "calc_completed", "iterate",
+         "saved", "errors", "hidden_sheets", "unsaved_formulas", "calc_mode", "calc_completed", "iterate", "tv_after",
          "sheets_without_timeline", "error", "alike", "labels", "sheet_names", "profile", "fy_end_month", "horizon", "dates",
          "date", "ok", "run", "stages", "needs", "facts", "n", "by_status", "failing_checks", "image", "keys", "result",
          "worked_out", "stopped", "basis", "located", "tied", "rebuilt_tied", "held", "this_to_last", "bridge_steps",

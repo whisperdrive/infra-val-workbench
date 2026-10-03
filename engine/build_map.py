@@ -254,7 +254,7 @@ def main(path: str, out: str | None = None, progress=None) -> dict:
         CREATE TABLE sheets(sheet TEXT, state TEXT, layout TEXT, summary TEXT);
         CREATE TABLE cells(sheet TEXT, row INT, col INT, addr TEXT, formula TEXT, value);
         CREATE TABLE rows(sheet TEXT, row INT, section TEXT, label TEXT, units TEXT,
-                          n_formula INT, n_const INT, patterns TEXT, samples TEXT);
+                          n_formula INT, n_const INT, patterns TEXT, samples TEXT, full_label TEXT);
         CREATE TABLE edges(src_sheet TEXT, src_row INT, dst_sheet TEXT, dst_row INT, kind TEXT);
         CREATE TABLE names(name TEXT, ref TEXT, scope TEXT);
         CREATE TABLE unsaved(sheet TEXT, row INT, col INT);
@@ -309,7 +309,7 @@ def main(path: str, out: str | None = None, progress=None) -> dict:
                 last_report = r
                 report(0.02 + 0.93 * (i_sheet + min(r / max_row, 1)) / n_sheets,
                        f"Reading sheet {i_sheet + 1} of {n_sheets}: {name} (row {r:,} of {max_row:,})")
-            label_bits, units = [], ""
+            label_bits, full_bits, units = [], [], ""
             patterns: dict[str, list[str]] = defaultdict(list)
             n_formula = n_const = 0
             samples = []
@@ -323,6 +323,8 @@ def main(path: str, out: str | None = None, progress=None) -> dict:
                     v = array_cells.pop((c.row, c.column))
                 rowvals[c.column_letter] = cv
                 is_f = isinstance(v, str) and v.startswith("=")
+                if hasattr(cv, "total_seconds"):  # a duration ([h]:mm): the number of days it is, as Excel keeps it
+                    cv = cv.total_seconds() / 86400
                 cell_batch.append((name, r, c.column, c.coordinate, v if is_f else None,
                                    None if cv == "" else (cv if isinstance(cv, (int, float, str)) else str(cv))))
                 # label area = label column plus anything left of it (e.g. section numbers); numbers in the
@@ -336,6 +338,7 @@ def main(path: str, out: str | None = None, progress=None) -> dict:
                         units = fmt(shown)
                     elif shown not in ("", None):
                         label_bits.append(fmt(shown))
+                        full_bits.append(str(shown).strip())  # the whole of it, for the words a label's end carries
                     continue
                 if is_f:
                     n_formula += 1
@@ -376,8 +379,11 @@ def main(path: str, out: str | None = None, progress=None) -> dict:
             else:
                 flush()
                 lines.append(line)
-            db.execute("INSERT INTO rows VALUES (?,?,?,?,?,?,?,?,?)",
-                       (name, r, section, label, units, n_formula, n_const, pat_txt, ", ".join(samples)))
+            # the label as matched between models (each part to 40 characters, as every row map has it), and whole
+            # (" - Base case", "(ex-distribution)" past the 40th character: the words that say what a row is)
+            full = (" ".join(full_bits) or (first_text or ""))[:300]
+            db.execute("INSERT INTO rows VALUES (?,?,?,?,?,?,?,?,?,?)",
+                       (name, r, section, label, units, n_formula, n_const, pat_txt, ", ".join(samples), full))
         flush()
         db.executemany("INSERT INTO cells VALUES (?,?,?,?,?,?)", cell_batch)
 

@@ -150,7 +150,7 @@ class Workbook:
             if hr:
                 for (r, c), v in self.sheet(s).items():
                     if r == hr and isinstance(v, float) and 3000 < v < 120000:
-                        tl[c] = v
+                        tl[c] = float(math.floor(v))  # a period's date: its day (a time of day on it, 23:59, isn't later)
             self._timeline[s] = tl
         return self._timeline[s]
 
@@ -311,6 +311,7 @@ class Session:
         self.derived_used = {}  # (sheet, row, col) -> the rule, where a value was worked out on the current feed
         self.client_reads = set()  # (sheet, row, col) of last year's model read on the current feed
         self.unusable = {}  # (sheet, row, col) -> {"model", "cell", "what"}: a client cell read that holds no figure
+        self.beyond_stood = {}
         self.base_vd = None  # last year's valuation date (serial): the roll's start
         self._pshift = {}
         self.horizon_set = None  # "fixed" / "rolling": the engagement's profile says, not worked out (fixed_horizon)
@@ -338,6 +339,7 @@ class Session:
         self.derived_used = {}
         self.client_reads = set()
         self.unusable = {}
+        self.beyond_stood = {}  # (sheet, row, col) -> last year's figure right of its timeline, not found this year
         self.moved, self.unmoved, self.kept_stood = {}, {}, {}
         self.other_reads = {}  # (link, sheet, row, col) -> value: another linked workbook's, last year's saved value
         B.overrides.clear()
@@ -493,10 +495,23 @@ class Session:
             if c2 != c:
                 self.derived_used[(s, r, c)] = why
         if want is None and len(tl_p) > 1 and c > max(tl_p):
-            # to the right of last year's timeline: no period last year to roll, so not this year's same column (another
-            # period there, counted twice); as last year had it, nothing
-            self.beyond[(s, r, c)] = "past last year's timeline"
-            return prior.value(s, r, c)
+            # to the right of last year's timeline (a total, the model's own terminal value, a check): no period to roll,
+            # so not this year's same column (another period there, counted twice), but the column as far right of this
+            # year's timeline, on the row found. Where that holds nothing, last year's figure stands in, said so
+            # (beyond_stood: it holds the value), never last year's in silence
+            was = prior.value(s, r, c)
+            tl_c = cur.timeline(s2)
+            c3 = max(tl_c) + (c - max(tl_p)) if len(tl_c) > 1 else None
+            v3 = cur.value(s2, r2, c3) if c3 is not None else None
+            if v3 is not None or not isinstance(was, (int, float)) or isinstance(was, bool) or not was:
+                self.beyond[(s, r, c)] = "past last year's timeline"
+                if v3 is not None:
+                    self.derived_used[(s, r, c)] = (f"{_a1(s2, r2, c3)}: as far right of this year's timeline as last "
+                                                    "year's was of last year's")
+                    return v3
+                return was
+            self.beyond_stood[(s, r, c)] = was
+            return was
         if want is not None:
             c2 = cur.column_of(s2, want)
             tl_c = cur.timeline(s2)

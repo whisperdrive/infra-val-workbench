@@ -886,13 +886,15 @@ def _result_job(eid: int, key: str):
         anchor = ("equityPick" if h["id"].startswith("equity-") else "doctorCard" if h["id"] == "doctor-moved"
                   else "heldCard" if h["id"].startswith("declared") else "compareCard" if h["id"] == "own-inputs"
                   else "bridgeCard" if h["id"].startswith(("cf-split", "cf-sign")) or h["id"] in (
-                      "damaged", "circular", "unknown-fn", "unsaved-current", "errors-current", "calc-incomplete")
+                      "damaged", "circular", "unknown-fn", "unsaved-current", "errors-current", "calc-incomplete",
+                      "beyond-standin", "pasted")
                   else "methodsCard" if h["id"] in ("basis-method", "method-unapplied")
                   else "compareCard" if h["id"] in ("basis", "interest", "interest-two", "interest-error")
                   else "tieCard" if h["id"].startswith(("rebuild-", "tie-")) or h["id"] in ("unsaved-prior", "errors-prior", "unsaved-overlay")
                   else "datesCard" if h["id"] == "roll-assumed" else "termsCard" if h["id"] == "terms-error"
+                  else "inputsCard" if h["id"] == "assumption-moved"
                   else "linesCard" if h["id"] == "lines-error" else "flowsCard")
-        step = "rebuild" if anchor in ("tieCard", "equityPick", "doctorCard") else "workbench" if anchor == "datesCard" else "result"
+        step = "rebuild" if anchor in ("tieCard", "equityPick", "doctorCard", "inputsCard") else "workbench" if anchor == "datesCard" else "result"
         needs.append(_need_of(h, {"step": step, "anchor": anchor}))
     for i, x in enumerate((g or {}).get("pick_notes") or []):  # picks in a model that changed since they were made
         if x.get("now"):
@@ -955,15 +957,18 @@ def _result_job(eid: int, key: str):
         rows = [x["row"] + (f" ({x['label']})" if x.get("label") else "") for x in
                 g["dcf_missing"] + g["blank_rows"] + g["weak_rows"] + g["timing_open"]]
         zero = [c for c, x in g["by_cell"].items() if not x["zero_roll"]["ok"]]
-        if (res["figures"].get("feed") or {}).get("unusable"):  # no figure there because cells the value reads hold
-            # none (an error, a formula never calculated): the hold saying so explains it
+        if (res["figures"].get("feed") or {}).get("unusable") or any(h["id"].startswith("rebuild-error")
+                                                                    for h in g.get("holds") or []):
+            # no figure there because cells the value reads hold none (an error, a formula never calculated), or last
+            # year's rebuild gives an error: the hold saying so explains it
             zero = [c for c in zero if isinstance(g["by_cell"][c]["zero_roll"]["value"], (int, float))]
         if rows or zero or g.get("date_check") or not needs:
             needs.append({"id": "rows", "stage": "result", "severity": "block",
                           "title": "This year's value is held back: rows to find in this year's model",
-                          "detail": (f"{len(rows)} row(s): {', '.join(rows[:6])}" if rows else "") +
-                                    (f"; the zero-roll check fails on {', '.join(zero)}" if zero else "") +
-                                    ("; this year's valuation date isn't known" if g.get("date_check") else ""),
+                          "detail": "; ".join(filter(None, (
+                              f"{len(rows)} row(s): {', '.join(rows[:6])}" if rows else "",
+                              f"the zero-roll check fails on {', '.join(zero)}" if zero else "",
+                              "this year's valuation date isn't known" if g.get("date_check") else ""))),
                           "go": {"step": "result", "anchor": "rowsCard"}, "rows": rows})
     tc = res["figures"].get("time") or {}
     near = [x for x in tc.get("discountings") or [] if not x["ok"] and x not in ((g or {}).get("time_off") or [])]
@@ -1253,7 +1258,8 @@ KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact"
          ("rows-models", "retry", "A step to try again"), ("doctor-holds", "check-cells", "Cells to hold"),
          ("doctor-moved", "check-cells", "Cells to hold"), ("circular", "check-cells", "Cells to check"),
          ("unknown-fn", "check-cells", "Cells to check"), ("unsaved-", "recalc-file", "A file to calculate and upload again"),
-         ("errors-", "check-cells", "Cells to check"), ("calc-incomplete", "recalc-file", "A file to calculate and upload again"),
+         ("errors-", "check-cells", "Cells to check"), ("beyond-standin", "find-rows", "A figure to find"),
+         ("pasted", "check-flows", "Cash flows to check"), ("assumption-moved", "check-input", "A model input to check"), ("calc-incomplete", "recalc-file", "A file to calculate and upload again"),
          ("declared", "check-input", "A model input to check"),
          ("own-inputs", "check-input", "A model input to check"), ("damaged", "check-decisions", "Decisions to make again"), ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),
          ("rate-", "check-input", "A model input to check"), ("growth-", "check-input", "A model input to check"),

@@ -1631,7 +1631,8 @@ def pairing_check() -> None:
     sens = [m("low", "Sens", 3, "Equity value sensitivity", 1900.0, 5), m("high", "Sens", 3, "Equity value sensitivity", 2100.0, 5)]
     assert result._pair(sens + eq)["low"] == "Sum!C9"
     twin = [m("low", "Out", 9, "Equity value", 1900.0), m("high", "Out", 9, "Equity value", 2100.0)]
-    assert result._pair(eq + twin) is None  # two rows as likely: a pick, not the listing order
+    got = result._pair(eq + twin)  # two rows as likely: a pick, not the listing order (nor the other basis)
+    assert got and got.get("ambiguous") and got["rows"] == ["Out!r9", "Sum!r9"], got
     flip = [m("low", "Sum", 9, "Equity value", 2100.0), m("high", "Sum", 9, "Equity value", 1900.0)]
     assert result._pair(flip) is None
     # the report's figures typed in (pasted, an Excel data table's results), labelled as the equity value: not paired,

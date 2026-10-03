@@ -29,7 +29,11 @@ def _tokens(s: str) -> set[str]:
 
 
 def _labels(db) -> dict[tuple[str, int], str]:
-    return {(s, r): lab or "" for s, r, lab in db.execute("SELECT sheet, row, label FROM rows")}
+    """Each row's label, whole where the row map has it (a row map built before keeps them to 40 characters)."""
+    try:
+        return {(s, r): lab or "" for s, r, lab in db.execute("SELECT sheet, row, COALESCE(full_label, label) FROM rows")}
+    except Exception:
+        return {(s, r): lab or "" for s, r, lab in db.execute("SELECT sheet, row, label FROM rows")}
 
 
 # ---- report -> overlay --------------------------------------------------------------------------------------
