@@ -819,6 +819,17 @@ def _result_job(eid: int, key: str):
                   else "linesCard" if h["id"] == "lines-error" else "flowsCard")
         step = "rebuild" if anchor == "tieCard" else "workbench" if anchor == "datesCard" else "result"
         needs.append(_need_of(h, {"step": step, "anchor": anchor}))
+    for i, x in enumerate((g or {}).get("pick_notes") or []):  # picks in a model that changed since they were made
+        if x.get("now"):
+            needs.append({"id": f"pick-moved-{i}", "stage": "result", "severity": "info",
+                          "title": f"{'Your' if x['by'] == 'you' else 'The agents’'} pick for {x['row']} found again in "
+                                   f"this year's changed model: {x['now']}",
+                          "detail": f"it was {x['was']}; {x['how']}", "go": {"step": "result", "anchor": "rowsCard"}})
+        elif x["by"] == "you":
+            needs.append({"id": f"pick-lost-{i}", "stage": "result", "severity": "check",
+                          "title": f"Your pick for {x['row']} ({x.get('label') or ''}) no longer matches this year's model",
+                          "detail": f"it was {x['was']}, and the model has changed since: {x['how']}. Pick it again",
+                          "go": {"step": "result", "anchor": "rowsCard"}})
     if g and not g["reliable"]:
         if g.get("no_reads"):
             needs.append({"id": "no-reads", "stage": "result", "severity": "block",
@@ -1163,7 +1174,8 @@ KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact"
          ("rebuild-", "check-rebuild", "A rebuild to check"), ("roll-assumed", "check-date", "A date to check"),
          ("terms-error", "check-terms", "Terms to check"), ("lines-error", "check-lines", "Cash-flow lines to check"),
          ("other-link", "check-links", "A linked workbook to check"), ("role-check", "check-roles", "The roles to check"),
-         ("tv-base-", "check-input", "A model input to check"))
+         ("tv-base-", "check-input", "A model input to check"), ("pick-lost-", "find-rows", "A row to pick again"),
+         ("pick-moved-", "note", "A pick found again"))
 
 
 def dress(n: dict) -> dict:

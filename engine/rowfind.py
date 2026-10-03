@@ -727,6 +727,76 @@ class RowFinder:
             return f"last year's row is {a}, this one {b}: another kind of row"
         return None
 
+    # ---- a row's card: what it is, where it lives, what it's made of and feeds, roughly what it says ---------------
+    def card(self, wb, k: tuple) -> dict:
+        """A row's identity card in a workbook (this year's, for a pick): its label, its block's heading and its place
+        in it, its kind, the labels around it, what it reads and what reads it, its first few figures, and the file."""
+        import structure
+        st = self._structure(wb)
+        b = structure.block_of(st["blocks"], *k)
+        labels = wb.labels()
+        idx = self._index()
+        reads, by = idx["edges"][1] if wb is self.current else idx["edges"][0]
+        near = lambda d: [labels.get((k[0], k[1] + i), "") for i in d if labels.get((k[0], k[1] + i))]
+        ser = self._series(wb, *k)
+        return {"row": f"{k[0]}!r{k[1]}", "label": labels.get(k, ""), "heading": (b or {}).get("heading", ""),
+                "position": b["rows"].index(k[1]) if b else None, "kind": st["info"].get(k, {}).get("kind"),
+                "above": near((-1, -2)), "below": near((1, 2)),
+                "reads": sorted({labels.get(x, "") for x in reads.get(k, ())} - {""})[:8],
+                "fed": sorted({labels.get(x, "") for x in by.get(k, ())} - {""})[:8],
+                "figures": [round(v, 6) for _w, v in sorted(ser.items())[:4]], "file": wb.path}
+
+    def matches(self, card: dict, k: tuple) -> bool:
+        """Whether this year's row k is the row a card describes: its label, heading and kind the same."""
+        now = self.card(self.current, k)
+        same = lambda a, b: _norm(a or "") == _norm(b or "")
+        return same(now["label"], card.get("label")) and same(now["heading"], card.get("heading")) and \
+            (not card.get("kind") or now["kind"] == card.get("kind"))
+
+    def refind(self, card: dict) -> tuple[tuple | None, str]:
+        """This year's row for a card, in a model that changed since the pick: the same label, heading and kind on the
+        same sheet (the block moved), else the best match by label, heading, kind, the rows around it, what it reads
+        and feeds, where two kinds of evidence agree and it's the only best one. -> (row or None, how)."""
+        import structure
+        st = self._structure(self.current)
+        sheet = card["row"].rsplit("!r", 1)[0]
+        lab = _norm(card.get("label") or "")
+        same = lambda a, b: _norm(a or "") == _norm(b or "")
+        here = [k for k in st["info"] if k[0] == sheet and lab and same(st["info"][k]["label"], card["label"])
+                and self.matches(card, k)]
+        if len(here) == 1:
+            return here[0], f"moved to {here[0][0]}!r{here[0][1]} (the same label, heading and kind)"
+        scored = []
+        # the card's block is still in this model (its heading): a row under another heading is another case's, not it
+        held = bool(card.get("heading")) and any(same(b["heading"], card["heading"]) for b in st["blocks"])
+        for k, x in st["info"].items():
+            if x["kind"] in ("empty", "text"):
+                continue
+            now = self.card(self.current, k)
+            if held and not same(now["heading"], card["heading"]):
+                continue
+            fam = set()
+            if lab and same(now["label"], card["label"]):
+                fam.add("identity")
+            if card.get("heading") and same(now["heading"], card["heading"]):
+                fam.add("place")
+            near = set(card.get("above", []) + card.get("below", []))
+            if near and _jaccard({_norm(a) for a in near}, {_norm(a) for a in now["above"] + now["below"]}) >= 0.5:
+                fam.add("place")
+            lin = [_jaccard({_norm(a) for a in card.get(s_, [])}, {_norm(a) for a in now[s_]}) for s_ in ("reads", "fed")
+                   if card.get(s_)]
+            if lin and sum(lin) / len(lin) >= 0.5:
+                fam.add("role")
+            if card.get("kind") and now["kind"] != card["kind"] and (now["kind"] in FIXED_KINDS or card["kind"] in FIXED_KINDS):
+                continue
+            if len(fam) >= 2:
+                scored.append((len(fam), k, fam))
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        if scored and (len(scored) == 1 or scored[1][0] < scored[0][0]):
+            n, k, fam = scored[0]
+            return k, f"found again at {k[0]}!r{k[1]} by {', '.join(sorted(fam))}"
+        return None, ("more than one row matches it as well" if scored else "no row of this model matches it")
+
     def _structure(self, wb):
         import structure
         return structure.load(wb.path)

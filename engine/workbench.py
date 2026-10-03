@@ -1682,17 +1682,45 @@ def _load_rowpicks(eid: int, sess) -> int:
     if not sess.rowmap:
         return 0
     import rowfind
-    stale = 0
-    for a, b in _read_rowpicks(eid).items():
+    stale, changed = 0, False
+    picks = _read_rowpicks(eid)
+    sess.pick_notes = []  # picks found again in a changed model, or set aside: for the gate and the page
+    for a, b in list(picks.items()):
         try:  # "[1]Sheet!r9" (a row of the linked client model) is Sheet row 9, as when it was picked
             s, r = _row_ref(a)
             to, by = (b.get("to"), b.get("by", "you")) if isinstance(b, dict) else (b, "you")
             if by == "agent" and b.get("v") != rowfind.VERSION:
                 stale += 1
                 continue
-            sess.rowmap.pick(s, r, rowfind.STAND_IN if to == "-" else _row_ref(to) if to else None, by)
-        except ValueError:
+            k = _row_ref(to) if to and to != "-" else None
+            card = b.get("card") if isinstance(b, dict) else None
+            if k and card and card.get("file") != sess.current.path:
+                # this year's model changed since the pick: the row at that address, if it's still the row picked;
+                # else found again from its card; else set aside (a person's, said so; the agents', redone)
+                if not sess.rowmap.matches(card, k):
+                    to2, how = sess.rowmap.refind(card)
+                    if to2:
+                        sess.pick_notes.append({"row": a, "was": to, "now": f"{to2[0]}!r{to2[1]}", "by": by, "how": how})
+                        k, to = to2, f"{to2[0]}!r{to2[1]}"
+                    else:
+                        sess.pick_notes.append({"row": a, "was": to, "now": None, "by": by, "how": how,
+                                                "label": card.get("label")})
+                        if by == "agent":
+                            stale += 1
+                        continue
+                picks[a] = {**b, "to": to, "card": sess.rowmap.card(sess.current, k)}
+                changed = True
+            elif k and isinstance(b, dict) and not card:  # picked before cards were kept: its card, as it is now
+                picks[a] = {**b, "card": sess.rowmap.card(sess.current, k)}
+                changed = True
+            elif k and not isinstance(b, dict):
+                picks[a] = {"to": to, "by": "you", "card": sess.rowmap.card(sess.current, k)}
+                changed = True
+            sess.rowmap.pick(s, r, rowfind.STAND_IN if to == "-" else k if to else None, by)
+        except (ValueError, KeyError, TypeError):
             continue
+    if changed:
+        _write_rowpicks(eid, picks)
     return stale
 
 
@@ -1834,7 +1862,8 @@ def row_pick(eid: int, prior_row: str, current_row: str | None) -> dict:
         raise ValueError(f"{current_row} isn't a line item in this year's model")
     picks = _read_rowpicks(eid)
     if to:
-        picks[prior_row] = {"to": current_row, "by": "you"}
+        picks[prior_row] = {"to": current_row, "by": "you", **({"card": ovmod.deep(sess.rowmap.card, sess.current, to)}
+                                                             if not keep else {})}
     else:
         picks.pop(prior_row, None)
     _write_rowpicks(eid, picks)
@@ -1859,6 +1888,7 @@ def _rowagent_file(eid: int) -> Path:
 
 def _rows_job(eid: int, cells: list[str]) -> None:
     """The row agents on the rows this year's value of these cells (the equity value's) is waiting on."""
+    import overlay as ovmod
     import rowagent
     import rowfind
     step = lambda msg: _set("engagements", eid, rows_status="running", rows_step=msg)
@@ -1880,8 +1910,14 @@ def _rows_job(eid: int, cells: list[str]) -> None:
     picks = {k: v for k, v in _read_rowpicks(eid).items() if not (isinstance(v, dict) and v.get("by") == "agent")}
     for d in res["decisions"]:
         if d.get("decision") and d["row"] not in picks:
+            card = None
+            if d["decision"] != "-":
+                try:
+                    card = ovmod.deep(sess.rowmap.card, sess.current, _row_ref(d["decision"]))
+                except Exception:
+                    card = None
             picks[d["row"]] = {"to": d["decision"], "by": "agent", "v": rowfind.VERSION, "why": d.get("why"),
-                               "checked_by": "the numbers" if d.get("how") == "numbers" else d.get("review") or d.get("how")}
+                               "checked_by": d.get("review") or d.get("how"), "agreed": d.get("agreed"), "card": card}
     _write_rowpicks(eid, picks)
     res["at"], res["v"] = time.time(), rowfind.VERSION
     f = _rowagent_file(eid)

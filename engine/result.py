@@ -700,6 +700,7 @@ def _gaps(sess, summary: dict, cells: list[str]) -> dict:
             "new_terms": terms, "gone_terms": gone, "new_terms_error": terms_error,
             "terms_held": [x["key"] for x in terms_held],
             "no_reads": reads == 0, "family": fam, "rebuilt": fam < ov.REBUILT, "rebuilt_rows": rebuilt_rows,
+            "pick_notes": list(getattr(sess, "pick_notes", []) or []),  # picks found again in a changed model, or set aside
             "date_cells": {"moved": roll.get("valuation_date_cells") or [], "read": vd_reads, "off": vd_off,
                            "by_label": bool(roll.get("valuation_date_by_label")), "to": (info or {}).get("valuation_date")},
             "zero_roll_off": zero_off, "read_rows": [f"{s_}!r{r_}" for s_, r_ in sorted(read_by_row)],

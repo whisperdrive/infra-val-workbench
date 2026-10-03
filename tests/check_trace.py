@@ -1477,6 +1477,53 @@ def meaning_check() -> None:
           "year's figures exactly, closest by its numbers, passed over as a copy)")
 
 
+def pick_card_check() -> None:
+    """A pick's card: made on one version of this year's model, then a corrected version with a downside case inserted
+    above (the rows move down): the row at the pick's address is another row now, and the card finds the picked row
+    again at its new place; in a version without the row, nothing is found (the pick is set aside, not applied)."""
+    import overlay as ov
+    import rowfind
+    out = Path(tempfile.mkdtemp(prefix="cards_"))
+
+    def book(name, downside=False, drop=False):
+        wb = xlsxwriter.Workbook(out / f"{name}.xlsx")
+        dt = wb.add_format({"num_format": "dd-mmm-yy"})
+        ws = wb.add_worksheet("CF")
+        ws.write(1, 1, "Period ending")
+        for k in range(6):
+            ws.write_datetime(1, 3 + k, date(2026 + k, 6, 30), dt)
+        r = 3
+        for case, g in ((("Downside case", 0.9),) if downside else ()) + (("Base case", 1.0),):
+            ws.write(r, 0, case)
+            top = r + 1
+            labs = ("Revenue", "Operating costs") + (() if drop and case == "Base case" else ("Distributions",))
+            for i, lab in enumerate(labs):
+                ws.write(top + i, 1, lab)
+                for k in range(6):
+                    c = COL(3 + k)
+                    if lab == "Distributions":
+                        ws.write_formula(top + i, 3 + k, f"={c}{top + 1}+{c}{top + 2}", None, 60.0 * g * 1.03 ** k)
+                    else:
+                        ws.write_number(top + i, 3 + k, (100.0 if i == 0 else -40.0) * g * 1.03 ** k)
+            r = top + len(labs) + 1
+        wb.close()
+        return ov.Workbook(build_map.main(str(out / f"{name}.xlsx"), str(out / f"db_{name}"))["db"])
+    last, v1, v2, v3 = book("last"), book("v1"), book("v2", downside=True), book("v3", downside=True, drop=True)
+    f1 = rowfind.RowFinder(ov.RowMap(last, v1), last, v1)
+    card = f1.card(v1, ("CF", 7))
+    assert card["label"] == "Distributions" and card["heading"] == "Base case" and card["reads"], card
+    f2 = rowfind.RowFinder(ov.RowMap(last, v2), last, v2)
+    assert not f2.matches(card, ("CF", 7)), f2.card(v2, ("CF", 7))  # the downside's Distributions is there now
+    k, how = f2.refind(card)
+    now = f2.card(v2, k) if k else {}
+    assert k and k != ("CF", 7) and (now["label"], now["heading"]) == ("Distributions", "Base case") and "moved" in how, (k, how)
+    f3 = rowfind.RowFinder(ov.RowMap(last, v3), last, v3)
+    k, how = f3.refind(card)
+    assert k is None, (k, how)
+    print("pick card: ok (a pick's row found again from its card where a block inserted above moved it; the old address "
+          "is another row now; in a model without the row, nothing found)")
+
+
 if __name__ == "__main__":
     main()
     mid_year_check()
@@ -1499,3 +1546,4 @@ if __name__ == "__main__":
     structure_check()
     case_column_check()
     meaning_check()
+    pick_card_check()
