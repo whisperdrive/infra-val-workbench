@@ -1164,7 +1164,7 @@ function datesCard() {
   const D = E.dates || [];
   if (!D.length) return "";
   const mark = ok => ok === true ? `<span class="pill ok">✓</span>` : ok === false ? `<span class="pill bad">✗</span>` : "";
-  return `<div class="card" id="datesCard"><h2>Valuation dates</h2><p class="sub">The report's date is the anchor; this year's client model's should be a year on.</p>
+  return `<div class="card" id="datesCard"><h2>Valuation dates</h2><p class="sub">The report's date is the anchor; this year's client model's should be a year on.</p>${cardNeeds(id => id === "roll-assumed")}
     <div class="dateline">${D.map(d => `<div><div class="k">${esc(d.step)}</div><div class="v">${esc(d.date || "–")} ${mark(d.ok)}</div>
       ${d.where || d.how ? `<div class="small">${d.where ? `<span class="${d.where.includes("!") ? "mono" : ""}">${esc(d.where)}</span>${d.how ? ", " : ""}` : ""}${esc(d.how || "")}</div>` : ""}
       ${d.note ? `<div class="small muted" title="${esc(d.note)}">${esc(d.note.split("; ")[0])}</div>` : ""}</div>`).join("")}</div></div>`;
@@ -1500,7 +1500,7 @@ function viewRebuild() {
 function tieCard(R) {
   const u = R.head?.units || "", row = (end, t) => `<tr><td><b>${end === "low" ? "Low" : "High"}</b> <span class="mono small muted">${esc(R.where[end])}</span></td><td class="num">${esc(t.report_text || vN(t.report))}</td>
     <td class="num">${vN(t.saved)} ${t.ok ? `<span class="pill ok">✓</span>` : `<span class="pill bad">✗</span>`}</td><td class="num">${vN(t.rebuilt)} ${t.rebuilt_ok ? `<span class="pill ok">✓</span>` : `<span class="pill warn">moves</span>`}</td></tr>`;
-  return `<div class="card" id="tieCard"><h2>The tie to the report</h2><p class="sub">The report's equity value against the overlay's cells as Excel saved them, and rebuilt in Python on last year's client model. ${esc(u)}. Mid = the midpoint of the low and the high.</p>
+  return `<div class="card" id="tieCard"><h2>The tie to the report</h2><p class="sub">The report's equity value against the overlay's cells as Excel saved them, and rebuilt in Python on last year's client model. ${esc(u)}. Mid = the midpoint of the low and the high.</p>${cardNeeds(id => id.startsWith("rebuild-") || id.startsWith("tie-"))}
     <div class="scroll"><table><thead><tr><th></th><th class="num">The report</th><th class="num">As Excel saved</th><th class="num">Rebuilt in Python</th></tr></thead><tbody>${row("low", R.tie.low)}${row("high", R.tie.high)}
     <tr class="tot"><td>Mid</td><td class="num">${vN(R.values.report.mid)}</td><td class="num">${vN((R.tie.low.saved + R.tie.high.saved) / 2)}</td><td class="num">${vN(R.values.rebuilt.mid)}</td></tr></tbody></table></div>
     ${(R.head?.why || []).length ? `<p class="small muted" style="margin:8px 0 0">${esc(R.head.why.join("; "))}.</p>` : ""}</div>`;
@@ -1656,7 +1656,7 @@ function viewResult() {
       <div><h2>Last year to this year</h2><p class="sub" style="margin:0">${esc(u)} · equity value, ${R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution"} · ${rateNow(R)?.applied ? `at this year's discount rate, ${esc(rateRange(rateNow(R).low, rateNow(R).high))}` : "at last year's discount rate"}${B.valuation_date ? ` · to ${esc(B.valuation_date)}` : ""}${heldNote(R)}</p></div>
       <div class="row">${state.hl?.step ? hlNote(STEP_SHORT[state.hl.step] || state.hl.step) : ""}<a class="btn small" href="${workpaperUrl()}" download title="The result, the bridge, the cash flows, the inputs and their checks, the facts, the review and the run log, as an Excel file">Export workpaper</a><div class="seg" role="group" aria-label="Which end">${["low", "mid", "high"].map(k => `<button type="button" data-end="${k}" class="${end === k ? "on" : ""}" aria-pressed="${end === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div></div></div>
     ${from != null && to != null && !B.held ? `<div class="move"><span class="from">${vN(from)}</span><span class="muted">→</span><span class="to">${vN(to)}</span><span class="${to - from >= 0 ? "okt" : "warnt"}">${signed(to - from)}</span><span class="small muted">the ${end}${end === "mid" ? (R.methods?.preferred === "mid_rate" ? ", at the midpoint rate (the method preferred)" : ", the midpoint of the low and the high") : ""}</span></div>` : ""}
-    ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until what needs you is settled (rows to find, terms to confirm, cash flows to check): the bridge stops at last year's rebuilt value.</div>` : ""}${cardNeeds(id => id === "damaged")}
+    ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until what needs you is settled (rows to find, terms to confirm, cash flows to check): the bridge stops at last year's rebuilt value.</div>` : ""}${cardNeeds(id => ["damaged", "circular", "unknown-fn"].includes(id))}
     <div class="grid2" style="margin-top:10px"><div id="brChart"></div><div class="scroll"><table class="bridge"><thead><tr><th>Step</th><th class="num">Change</th><th class="num">Value</th></tr></thead><tbody>${rows}</tbody></table>
     ${(B.notes || []).length ? `<p class="small muted">${esc(B.notes.join("; "))}</p>` : ""}</div></div></div>
   ${ackedFold}
@@ -1720,8 +1720,8 @@ function bindRate() {
 // This year's value worked out other ways (engine/methods.py), each against the default; the one you prefer is this
 // year's value, with a bridge step of its own.
 function methodsCard(R) {
-  const mNeeds = cardNeeds(id => id === "basis-method" || id === "method");
-  const M = R.methods; if (!M?.methods?.length) return M?.error ? `<div class="card" id="methodsCard"><h2>Methods</h2><p class="small muted">${esc(M.error)}</p>${mNeeds}</div>` : "";
+  const mNeeds = cardNeeds(id => ["basis-method", "method", "method-unapplied"].includes(id));
+  const M = R.methods; if (!M?.methods?.length) return M?.error || mNeeds ? `<div class="card" id="methodsCard"><h2>Methods</h2>${M?.error ? `<p class="small muted">${esc(M.error)}</p>` : ""}${mNeeds}</div>` : "";
   const rs = stageOf("result"), pending = busy(rs.status);
   const d = x => x == null ? `<span class="muted">–</span>` : Math.abs(x) < 0.05 ? `<span class="muted">same</span>` : signed(x);
   const lab = k => (M.methods.find(m => m.key === k) || {}).label || k;
@@ -1855,13 +1855,13 @@ function balancesBlock(R) {
 function flowsCard(R) {
   const F = R.flows;
   if (!F?.cores?.length) {  // no discountings compared: the card still carries what needs you, and the balances
-    const ns = cardNeeds(id => id.startsWith("cf-") || id.startsWith("balance-")), b = balancesBlock(R);
+    const ns = cardNeeds(id => id.startsWith("cf-") || id.startsWith("balance-") || id === "other-link"), b = balancesBlock(R);
     return F?.error || ns || b ? `<div class="card" id="flowsCard"><h2>This year's cash flows against last year's</h2>${F?.error ? `<p class="small muted">The comparison couldn't run: ${esc(F.error)}</p>` : ""}${ns}${b}</div>` : "";
   }
   const S = R.flow_checks?.split || {}, end = state.bridgeEnd;
   const both = S.low && S.high && !S.low.why && !S.high.why;
   const sp = end === "mid" ? (both ? Object.fromEntries(Object.keys(S.low).map(k => [k, S.low[k] == null || S.high[k] == null ? null : (S.low[k] + S.high[k]) / 2])) : null) : S[end];
-  const ns = (E.run?.needs || []).filter(n => n.id.startsWith("cf-") || n.id.startsWith("balance-")), open = ns.filter(n => n.severity !== "info");
+  const ns = (E.run?.needs || []).filter(n => n.id.startsWith("cf-") || n.id.startsWith("balance-") || n.id === "other-link"), open = ns.filter(n => n.severity !== "info");
   const pillH = open.some(n => n.severity === "block") ? `<span class="pill bad">held</span>` : open.length ? `<span class="pill warn">${open.length} to check</span>` : `<span class="pill ok">this year's model reaches the value</span>`;
   const core = c => `<tr><td><b>${esc(c.label || c.cell)}</b> <span class="mono small muted">${esc(c.cell)}</span>${c.why ? `<div class="small muted">${esc(c.why)}</div>` : ""}</td>
     <td>${esc(c.form?.function || "")}</td><td class="small">${esc(c.form?.convention || "")}</td>
@@ -2295,7 +2295,7 @@ function viewAll() {
   const row = x => { const v = x.values, t = v?.this_year, r = v?.report, on = pick.includes(x.id);
     return `<tr class="click" tabindex="0" data-open="${x.id}">
       <td class="nowrap" data-no-open><input type="checkbox" data-pick="${x.id}" ${on ? "checked" : ""} ${can(x) && (on || pick.length < 2) ? "" : "disabled"} aria-label="Compare ${esc(x.name)}" title="${can(x) ? (on || pick.length < 2 ? "Tick two to compare" : "Two are ticked already") : "No value this year yet"}"></td>
-      <td><b>${esc(x.name)}</b><div class="small muted">${x.files} of 4 files · changed ${esc(dayOf(x.updated_at))}</div></td>
+      <td><b>${esc(x.name)}</b><div class="small muted">${x.all_in && x.files < 4 ? `${x.files} files, the overlay inside a model` : `${x.files} of 4 files`} · changed ${esc(dayOf(x.updated_at))}</div></td>
       <td><span class="pill ${STATE_PILL[x.state] ?? ""}">${esc(x.state[0].toUpperCase() + x.state.slice(1))}</span><div class="small muted">${esc(cut(x.note || "", 70))}</div></td>
       <td class="num">${t ? `<span class="muted">${vN(r?.mid)} →</span> <b>${vN(t.mid)}</b>` : r ? `<span class="muted">${vN(r.mid)}</span>` : "–"}<div class="small muted">${esc(x.units || "")}${x.basis ? ` · ${x.basis === "cum" ? "cum" : "ex"}-distribution` : ""}</div>${x.stale ? `<div class="small muted">This year's value: ${esc(x.stale)}</div>` : ""}</td>
       <td class="num">${t ? `${vN(t.low)} – ${vN(t.high)}` : "–"}</td>

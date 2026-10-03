@@ -823,19 +823,26 @@ def overview_check(eid: int) -> None:
         assert x["needs"] == len([n for n in wb.get(eid)["run"]["needs"] if n["severity"] != "info"]), x
         assert empty["state"] == "empty" and empty["values"] is None and empty["files"] == 0, empty
         assert x["stale"] is None, x
-        # a result worked out on earlier inputs: the list doesn't show its value as this year's
-        raw = wb._q("SELECT result_json FROM engagements WHERE id=?", eid)[0]["result_json"]
-        try:
-            wb._set("engagements", eid, result_json=json.dumps({**json.loads(raw), "inputs_key": "earlier"}))
-            y = next(z for z in orc.overview() if z["id"] == eid)
-            assert y["stale"] == "worked out on earlier inputs" and y["values"]["this_year"] is None and \
-                y["values"]["report"] == want["report"], y
-        finally:
-            wb._set("engagements", eid, result_json=raw)
+        stale_list_check(eid)
     finally:
         wb.delete(e["id"])
     print("overview: ok (a finished engagement with its values and what's for a person; an empty one as empty; an "
           "earlier result's value not shown as this year's)")
+
+
+def stale_list_check(eid: int) -> None:
+    """A result worked out on earlier inputs: the list doesn't show its value as this year's, and says why (not "3 of 4
+    files in" where the overlay is inside the client model: three files fill the four roles)."""
+    raw = wb._q("SELECT result_json FROM engagements WHERE id=?", eid)[0]["result_json"]
+    want = json.loads(raw)["values"]
+    try:
+        wb._set("engagements", eid, result_json=json.dumps({**json.loads(raw), "inputs_key": "earlier"}))
+        y = next(z for z in orc.overview() if z["id"] == eid)
+        assert y["stale"] == "worked out on earlier inputs" and y["values"]["this_year"] is None and \
+            y["values"]["report"] == want["report"], y
+        assert (y["state"], y["note"]) == ("waiting", "Value bridge: worked out on earlier inputs") and y["all_in"], y
+    finally:
+        wb._set("engagements", eid, result_json=raw)
 
 
 def rows_context_check(eid: int) -> None:
@@ -2130,6 +2137,7 @@ def main() -> None:
     profile_race_check()
     other = run_check(PACK_B, "Asset A, FY26 (overlay inside)")
     quiet_check(other)
+    stale_list_check(other)
     a, b = (wb.get(x)["result"]["values"]["this_year"]["mid"] for x in (eid, other))
     assert abs(a - b) < 1e-6, f"the same files give different values in the two layouts: {a} vs {b}"
     # a client row's role in the valuation, for the agents, in both layouts: the overlay rows reading it, its path

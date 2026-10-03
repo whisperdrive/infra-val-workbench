@@ -1639,8 +1639,9 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
         out.append(hold(summary, "unknown-fn", sorted(fd["unknown"]),
                         "This year's value calls functions Python can't work out",
                         f"{', '.join(f'{k} ({v} call(s))' for k, v in sorted(fd['unknown'].items()))}: each gives #NAME?, "
-                        "which an IFERROR turns into a figure. Hold the cells at Excel's value on the Rebuild page if "
-                        "nothing they read changes this year, or acknowledge"))
+                        "which an IFERROR turns into a figure. Where the Rebuild page lists the cells as ones Python can't "
+                        "work out, they can be held at Excel's value there if nothing they read changes this year; or "
+                        "acknowledge"))
     hm = figs.get("holds_moved") or []
     if hm:  # cells held at Excel's value whose inputs move this year: held at last year's figures for them
         out.append(hold(summary, "doctor-moved", [[x["cell"], x["inputs"]] for x in hm],

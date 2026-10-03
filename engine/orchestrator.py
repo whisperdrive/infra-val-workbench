@@ -883,9 +883,9 @@ def _result_job(eid: int, key: str):
     g = res["figures"].get("gaps")
     dc = (g or {}).get("date_cells") or {}
     for h in (g or {}).get("holds") or []:  # this year's cash flows against last year's (cashflows.py)
-        anchor = ("equityPick" if h["id"].startswith("equity-") else "doctorCard" if h["id"] in ("doctor-moved", "circular", "unknown-fn")
+        anchor = ("equityPick" if h["id"].startswith("equity-") else "doctorCard" if h["id"] == "doctor-moved"
                   else "heldCard" if h["id"].startswith("declared") else "compareCard" if h["id"] == "own-inputs"
-                  else "bridgeCard" if h["id"].startswith(("cf-split", "cf-sign")) or h["id"] == "damaged"
+                  else "bridgeCard" if h["id"].startswith(("cf-split", "cf-sign")) or h["id"] in ("damaged", "circular", "unknown-fn")
                   else "methodsCard" if h["id"] in ("basis-method", "method-unapplied")
                   else "compareCard" if h["id"] in ("basis", "interest", "interest-two", "interest-error")
                   else "tieCard" if h["id"].startswith(("rebuild-", "tie-"))
@@ -1360,6 +1360,7 @@ def overview() -> list[dict]:
         if stale and values:
             values = {**values, "this_year": None}
         files = e["n_docs"] + e["n_workbooks"]
+        all_in = files >= 4 or len(wb.roles(eid)) >= 4  # the overlay inside the client model: three files, four roles
         if not files:
             state, note = "empty", "no files yet"
         elif blocks:
@@ -1371,12 +1372,13 @@ def overview() -> list[dict]:
         else:
             waiting = next((s for s in v["stages"] if s["status"] not in SETTLED), None)
             state = "waiting"
-            note = f"{files} of 4 files in" if files < 4 else \
-                f"{LABEL[waiting['stage']]}: {waiting['note'] or 'waiting for the step before it'}" if waiting else "up to date"
+            note = f"{files} of 4 files in" if not all_in else \
+                f"{LABEL[waiting['stage']]}: {waiting['note'] or 'waiting for the step before it'}" if waiting else \
+                f"{LABEL['result']}: {stale}" if stale else "up to date"
         out.append({"id": eid, "name": e["name"], "updated_at": e["updated_at"], "files": files, "state": state,
                     "note": note, "needs": len(needs), "blocks": len(blocks), "values": values,
                     "units": r.get("units") or r.get("head_units"), "basis": r.get("basis"),
-                    "valuation_date": r.get("rolled_to"), "held": bool(r.get("held")), "stale": stale})
+                    "valuation_date": r.get("rolled_to"), "held": bool(r.get("held")), "stale": stale, "all_in": all_in})
     return out
 
 
