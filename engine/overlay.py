@@ -422,9 +422,12 @@ class Session:
             # reading it by its date (INDEX/MATCH on the valuation date) moves it itself. Only the balance's own read:
             # where the row is also read as cash flows, those reads are the periods' (the same cell's value serves both
             # only for last year's date's column, whose period is cut off)
-            old, new_vd = self.base_vd, add_months(self.base_vd, self.shift)
+            # (a balance up to a year before last year's date is read as far before this year's)
             single = c in bal["cols"]
-            own = not single and not bal["series"] and round(new_vd) != round(old) and round(tl_p[c]) == round(new_vd)
+            d0 = tl_p[c] if single else next((tl_p[c0] for c0 in bal["cols"] if c0 in tl_p and self.shift
+                                               and round(tl_p[c]) == round(add_months(tl_p[c0], self.shift))), None)
+            own = not single and not bal["series"] and d0 is not None
+            old, new_vd = (d0, add_months(d0, self.shift)) if d0 is not None else (self.base_vd, self.base_vd)
             target, by = want, None
             if single or own:
                 if self.balances_at_last:
@@ -973,18 +976,19 @@ ZERO_ROLL = (0.75, 1.33)  # this year's model at last year's date, against last 
 REBUILT = 0.5  # the two client models share fewer line-item labels than this (rowfind.family): this year's is rebuilt
 ZERO_ROLL_CHECK = (0.87, 1.15)  # inside ZERO_ROLL but outside this, the value runs and a person is asked to confirm
                                 # the move is the new forecast (a judgment call: forecasts move, a mismatched row too)
-BALANCES = 2  # balance_cells' version: the cells a session found by older rules are found again when it loads
+BALANCES = 3  # balance_cells' version: the cells a session found by older rules are found again when it loads
 
 
 def balance_cells(sess: Session, summary: dict) -> list[dict]:
-    """The client cells the value reads as a balance at last year's valuation date (a net debt, a cash balance, a
-    distribution declared at the date): read by an overlay cell outside the overlay's periods (a summary cell, not a
-    period column reading its own period), from a client row running over its timeline, in the column dated last
-    year's valuation date. A row the discountings read as cash flows across its columns can be one too, where a
-    separate cell reads it once at the date (the distribution declared at the date, deducted): only that read is the
-    balance ("series": the row is also read as cash flows). Rolled forward, each is read at this year's date
-    (Session._rolled). Walked down from the overlay's outputs on last year's feed. -> [{"cell": [sheet, row, col],
-    "series", "reader", "date"}]."""
+    """The client cells the value reads as a balance at last year's valuation date, or at a date up to a year before it
+    (the latest quarter's or half-year's actuals): a net debt, a cash balance, a distribution declared at the date.
+    Read by an overlay cell outside the overlay's periods (a summary cell, not a period column reading its own period),
+    from a client row running over its timeline. A row the discountings read as cash flows across its columns can be
+    one too, where a separate cell reads it once at the date (the distribution declared at the date, deducted): only
+    that read is the balance ("series": the row is also read as cash flows). This year each is read as far before
+    this year's date as it was before last year's (Session._rolled). One read at a date after last year's (a forecast
+    balance) isn't moved ("after": a point to check). Walked down from the overlay's outputs on last year's feed.
+    -> [{"cell": [sheet, row, col], "series", "reader", "date", "after"}]."""
     if sess.base_vd is None:
         return []
     outs = [parse_a1(o["cell"]) for o in summary.get("outputs") or [] if o.get("cell")]
@@ -1038,8 +1042,11 @@ def balance_cells(sess: Session, summary: dict) -> list[dict]:
         if sum(1 for cc in tl if same(prior.value(s, r, cc), tl[cc])) >= 2:
             continue  # the period dates themselves (an INDEX/MATCH looking up the valuation date's column reads them)
         for c, x in sorted(v["single"]):
-            if round(tl[c]) == round(sess.base_vd):
-                out.append({"cell": [s, r, c], "series": v["aligned"], "reader": _a1(*x), "date": to_date(tl[c]).isoformat()})
+            d = tl[c]
+            if add_months(sess.base_vd, -12) <= d <= add_months(sess.base_vd, 12) and not (
+                    round(d) > round(sess.base_vd) and v["aligned"]):  # (a cash-flow row's later column: its periods')
+                out.append({"cell": [s, r, c], "series": v["aligned"], "reader": _a1(*x), "date": to_date(d).isoformat(),
+                            "after": round(d) > round(sess.base_vd)})
     return sorted(out, key=lambda d: d["cell"])
 
 
@@ -1047,7 +1054,7 @@ def set_balances(sess: Session, cells: list) -> None:
     """The session's balances from balance_cells' list: {(sheet, row): {"cols", "series"}}."""
     sess.balances = {}
     for x in cells or []:
-        if isinstance(x, dict):
+        if isinstance(x, dict) and not x.get("after"):
             b = sess.balances.setdefault(tuple(x["cell"][:2]), {"cols": set(), "series": False})
             b["cols"].add(x["cell"][2])
             b["series"] = b["series"] or bool(x.get("series"))

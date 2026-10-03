@@ -214,21 +214,33 @@ def _read(sess, summary: dict, feed: str, cells: list[tuple], vd: str | None = N
     return dict(zip(cells, sess.values(cells))), roll, defaults, months
 
 
-def _balances(sess) -> dict:
+def _balances(sess, summary: dict) -> dict:
     """The balances read at the valuation date on the current feed (overlay.balance_cells): those moved to this year's
-    date, with last year's figure and this year's (in the client models' units), and those that couldn't be."""
+    date, with last year's figure and this year's (in the client models' units), those that couldn't be, and those
+    read at a date after last year's valuation date (not moved), with what this year's model has as far after this
+    year's."""
     pri, cur = sess.prior or sess.ov, sess.current
     labels = pri.labels()
     iso = lambda v: ov.to_date(v).isoformat()
     num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
-    lastcol = lambda s_, r_: next((c for c, d in pri.timeline(s_).items() if round(d) == round(sess.base_vd)), None)
     moved = [{"row": f"{s_}!r{r_}", "col": c_, "label": labels.get((s_, r_), ""), "from": iso(a), "to": iso(b),
-              "now": f"{s2}!r{r2}", "last": num(pri.value(s_, r_, lastcol(s_, r_) or c_)), "this": num(cur.value(s2, r2, c3)),
+              "now": f"{s2}!r{r2}", "last": num(pri.value(s_, r_, pri.column_of(s_, a) or c_)), "this": num(cur.value(s2, r2, c3)),
               "by": _by}
              for (s_, r_, c_), (a, b, s2, r2, c3, _by) in sorted(getattr(sess, "moved", {}).items())]
     unmoved = [{"row": f"{s_}!r{r_}", "col": c_, "label": labels.get((s_, r_), ""), "why": why,
                 "last": num(pri.value(s_, r_, c_))} for (s_, r_, c_), why in sorted(getattr(sess, "unmoved", {}).items())]
-    return {"moved": moved, "unmoved": unmoved}
+    after = []
+    for x in (summary.get("roll") or {}).get("balance_cells") or []:
+        if not (isinstance(x, dict) and x.get("after")):
+            continue
+        s_, r_, c_ = x["cell"]
+        at = ov.add_months(ov.serial(ov.date.fromisoformat(x["date"])), sess.shift or 0)
+        hit = sess.rowmap.locate(s_, r_) if sess.rowmap else None
+        c2 = cur.column_of(hit[0], at) if hit else None
+        after.append({"row": f"{s_}!r{r_}", "col": c_, "label": labels.get((s_, r_), ""), "date": x["date"],
+                      "reader": x.get("reader"), "last": num(pri.value(s_, r_, c_)), "at": iso(at),
+                      "this": num(cur.value(hit[0], hit[1], c2)) if c2 is not None else None})
+    return {"moved": moved, "unmoved": unmoved, "after": after}
 
 
 def _other_links(reads: dict) -> dict:
@@ -268,7 +280,7 @@ def figures(sess, summary: dict, cells: list[str]) -> dict:
                                     for (s_, r_, c_), v in sess.stood_in.items() if isinstance(v, (int, float))],
                        "beyond": [{"row": f"{s_}!r{r_}", "col": c_, "why": str(w)} for (s_, r_, c_), w in sess.beyond.items()],
                        "other_links": _other_links(getattr(sess, "other_reads", {})),
-                       "balances": _balances(sess)}
+                       "balances": _balances(sess, summary)}
         out["cut_off"] = len(sess.cut)  # the discountings' periods before the new date, cut off on this year's feed
         if summary.get("rate_values"):
             got, _, _, _ = _read(sess, summary, "current", keys, rates=False)  # at last year's rate: the rate's own step
@@ -1540,6 +1552,14 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
                                   for x in bal["moved"][:6])
                         + ". In the client models' units. Last year the overlay read each in one column, last year's "
                           "valuation date's; this year's value reads this year's", severity="check" if app else "info"))
+    if bal.get("after"):  # read at a date after last year's: not moved, what it was meant to be isn't clear
+        fmt = lambda v: f"{v:,.1f}" if isinstance(v, float) else "–"
+        out.append(hold(summary, "balance-after", [[x["row"], x["col"], x["this"]] for x in bal["after"]],
+                        f"{len(bal['after'])} balance(s) the overlay reads at a date after last year's valuation date",
+                        "; ".join(f"{x['label'] or x['row']} at {x['date']}: {fmt(x['last'])} last year, read as it is; "
+                                  f"this year's model has {fmt(x['this'])} at {x['at']}, as far after this year's date"
+                                  for x in bal["after"][:6])
+                        + ". In the client models' units. Check which date the overlay means", severity="check"))
     if bal.get("unmoved"):
         out.append(hold(summary, "balance-unmoved", [[x["row"], x["col"]] for x in bal["unmoved"]],
                         f"{len(bal['unmoved'])} balance(s) the overlay reads at the valuation date stay at last year's",

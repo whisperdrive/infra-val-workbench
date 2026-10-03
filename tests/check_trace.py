@@ -1035,7 +1035,7 @@ def balances_check() -> None:
     from xlsxwriter.utility import xl_col_to_name as col_
     vd, new, rate = date(2025, 6, 30), date(2026, 6, 30), 0.09
 
-    def run(ref: str, current_ends=None, to=None, declared=False):
+    def run(ref: str, current_ends=None, to=None, declared=False, nd_at=None):
         out = Path(tempfile.mkdtemp(prefix="balances_"))
         ends = {w: [date(2025 + k, 6, 30) for k in range(10)] for w in ("prior", "current")}
         if current_ends:
@@ -1057,6 +1057,14 @@ def balances_check() -> None:
                 cl.write_datetime(5, 3 + k, e, dt)
                 cl.write_number(8, 3 + k, cfs[which][k])
                 cl.write_number(10, 3 + k, nd[k])
+            if nd_at:  # a balance sheet of half-years, the same dates both years: net debt at each
+                bs = wbk.add_worksheet("BS")
+                bs.write(1, 1, "Half-year ending")
+                bs.write(3, 1, "Net debt")
+                halves = [date(2024, 12, 31), date(2025, 6, 30), date(2025, 12, 31), date(2026, 6, 30), date(2026, 12, 31)]
+                for k, e in enumerate(halves):
+                    bs.write_datetime(1, 3 + k, e, dt)
+                    bs.write_number(3, 3 + k, 300.0 - 10 * k)
             if which == "prior":
                 va = wbk.add_worksheet("Val")
                 va.write(3, 1, "Valuation date")
@@ -1077,8 +1085,11 @@ def balances_check() -> None:
                     va.write_formula(f"{c}14", f"={c}10*{c}13", None, cfs["prior"][k] * f)
                 # (with a distribution declared at the date: discounted from the first period after it)
                 va.write_formula("C16", f"=SUM({'E' if declared else 'D'}14:{col_(3 + n - 1)}14)", None, total)
-                va.write_formula("C17", "=Client!D11" if ref == "plain" else
-                                 f"=INDEX(Client!D11:{col_(3 + n - 1)}11,MATCH(C4,Client!D6:{col_(3 + n - 1)}6,0))", None, nd[0])
+                if nd_at:  # net debt at the half-year before last year's date (D: 31 Dec 2024), or after it (F: 31 Dec 2025)
+                    va.write_formula("C17", "=BS!D4" if nd_at == "before" else "=BS!F4", None, 300.0 if nd_at == "before" else 280.0)
+                else:
+                    va.write_formula("C17", "=Client!D11" if ref == "plain" else
+                                     f"=INDEX(Client!D11:{col_(3 + n - 1)}11,MATCH(C4,Client!D6:{col_(3 + n - 1)}6,0))", None, nd[0])
                 if declared:  # the distributions row, read as cash flows above, read once more at the date: deducted
                     va.write(18, 1, "Distribution declared at the valuation date")
                     va.write_formula("C19", "=Client!D9", None, cfs["prior"][0])
@@ -1090,7 +1101,8 @@ def balances_check() -> None:
         db = paths["prior"]
         src, _ = xlcompile.compile_overlay(db, ["Val"])
         (out / "overlay.py").write_text(src)
-        sess = ov.Session(str(out / "overlay.py"), db, ["Val"], None, paths["current"], None, ["Client"])
+        sess = ov.Session(str(out / "overlay.py"), db, ["Val"], None, paths["current"], None,
+                          ["Client", "BS"] if nd_at else ["Client"])
         roll = ov.plan_roll(sess, None, {"sheets": ["Val"]}, True, vd.isoformat(), None, (to or new).isoformat())
         roll.update(ov.date_cells(db, [{"cell": "Val!C18"}], ["Val"], None))
         sess.cutoffs = [(*ov.parse_a1(c), serial(date.fromisoformat(d)), *[ov.parse_a1(x) for x in at]) for c, d, *at in roll["cutoff"]]
@@ -1132,6 +1144,19 @@ def balances_check() -> None:
     assert moved["Client!r9"]["last"] == 12.0 and moved["Client!r9"]["this"] == 46.0 and moved["Client!r9"]["by"] == "the app", moved
     assert len(moved) == 2, moved  # the declared distribution and the net debt; none of the row's cash flows
     assert abs(cfc["split"]["low"]["cash_flows"] - cfc0["split"]["low"]["cash_flows"]) < 1e-9, (cfc["split"], cfc0["split"])
+    # net debt read at the half-year before last year's date (the latest actuals): read at the half-year before
+    # this year's, 31 Dec 2025 (280); one read at a date after last year's isn't moved: a point to check
+    roll, figs, cfc, gate = run("plain", nd_at="before")
+    bal = figs["feed"]["balances"]
+    assert [x["cell"] for x in roll["balance_cells"] if x["cell"][0] == "BS"] == [["BS", 4, 4]], roll["balance_cells"]
+    x = next(m for m in bal["moved"] if m["row"] == "BS!r4")
+    assert (x["from"], x["to"], x["last"], x["this"], x["by"]) == ("2024-12-31", "2025-12-31", 300.0, 280.0, "the app"), x
+    roll, figs, cfc, gate = run("plain", nd_at="after")
+    bal = figs["feed"]["balances"]
+    assert not [m for m in bal["moved"] if m["row"] == "BS!r4"] and bal["after"], bal
+    a = bal["after"][0]
+    assert (a["date"], a["last"], a["at"], a["this"]) == ("2025-12-31", 280.0, "2026-12-31", 260.0), a
+    assert ("balance-after", "check") in [(h["id"], h["severity"]) for h in gate], gate
     # rolling horizon (this year's model a year further on): the plain reference moves with the periods, as before;
     # the same value, a note, not a point to check
     roll, figs, cfc, gate = run("plain", current_ends=[date(2026 + k, 6, 30) for k in range(10)])
