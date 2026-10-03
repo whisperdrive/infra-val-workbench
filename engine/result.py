@@ -1598,6 +1598,11 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
     terminal = keyfacts.terminal_method(facts, context.terminal(markdown))  # how the report works out its terminal value
     inputs = ov.deep(sourced.check, sess, summary, where, facts, asm, traced, unit, terminal)
     inputs["rate"]["this_year"] = rate_now  # last year's is sourced and checked; this year's is a person's
+    import lineage
+    try:  # what drives the value: every input under it, by what it does, with the effect of a 1% move in each
+        drives = ov.deep(lineage.value_inputs, sess, summary, where, figs, inputs, held_inputs, unit)
+    except Exception as ex:  # beside the value, not in its way
+        drives = {"groups": [], "error": f"{type(ex).__name__}: {ex}"}
     try:  # the scenario each client model was saved on, and when: beside the value, not in its way
         scenario = ov.deep(scenarios.settings, sess, summary)
     except Exception as ex:
@@ -1627,7 +1632,7 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
     except Exception as ex:  # beside the value, not in its way
         spec = {"error": f"{type(ex).__name__}: {ex}"}
     return {"head": head, "where": where, "tie": tie, "figures": figs, "bridges": br, "chart": ch, "reconcile": rec,
-            "specs": spec,
+            "specs": spec, "drives": drives,
             "flows": _flows_public(fl, unit), "flow_checks": {"split": cfc.get("split") or {}, "rows": cfc.get("rows")},
             "interest": {k: inter.get(k) for k in ("report", "report_text", "model", "error")},
             "assumptions": asm, "inputs": inputs, "held": held_inputs, "terminal": terminal, "methods": inv,

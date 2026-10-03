@@ -324,6 +324,14 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     assert rows["Equity value, mid"]["cells"][5]["v"] == res["values"]["this_year"]["mid"], rows["Equity value, mid"]
     assert rows["Undiscounted forecast cash flows (no terminal value)"]["cells"][3] and \
         rows["Undiscounted forecast cash flows (no terminal value)"]["cells"][4], rows["Undiscounted forecast cash flows (no terminal value)"]
+    # what drives the value: the rate, the terminal value's growth, franking and the client's cash flows, traced
+    dv = {g["group"]: g["inputs"] for g in res["drives"]["groups"]}
+    assert not res["drives"].get("error") and {"Discount rate", "Terminal value", "Franking credits",
+                                                "Cash flows (client model)"} <= set(dv), (res["drives"].get("error"), list(dv))
+    assert all(x["effect"] is not None and x["effect"] < 0 for x in dv["Discount rate"]), dv["Discount rate"]
+    assert any(x["effect"] and x["effect"] > 0 for x in dv["Franking credits"]), dv["Franking credits"]
+    assert any(x["effect"] and x["effect"] > 0 and x.get("made_from") for x in dv["Cash flows (client model)"]), \
+        dv["Cash flows (client model)"]
     # this year's cash flows against last year's: every discounting read period by period, the step split
     fl = res["flows"]
     assert fl["cores"] and all(c.get("last") and c.get("this") and c["form"]["recomputed"] for c in fl["cores"]), fl["cores"]

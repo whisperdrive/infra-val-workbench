@@ -43,7 +43,8 @@ def _vocabulary() -> set[str]:
     import methods
     words |= set(methods.LABEL)
     import cashflows
-    words |= set(cashflows.IDS) | set(cashflows.KINDS) | {"interest", "interest-two", "inside", "after", "basis",
+    import lineage
+    words |= set(cashflows.IDS) | set(cashflows.KINDS) | set(lineage.GROUPS) | {"interest", "interest-two", "inside", "after", "basis",
                                                           "rebuild-low", "rebuild-high", "tie-low", "tie-high", "roll-assumed",
                                                           "terms-error", "lines-error", "other-link", "role-check"}
     words |= {"waiting", "queued", "running", "done", "attention", "blocked", "failed", "error", "pending", "approved",
@@ -254,6 +255,9 @@ def _result(eid: int, res: dict) -> dict:
                                                               if str(y)[2:].isdigit()]),
                    "undated": (res.get("chart") or {}).get("undated")},
          "flows": _flows(res),
+         "drives": {"groups": {g["group"]: len(g["inputs"]) for g in (res.get("drives") or {}).get("groups") or []},
+                    "nudged": (res.get("drives") or {}).get("nudged"), "capped": (res.get("drives") or {}).get("capped"),
+                    "leaves": (res.get("drives") or {}).get("leaves"), "error": bool((res.get("drives") or {}).get("error"))},
          "interest": {"stated": (res.get("interest") or {}).get("report") is not None,
                       "applied": ((res.get("interest") or {}).get("model") or {}).get("where"),
                       "same": None if (res.get("interest") or {}).get("report") is None
@@ -434,7 +438,8 @@ _KEYS = {"app", "generated", "files", "reports", "workbooks", "roles", "placed",
          "monthly", "quarterly", "semi-annual", "annual", "irregular",
          "flows", "cores", "recomputed", "both_years", "periods", "why", "checks", "id", "severity", "acked", "split",
          "client_rows", "compared", "changed", "outside_of_value", "revised", "added", "dropped", "cash_flows", "outside",
-         "convention", "ordered", "undated", "this_year", "interest", "stated", "applied"}
+         "convention", "ordered", "undated", "this_year", "interest", "stated", "applied", "drives", "groups",
+         "nudged", "capped", "leaves", "overlay", "client"}
 
 
 def as_text(eid: int) -> str:

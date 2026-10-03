@@ -1620,6 +1620,7 @@ function viewResult() {
   ${rowsCard(R)}
   ${termsCard(R)}
   ${compareCard(R)}
+  ${drivesCard(R)}
   ${flowsCard(R)}
   ${linesCard(R)}
   ${scenarioCard(R)}
@@ -1792,6 +1793,22 @@ function flowsCard(R) {
 // The models side by side, like comparing products' specifications (specs.py): last year's report, overlay as saved and
 // rebuild should agree (a row where they don't is flagged); last year's and this year's client models give the rows the
 // value reads, in their own units; this year rolled forward. Each figure's source on hover.
+// What drives the value (lineage.py): every input under the equity value, traced down to the figures typed in the
+// overlay and read from the client model, grouped by what it does, each with the move in the mid when it moves 1%.
+function drivesCard(R) {
+  const D = R.drives; if (!D?.groups?.length) return D?.error ? `<div class="card" id="drivesCard"><h2>What drives the value</h2><p class="small muted">${esc(D.error)}</p></div>` : "";
+  const all = D.groups.flatMap(g => g.inputs.map(x => ({...x, group: g.group}))).filter(x => x.effect != null);
+  const top = [...all].sort((a, b) => Math.abs(b.effect) - Math.abs(a.effect)).slice(0, 8);
+  const pct = Math.round((D.per || 0.01) * 100);
+  const line = x => `<tr><td><b>${esc(x.label || x.row)}</b> <span class="mono small muted">${esc(x.row)}</span>${x.made_from?.length ? `<div class="small muted">worked out from ${esc(x.made_from.join(", "))}</div>` : ""}</td>
+    <td class="small">${x.where === "client" ? "client model" : "overlay"}</td><td class="num">${x.value == null ? `<span class="muted">${x.cells} period${x.cells > 1 ? "s" : ""}</span>` : Math.abs(x.value) < 1 ? vPct(x.value) : vN(x.value)}</td>
+    <td class="num">${x.effect == null ? `<span class="muted">–</span>` : signed(x.effect)}</td></tr>`;
+  const head = `<thead><tr><th>Input</th><th>In</th><th class="num">Value</th><th class="num">Mid if it moves +${pct}%</th></tr></thead>`;
+  return `<div class="card" id="drivesCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">What drives the value</h2><span class="small muted">${D.rows} input row(s); ${D.nudged} moved${D.capped ? ` (the first ${D.nudged}: the rest aren't moved)` : ""}</span></div>
+    <p class="sub">Every input under last year's equity value, traced from the value down through the overlay's formulas to the figures typed in it and read from the client model, grouped by what each does. Each row moved +${pct}% (all its periods together), the value worked out again: the move in the mid. A client row lists the client model's own inputs it's worked out from.</p>
+    ${top.length ? `<h3 style="font-size:14px;margin:6px 0 4px">What moves it most</h3><div class="scroll"><table class="stack-sm">${head}<tbody>${top.map(line).join("")}</tbody></table></div>` : ""}
+    ${D.groups.map(g => fold(`drv-${g.group}`, esc(g.group), `${g.inputs.length} input row(s)`, `<div class="scroll"><table class="stack-sm">${head}<tbody>${g.inputs.map(line).join("")}</tbody></table></div>`)).join("")}</div>`;
+}
 function compareCard(R) {
   const S = R.specs; if (!S?.sections?.length) return S?.error ? `<div class="card" id="compareCard"><h2>The models side by side</h2><p class="small muted">${esc(S.error)}</p></div>` : "";
   const fmt = c => { if (!c || c.v == null) return `<span class="muted">–</span>`;
