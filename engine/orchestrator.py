@@ -127,9 +127,17 @@ def set_equity_pick(eid: int, pick: dict | None, by: str, why: str = "") -> None
     f.write_text(json.dumps({**pick, "by": by, "why": why, "at": time.time()}), encoding="utf-8")
 
 
-def inputs(eid: int, name: str, snap: dict, holds: bool = True) -> str:
+def person_picks(picks: dict) -> dict:
+    """A person's row picks as the stages read them: the row picked and who picked it. A card added or refreshed on a
+    pick (workbench._load_rowpicks) isn't a new input (it was, and the agents ran twice on an update)."""
+    return {k: [v.get("to"), v.get("by", "you")] if isinstance(v, dict) else [v, "you"]
+            for k, v in picks.items() if not (isinstance(v, dict) and v.get("by") == "agent")}
+
+
+def inputs(eid: int, name: str, snap: dict, holds: bool = True, rows_version: int | None = None) -> str:
     """A fingerprint of what a stage reads: it runs again when this changes, and only then. holds=False: the
-    rebuild's without the cells held at Excel's value (the doctor runs once per rebuild of the same files)."""
+    rebuild's without the cells held at Excel's value (the doctor runs once per rebuild of the same files).
+    rows_version: the row finder's version to fingerprint with (a check's "what if"), else the one running."""
     rl = snap["roles"]
     roles = sorted([k, r["kind"], r["id"], sorted(r["sheets"] or []), r["confirmed"]] for k, r in rl.items())
     ids = {r["id"] for r in rl.values() if r["kind"] == "workbook"}
@@ -145,10 +153,10 @@ def inputs(eid: int, name: str, snap: dict, holds: bool = True) -> str:
                (snap.get("profile") or {}).get("horizon"), equity_pick(eid)]
     if name in ("rebuild", "map"):
         return _h(rebuild)
-    picks = {k: v for k, v in wb._read_rowpicks(eid).items() if not (isinstance(v, dict) and v.get("by") == "agent")}
+    picks = person_picks(wb._read_rowpicks(eid))
     # and the row finder's version: the agents' picks made by an older one are set aside (workbench._load_rowpicks), so
     # the agents look again, and the result after them
-    rows = [rebuild, wb.this_year_date(eid), picks, _rows_version()]
+    rows = [rebuild, wb.this_year_date(eid), picks, rows_version if rows_version is not None else _rows_version()]
     if name == "rows":
         return _h(rows)
     res = [rows, equity_pick(eid), (snap.get("profile") or {}).get("fy_end_month"),

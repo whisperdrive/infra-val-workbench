@@ -774,19 +774,24 @@ def versions_check(eid: int) -> None:
     doesn't place every engagement's files again (nor ask the second opinion again)."""
     import rowfind
     snap = orc._snapshot(eid)
+    # (nothing the orchestrator's own thread reads is changed here: it's running)
     rows0, res0, roles0 = (orc.inputs(eid, n, snap) for n in ("rows", "result", "roles"))
-    was = rowfind.VERSION
-    rowfind.VERSION = was + 1
-    try:
-        assert orc.inputs(eid, "rows", snap) != rows0 and orc.inputs(eid, "result", snap) != res0
-    finally:
-        rowfind.VERSION = was
+    assert orc.inputs(eid, "rows", snap, rows_version=rowfind.VERSION) == rows0
+    assert orc.inputs(eid, "rows", snap, rows_version=rowfind.VERSION + 1) != rows0
+    assert orc.inputs(eid, "result", snap, rows_version=rowfind.VERSION + 1) != res0
+    # a card added to a person's pick (on the first start after an update, or a refresh) isn't a new input: the agents
+    # don't run again for it; a pick of another row is, and the agents' own picks aren't
+    plain = orc.person_picks({"CashFlow!r9": "CashFlow!r9", "CashFlow!r8": {"to": "CashFlow!r7", "by": "agent"}})
+    assert plain == orc.person_picks({"CashFlow!r9": {"to": "CashFlow!r9", "by": "you", "card": {"label": "x"}}}) \
+        == {"CashFlow!r9": ["CashFlow!r9", "you"]}, plain
+    assert orc.person_picks({"CashFlow!r9": {"to": "CashFlow!r8", "by": "you", "card": {"label": "x"}}}) != plain
     rl = snap["roles"]
     assert not wb.acks(eid).get("role-check")
     assert roles0 == orc._h([wb._roles_key(eid, snap["workbooks"], snap["documents"]),
                              [(k, r["id"], r["sheets"]) for k, r in rl.items() if r["confirmed"] and r.get("by") == "you"]])
-    print("versions: ok (a newer row finder runs the row agents again, and the result after them; the roles' "
-          "fingerprint is as before unless a person acknowledged their check)")
+    print("versions: ok (a newer row finder runs the row agents again, and the result after them, once: a card added "
+          "to a person's pick isn't a new input; the roles' fingerprint is as before unless a person acknowledged "
+          "their check)")
 
 
 def agents_view_check() -> None:
@@ -1298,8 +1303,11 @@ def delete_check(first: int) -> None:
         kept_once |= bool(r["kept"])
         # every table but stages, which the orchestrator's loop may be writing for it that very moment (an id a
         # new engagement then doesn't take)
-        assert wb.get(eid) is None and not (wb.OUT / "overlays" / f"e{eid}").exists() and not any(
-            wb._q(f"SELECT 1 FROM {t} WHERE engagement_id=?", eid) for t in ("runlog", "facts", "roles", "eng_files", "documents"))
+        left = (wb.OUT / "overlays" / f"e{eid}")
+        assert wb.get(eid) is None, eid
+        assert not left.exists(), (eid, sorted(p.name for p in left.iterdir()))
+        assert not [t for t in ("runlog", "facts", "roles", "eng_files", "documents")
+                    if wb._q(f"SELECT 1 FROM {t} WHERE engagement_id=?", eid)], eid
         with calllog._conn() as db:
             assert not db.execute("SELECT 1 FROM calls WHERE engagement=?", (eid,)).fetchone(), eid
     assert kept_once, "a model several engagements use was deleted with the first of them"
