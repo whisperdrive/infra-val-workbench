@@ -259,7 +259,8 @@ def _result(eid: int, res: dict) -> dict:
          "row_evidence": _calibration(),
          "drives": {"groups": {g["group"]: len(g["inputs"]) for g in (res.get("drives") or {}).get("groups") or []},
                     "nudged": (res.get("drives") or {}).get("nudged"), "capped": (res.get("drives") or {}).get("capped"),
-                    "leaves": (res.get("drives") or {}).get("leaves"), "error": bool((res.get("drives") or {}).get("error"))},
+                    "leaves": (res.get("drives") or {}).get("leaves"), "error": bool((res.get("drives") or {}).get("error")),
+                    "secs": (res.get("drives") or {}).get("secs")},
          "interest": {"stated": (res.get("interest") or {}).get("report") is not None,
                       "applied": ((res.get("interest") or {}).get("model") or {}).get("where"),
                       "same": None if (res.get("interest") or {}).get("report") is None
@@ -451,7 +452,7 @@ _KEYS = {"app", "generated", "files", "reports", "workbooks", "roles", "placed",
          "flows", "cores", "recomputed", "both_years", "periods", "why", "checks", "id", "severity", "acked", "split",
          "client_rows", "compared", "changed", "outside_of_value", "revised", "added", "dropped", "cash_flows", "outside",
          "convention", "ordered", "undated", "this_year", "interest", "stated", "applied", "drives", "groups",
-         "nudged", "capped", "leaves", "overlay", "client", "row_evidence", "agreed", "share"}
+         "nudged", "capped", "leaves", "overlay", "client", "row_evidence", "agreed", "share", "secs"}
 
 
 def as_text(eid: int) -> str:

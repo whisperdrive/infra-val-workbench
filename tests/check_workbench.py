@@ -332,6 +332,8 @@ def run_check(files=PACK_A, name="Asset A, FY26") -> int:
     assert any(x["effect"] and x["effect"] > 0 for x in dv["Franking credits"]), dv["Franking credits"]
     assert any(x["effect"] and x["effect"] > 0 and x.get("made_from") for x in dv["Cash flows (client model)"]), \
         dv["Cash flows (client model)"]
+    print(f"  (what drives the value: {res['drives']['rows']} input rows, {res['drives']['nudged']} moved, "
+          f"{res['drives']['secs']}s)")
     # this year's cash flows against last year's: every discounting read period by period, the step split
     fl = res["flows"]
     assert fl["cores"] and all(c.get("last") and c.get("this") and c["form"]["recomputed"] for c in fl["cores"]), fl["cores"]
@@ -1583,6 +1585,14 @@ def main() -> None:
     other = run_check(PACK_B, "Asset A, FY26 (overlay inside)")
     a, b = (wb.get(x)["result"]["values"]["this_year"]["mid"] for x in (eid, other))
     assert abs(a - b) < 1e-6, f"the same files give different values in the two layouts: {a} vs {b}"
+    # a client row's role in the valuation, for the agents, in both layouts: the overlay rows reading it, its path
+    import rowagent
+    for x in (eid, other):
+        sess, summary = wb.overlay_session(x)
+        g = wb.get(x)["result"]["figures"]["gaps"]
+        cells = orc.equity_cells(x)
+        roles = [rowagent.role_of(sess, summary, cells, *rowagent._ref(o)) for o in g["dcf_origins"]]
+        assert any(r_ and "reaches the equity value" in r_ for r_ in roles), (x, g["dcf_origins"], roles)
     print("layouts: ok (the overlay standalone and inside the client model give the same value this year: the roll "
           "moves the valuation date the discountings read)")
     delete_check(eid)

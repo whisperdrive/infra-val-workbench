@@ -159,8 +159,8 @@ def role_of(sess, summary: dict, cells: list[str], s: str, r: int) -> str | None
     name = lambda k, lab: f"{k[0]}!r{k[1]} {lab.get(k, '')}".strip()
     out = "read by the overlay at " + "; ".join(name(k, olab) for k in reads[:4]) if reads else ""
     if L.get("via"):
-        cut = L["via"].index("(the overlay)") if "(the overlay)" in L["via"] else 0
-        path = [name(k, olab) for k in L["via"][cut + 1:]]
+        cut = L["via"].index("(the overlay)") + 1 if "(the overlay)" in L["via"] else 1
+        path = [name(k, olab) for k in L["via"][cut:]]
         out += ("; " if out else "") + "it reaches the equity value through " + " → ".join(path[:6])
     return out or None
 

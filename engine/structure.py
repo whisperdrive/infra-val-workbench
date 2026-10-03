@@ -338,6 +338,12 @@ def lineage(client_db: str, row: tuple, overlay_db: str | None = None, link: int
     out = {"row": row, "label": info.get(row, {}).get("label"), "kind": info.get(row, {}).get("kind"),
            "upstream": len(up) - 1, "inputs": [(k, info.get(k, {}).get("label"), info.get(k, {}).get("kind")) for k in inputs[:12]],
            "downstream": len(down) - 1, "reaches_value": None, "via": None}
+    if overlay_db and overlay_db == client_db:  # the overlay inside the client model's workbook: one graph, no link
+        if targets:
+            end = next((t_ for t_ in targets if t_ in down), None)
+            out["reaches_value"], out["via"] = bool(end), (path(down, end) if end else None)
+        out["overlay_reads"] = sorted(read_by.get(row, ()))[:8]
+        return out
     if overlay_db:
         ext = ext_reads(overlay_db, link)
         o_reads, o_read_by = edges(overlay_db)

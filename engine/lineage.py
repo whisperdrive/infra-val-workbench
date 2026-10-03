@@ -86,7 +86,9 @@ def value_inputs(sess, summary: dict, where: dict, figs: dict, inputs: dict, hel
     """{"groups": [{"group", "inputs": [{"where" ("overlay" / "client"), "row", "label", "cells", "value", "effect",
     "made_from"}]}], "nudged", "capped", "leaves"}. On last year's feed (the rebuild the report ties to). Runs in
     overlay.deep."""
+    import time
     import structure
+    t0 = time.time()
     feed = figs["feeds"]["rebuilt"]
     cells = [ov.parse_a1(c) for c in dict.fromkeys(x for x in (where.get("low"), where.get("high")) if x)]
     try:
@@ -146,7 +148,7 @@ def value_inputs(sess, summary: dict, where: dict, figs: dict, inputs: dict, hel
                                                    "value": x.get("value") if len(x["cells"]) == 1 else None}
                                                   for x in xs]})
     return {"groups": groups, "nudged": nudged, "capped": len(rows) > NUDGES, "leaves": {"overlay": len(typed),
-            "client": len(client)}, "rows": len(rows), "per": NUDGE}
+            "client": len(client)}, "rows": len(rows), "per": NUDGE, "secs": round(time.time() - t0, 2)}
 
 
 def _mid(vals: dict, cells: list, unit) -> float | None:

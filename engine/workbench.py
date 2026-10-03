@@ -1675,6 +1675,9 @@ def _rowpicks_file(eid: int) -> Path:
     return OUT / "overlays" / f"e{eid}" / "rowpicks.json"
 
 
+_PICKS = threading.Lock()  # rowpicks.json read, merged and written by one at a time
+
+
 def _load_rowpicks(eid: int, sess) -> int:
     """A person's choices of this year's row for last year's rows ({"CF!r11": "CF!r15"}), and the agents', for the
     roll-forward. The agents' picks made by another version of the row finder are left out (it may now find those
@@ -1719,8 +1722,15 @@ def _load_rowpicks(eid: int, sess) -> int:
             sess.rowmap.pick(s, r, rowfind.STAND_IN if to == "-" else k if to else None, by)
         except (ValueError, KeyError, TypeError):
             continue
-    if changed:
-        _write_rowpicks(eid, picks)
+    if changed:  # the cards added or moved, merged into the file as it is now (a person or the agents may have written)
+        with _PICKS:
+            now = _read_rowpicks(eid)
+            for a, b in picks.items():
+                if isinstance(b, dict) and b.get("card") and a in now:
+                    was = now[a] if isinstance(now[a], dict) else {"to": now[a], "by": "you"}
+                    if was.get("to") in (b.get("to"), next((x["was"] for x in sess.pick_notes if x["row"] == a), None)):
+                        now[a] = {**was, "to": b["to"], "card": b["card"]}
+            _write_rowpicks(eid, now)
     return stale
 
 
