@@ -1421,7 +1421,7 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
         # the balances the value reads at last year's valuation date: read at this year's date (overlay.balance_cells)
         roll["balance_cells"] = ovmod.deep(ovmod.balance_cells, sess, summary) if sess.base_vd is not None else []
         roll["balances_plan"], roll["balances_vd"] = ovmod.BALANCES, roll.get("prior_valuation_date")
-    sess.balances = {(x[0], x[1]) for x in roll.get("balance_cells") or []}
+    ovmod.set_balances(sess, roll.get("balance_cells"))
     roll["confirmed"] = now["confirmed"]
 
 

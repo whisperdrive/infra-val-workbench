@@ -1035,15 +1035,15 @@ def balances_check() -> None:
     from xlsxwriter.utility import xl_col_to_name as col_
     vd, new, rate = date(2025, 6, 30), date(2026, 6, 30), 0.09
 
-    def run(ref: str, current_ends=None, to=None):
+    def run(ref: str, current_ends=None, to=None, declared=False):
         out = Path(tempfile.mkdtemp(prefix="balances_"))
         ends = {w: [date(2025 + k, 6, 30) for k in range(10)] for w in ("prior", "current")}
         if current_ends:
             ends["current"] = current_ends
         n = 10
         nd = [200.0 - 20 * k for k in range(n)]  # the balance at each date, the same both years
-        cfs = {"prior": [0.0] + [45.0 * 1.03 ** k for k in range(n - 1)],
-               "current": [0.0, 46.0] + [46.5 * 1.03 ** k for k in range(1, n - 1)]}
+        cfs = {"prior": [12.0 if declared else 0.0] + [45.0 * 1.03 ** k for k in range(n - 1)],
+               "current": [12.0 if declared else 0.0, 46.0] + [46.5 * 1.03 ** k for k in range(1, n - 1)]}
         paths = {}
         for which in ("prior", "current"):
             wbk = xlsxwriter.Workbook(out / f"{which}.xlsx")
@@ -1070,15 +1070,21 @@ def balances_check() -> None:
                 for k, e in enumerate(ends["prior"]):
                     c = col_(3 + k)
                     f = 1 / (1 + rate) ** ((e - vd).days / 365)
-                    total += cfs["prior"][k] * f
+                    total += cfs["prior"][k] * f if k or not declared else 0.0
                     va.write_formula(f"{c}6", f"=Client!{c}6", dt, (e - date(1899, 12, 30)).days)
                     va.write_formula(f"{c}10", f"=Client!{c}9", None, cfs["prior"][k])
                     va.write_formula(f"{c}13", f"=1/(1+$C$5)^(({c}6-$C$4)/365)", None, f)
                     va.write_formula(f"{c}14", f"={c}10*{c}13", None, cfs["prior"][k] * f)
-                va.write_formula("C16", f"=SUM(D14:{col_(3 + n - 1)}14)", None, total)
+                # (with a distribution declared at the date: discounted from the first period after it)
+                va.write_formula("C16", f"=SUM({'E' if declared else 'D'}14:{col_(3 + n - 1)}14)", None, total)
                 va.write_formula("C17", "=Client!D11" if ref == "plain" else
                                  f"=INDEX(Client!D11:{col_(3 + n - 1)}11,MATCH(C4,Client!D6:{col_(3 + n - 1)}6,0))", None, nd[0])
-                va.write_formula("C18", "=C16-C17", None, total - nd[0])
+                if declared:  # the distributions row, read as cash flows above, read once more at the date: deducted
+                    va.write(18, 1, "Distribution declared at the valuation date")
+                    va.write_formula("C19", "=Client!D9", None, cfs["prior"][0])
+                    va.write_formula("C18", "=C16-C17-C19", None, total - nd[0] - cfs["prior"][0])
+                else:
+                    va.write_formula("C18", "=C16-C17", None, total - nd[0])
             wbk.close()
             paths[which] = build_map.main(str(out / f"{which}.xlsx"), str(out / f"db_{which}"))["db"]
         db = paths["prior"]
@@ -1091,16 +1097,17 @@ def balances_check() -> None:
         summary = {"wiring": {"overlay": {"db_path": db}, "current": {"db_path": paths["current"]}}, "sheets": ["Val"],
                    "roll": roll, "held_values": {}, "outputs": [{"cell": "Val!C18", "label": "Equity value"}]}
         roll["balance_cells"] = ov.deep(ov.balance_cells, sess, summary)
-        sess.balances = {(x[0], x[1]) for x in roll["balance_cells"]}
+        ov.set_balances(sess, roll["balance_cells"])
         figs = ov.deep(result.figures, sess, summary, ["Val!C18"])
         where = {"low": "Val!C18", "high": "Val!C18", "scale": 1, "sign": 1}
         fl = ov.deep(cashflows.layer, sess, summary, where, figs)
         cfc = ov.deep(cashflows.checks, sess, summary, where, figs, fl, lambda x: x)
+        cfc["layer"] = fl
         gate = result._gate_holds(summary, {"texts": {}}, where, figs, lambda x: x)
         return roll, figs, cfc, gate
     for ref, how in (("plain", "the app"), ("index", "the overlay's own date")):
         roll, figs, cfc, gate = run(ref)
-        assert roll["fixed_horizon"] and roll["balance_cells"] == [["Client", 11, 4]], roll.get("balance_cells")
+        assert roll["fixed_horizon"] and [x["cell"] for x in roll["balance_cells"]] == [["Client", 11, 4]], roll.get("balance_cells")
         v = figs["this_year"]["Val!C18"]
         bal = figs["feed"]["balances"]["moved"]
         assert bal and bal[0]["last"] == 200.0 and bal[0]["this"] == 180.0 and bal[0]["by"] == how, bal
@@ -1113,7 +1120,19 @@ def balances_check() -> None:
             v_plain = v
         else:
             assert abs(v - v_plain) < 1e-9, (v, v_plain)
-    # a rolling horizon (this year's model a year further on): the plain reference moves with the periods, as before;
+    # the distributions row read as cash flows and once more at the valuation date by a cell of its own (the
+    # distribution declared at the date, deducted): that read is a balance, moved to this year's date; the row's cash
+    # flows stay the periods' (the split's cash flows as without the deduction)
+    roll0, figs0, cfc0, _ = run("plain")
+    roll, figs, cfc, gate = run("plain", declared=True)
+    cells = {tuple(x["cell"]): x for x in roll["balance_cells"]}
+    assert set(cells) == {("Client", 11, 4), ("Client", 9, 4)} and cells[("Client", 9, 4)]["series"] \
+        and not cells[("Client", 11, 4)]["series"], roll["balance_cells"]
+    moved = {x["row"]: x for x in figs["feed"]["balances"]["moved"]}
+    assert moved["Client!r9"]["last"] == 12.0 and moved["Client!r9"]["this"] == 46.0 and moved["Client!r9"]["by"] == "the app", moved
+    assert len(moved) == 2, moved  # the declared distribution and the net debt; none of the row's cash flows
+    assert abs(cfc["split"]["low"]["cash_flows"] - cfc0["split"]["low"]["cash_flows"]) < 1e-9, (cfc["split"], cfc0["split"])
+    # rolling horizon (this year's model a year further on): the plain reference moves with the periods, as before;
     # the same value, a note, not a point to check
     roll, figs, cfc, gate = run("plain", current_ends=[date(2026 + k, 6, 30) for k in range(10)])
     bal = figs["feed"]["balances"]["moved"]

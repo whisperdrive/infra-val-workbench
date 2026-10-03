@@ -303,7 +303,7 @@ class Session:
         self.horizon_set = None  # "fixed" / "rolling": the engagement's profile says, not worked out (fixed_horizon)
         self.mode = None
         self.holds = {}  # (sheet, row, col) -> value: cells held at Excel's value on every feed (the doctor's fixes)
-        self.balances = set()  # client (sheet, row) the value reads as a balance at last year's valuation date
+        self.balances = {}  # client (sheet, row) -> {"cols", "series"}: read as a balance at the valuation date
         self.balances_at_last = False  # read them at last year's date instead: what their move adds (result.figures)
         self.moved, self.unmoved = {}, {}  # those read at this year's date on the current feed, and those not
         self.cutoffs = []  # (sheet, row, col, period end serial[, its date cell]): the discountings' per-period cells (cutoff_cells)
@@ -415,23 +415,30 @@ class Session:
             return self._stand_in(prior, s, r, c, want)
         s2, r2 = hit
         c2 = c
-        if (s, r) in self.balances and want is not None and self.base_vd is not None:
+        bal = self.balances.get((s, r))
+        if bal and want is not None and self.base_vd is not None and c in tl_p:
             # a balance at last year's valuation date (balance_cells): this year's at this year's date. On a fixed
             # horizon the periods keep their dates, so nothing else moves a plain reference off last year's; an overlay
-            # reading it by its date (INDEX/MATCH on the valuation date) moves it itself
+            # reading it by its date (INDEX/MATCH on the valuation date) moves it itself. Only the balance's own read:
+            # where the row is also read as cash flows, those reads are the periods' (the same cell's value serves both
+            # only for last year's date's column, whose period is cut off)
             old, new_vd = self.base_vd, add_months(self.base_vd, self.shift)
+            single = c in bal["cols"]
+            own = not single and not bal["series"] and round(new_vd) != round(old) and round(tl_p[c]) == round(new_vd)
             target, by = want, None
-            if self.balances_at_last:
-                target = old
-            elif round(tl_p[c]) == round(old):  # the column last year's date's: moved by the periods, else by the app
-                if round(want) != round(new_vd):
+            if single or own:
+                if self.balances_at_last:
+                    target = old
+                elif single and round(want) != round(new_vd):
                     target, by = new_vd, "the app"
-                elif round(new_vd) != round(old):
+                elif single and round(new_vd) != round(old):
                     by = "the periods"
-            elif round(want) == round(new_vd) and round(new_vd) != round(old):
-                by = "the overlay's own date"  # the overlay picked another column itself (INDEX/MATCH on its date)
-            c3 = cur.column_of(s2, target)
-            if c3 is None:
+                elif own:
+                    by = "the overlay's own date"  # the overlay picked another column itself (INDEX/MATCH on its date)
+            c3 = cur.column_of(s2, target) if single or own else None
+            if not (single or own):
+                pass
+            elif c3 is None:
                 # no column at this year's date: left at last year's date (a plain reference), or last year's forecast
                 # standing in (read by its date): either way not this year's balance, which holds the value
                 if not self.balances_at_last and round(target) == round(new_vd) and round(new_vd) != round(old):
@@ -966,22 +973,25 @@ ZERO_ROLL = (0.75, 1.33)  # this year's model at last year's date, against last 
 REBUILT = 0.5  # the two client models share fewer line-item labels than this (rowfind.family): this year's is rebuilt
 ZERO_ROLL_CHECK = (0.87, 1.15)  # inside ZERO_ROLL but outside this, the value runs and a person is asked to confirm
                                 # the move is the new forecast (a judgment call: forecasts move, a mismatched row too)
-BALANCES = 1  # balance_cells' version: the cells a session found by older rules are found again when it loads
+BALANCES = 2  # balance_cells' version: the cells a session found by older rules are found again when it loads
 
 
-def balance_cells(sess: Session, summary: dict) -> list[list]:
-    """The client cells the value reads as a balance at last year's valuation date: a row of the client model running
-    over its timeline, read in one column only, the one dated last year's valuation date (a net debt, a cash balance, a
-    distribution declared at the date). Rolled forward, each is read at this year's date (Session._rolled): on a fixed
-    horizon the periods keep their dates, so nothing else would move it. Walked down from the overlay's outputs on
-    last year's feed. -> [[sheet, row, col]]."""
+def balance_cells(sess: Session, summary: dict) -> list[dict]:
+    """The client cells the value reads as a balance at last year's valuation date (a net debt, a cash balance, a
+    distribution declared at the date): read by an overlay cell outside the overlay's periods (a summary cell, not a
+    period column reading its own period), from a client row running over its timeline, in the column dated last
+    year's valuation date. A row the discountings read as cash flows across its columns can be one too, where a
+    separate cell reads it once at the date (the distribution declared at the date, deducted): only that read is the
+    balance ("series": the row is also read as cash flows). Rolled forward, each is read at this year's date
+    (Session._rolled). Walked down from the overlay's outputs on last year's feed. -> [{"cell": [sheet, row, col],
+    "series", "reader", "date"}]."""
     if sess.base_vd is None:
         return []
     outs = [parse_a1(o["cell"]) for o in summary.get("outputs") or [] if o.get("cell")]
     if not outs:
         return []
     prior = sess.prior or sess.ov
-    client = defaultdict(set)
+    readers = defaultdict(set)  # client (sheet, row, col) -> the overlay cells reading it
     sess.configure("prior" if sess.prior else "workbook")
     try:
         sess.values(outs)
@@ -992,24 +1002,55 @@ def balance_cells(sess: Session, summary: dict) -> list[list]:
                 continue
             seen.add(x)
             src, s, r, c = x
-            if src != "" or s in (sess.client_sheets or ()):
-                if src in ("", sess.client_link):
-                    client[(s, r)].add(c)
-                continue
-            if not B.is_formula(s, r, c):
+            if src != "" or s in (sess.client_sheets or ()) or not B.is_formula(s, r, c):
                 continue
             reads, _ = B.reads(s, r, c)
-            q.extend(y for y in reads if y not in seen)
+            for y in reads:
+                ys, yr_, yc = y[1], y[2], y[3]
+                if y[0] != "" or ys in (sess.client_sheets or ()):
+                    if y[0] in ("", sess.client_link):
+                        readers[(ys, yr_, yc)].add((s, r, c))
+                elif y not in seen:
+                    q.append(y)
     finally:
         sess.configure("workbook")
-    out = []
-    for (s, r), cols in client.items():
+    tl_ov = {}
+
+    def aligned(x, d):  # an overlay period column reading its own period: a cash flow, not a balance
+        if x[0] not in tl_ov:
+            tl_ov[x[0]] = sess.ov.timeline(x[0])
+        return x[2] in tl_ov[x[0]] and round(tl_ov[x[0]][x[2]]) == round(d)
+    rows = defaultdict(lambda: {"single": set(), "aligned": False})
+    for (s, r, c), xs in readers.items():
         tl = prior.timeline(s)
-        c = next(iter(cols))
-        if len(cols) == 1 and c in tl and round(tl[c]) == round(sess.base_vd) and \
-                sum(1 for cc in tl if isinstance(prior.value(s, r, cc), (int, float))) >= 2:
-            out.append([s, r, c])
-    return sorted(out)
+        if c not in tl:
+            continue
+        for x in xs:
+            if aligned(x, tl[c]):
+                rows[(s, r)]["aligned"] = True
+            else:
+                rows[(s, r)]["single"].add((c, x))
+    out = []
+    for (s, r), v in rows.items():
+        tl = prior.timeline(s)
+        if sum(1 for cc in tl if isinstance(prior.value(s, r, cc), (int, float))) < 2:
+            continue  # not a row running over its timeline
+        if sum(1 for cc in tl if same(prior.value(s, r, cc), tl[cc])) >= 2:
+            continue  # the period dates themselves (an INDEX/MATCH looking up the valuation date's column reads them)
+        for c, x in sorted(v["single"]):
+            if round(tl[c]) == round(sess.base_vd):
+                out.append({"cell": [s, r, c], "series": v["aligned"], "reader": _a1(*x), "date": to_date(tl[c]).isoformat()})
+    return sorted(out, key=lambda d: d["cell"])
+
+
+def set_balances(sess: Session, cells: list) -> None:
+    """The session's balances from balance_cells' list: {(sheet, row): {"cols", "series"}}."""
+    sess.balances = {}
+    for x in cells or []:
+        if isinstance(x, dict):
+            b = sess.balances.setdefault(tuple(x["cell"][:2]), {"cols": set(), "series": False})
+            b["cols"].add(x["cell"][2])
+            b["series"] = b["series"] or bool(x.get("series"))
 
 
 ROLL_PLAN = 4  # the rules' version: a roll planned by older rules is planned again when a session loads
