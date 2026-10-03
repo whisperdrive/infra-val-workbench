@@ -178,7 +178,11 @@ reviewer's own session.
   the value. Was (code re-read; reviewer reproduced): A top-level OFFSET, or an
   IF returning one, records only its arguments as reads; the doctor calls it safe and the orchestrator holds it at
   Excel's value: a terminal base frozen at last year's, this year's value about 20% low, no hold.
-- **S5. A shared workbook's date set in another engagement** (re-run). Workbooks are shared by content; a date
+- ~~**S5. A shared workbook's date set in another engagement**~~ — fixed: a workbook's valuation date and who
+  confirmed it are each engagement's own (`file_dates.json`, through the store, seeded from the library's record on
+  first read so an update changes nothing); a person's correction or the agents' confirmation goes to that engagement
+  only, and the agents' earlier check of the same file and last year's date is reused, per engagement. The library
+  keeps only what the file says. Was (re-run): Workbooks are shared by content; a date
   corrected in one engagement re-rolls every other engagement using the file: 3,384.7 became 3,542.4 with no hold,
   its date still shown as confirmed by the agents.
 - ~~**S6. Decisions lost or corrupted**~~ — fixed: every decision file through `store.py` (one writer at a time, written

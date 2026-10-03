@@ -186,17 +186,52 @@ def update(eid: int, **fields) -> dict:
     return get(eid)
 
 
+def _file_dates_file(eid: int) -> Path:
+    return OUT / "overlays" / f"e{eid}" / "file_dates.json"
+
+
+def file_dates(eid: int) -> dict:
+    """This engagement's judgements of its workbooks' valuation dates: {str(file id): {"valuation_date", "by" ("you" /
+    "agents"), "why", "at"}}. A workbook is shared by its content across engagements; what it's dated, and who
+    confirmed it, is each engagement's own (corrected in one, it re-rolled every other using the file). First read:
+    seeded from the library's record of the workbooks confirmed before, so an update changes nothing."""
+    f = _file_dates_file(eid)
+    got = store.read(f, None)
+    if isinstance(got, dict):
+        return got
+    seed = {}
+    for r in _q("SELECT file_id FROM eng_files WHERE engagement_id=?", eid):
+        rec = library.get(r["file_id"], full=True)
+        if rec and rec.get("identity_confirmed"):
+            conf = (rec.get("identity") or {}).get("confirmed") or {}
+            seed[str(rec["id"])] = {"valuation_date": rec.get("valuation_date"), "by": conf.get("by") or "you",
+                                    "why": conf.get("why") or [], "at": conf.get("at") or time.time(), "seeded": True}
+    return store.update(f, lambda cur: cur if isinstance(cur, dict) else seed, None) or {}
+
+
+def _set_file_date(eid: int, fid: int, valuation_date: str | None, by: str, why: list | None = None) -> None:
+    file_dates(eid)  # seeded first
+    store.update(_file_dates_file(eid), lambda cur: {**(cur if isinstance(cur, dict) else {}), str(fid): {
+        "valuation_date": valuation_date, "by": by, "why": why or [], "at": time.time()}}, {})
+
+
 def workbooks(eid: int) -> list[dict]:
     ids = [r["file_id"] for r in _q("SELECT file_id FROM eng_files WHERE engagement_id=? ORDER BY added_at", eid)]
+    dates = file_dates(eid) if ids else {}
     out = []
     for fid in ids:
         rec = library.get(fid, full=True)
         if rec:
             w = {k: rec.get(k) for k in ("id", "filename", "size", "uploaded_at", "status", "step", "pct", "error",
                                          "sheets", "line_items", "target_name", "project_name", "valuation_date",
-                                         "identity_confirmed",
                                          "db_path", "source_path", "identity", "processed_at", "started_at",
                                          "build_secs")}
+            # the date as this engagement has it: confirmed here (by a person or the agents), else as the file says
+            d = dates.get(str(fid))
+            w["identity_confirmed"] = 1 if d else 0
+            if d:
+                w["valuation_date"] = d.get("valuation_date") or w["valuation_date"]
+            w["date_by"], w["date_why"] = (d or {}).get("by"), (d or {}).get("why") or []
             w["sheet_names"] = _sheet_names(w) if w["status"] == "done" and w["db_path"] else []
             out.append(w)
     return out
@@ -289,9 +324,8 @@ def get(eid: int) -> dict | None:
         w.pop("source_path", None)
         ident = w.pop("identity", None) or {}
         w["identity_notes"] = ident.get("notes")
-        conf = ident.get("confirmed") or {}
-        w["identity_by"] = conf.get("by") or ("you" if w.get("identity_confirmed") else None)
-        w["identity_why"] = conf.get("why") or []
+        w["identity_by"] = w.pop("date_by", None) or ("you" if w.get("identity_confirmed") else None)  # this engagement's
+        w["identity_why"] = w.pop("date_why", None) or []
         w["identity_check"] = ident.get("auto_check")  # the agents' check of the date, where it didn't confirm
     import orchestrator  # what runs, and what it's waiting for: the orchestrator's view (reading it starts nothing)
     e["result_stale"] = result_stale(eid, e.get("result"))
@@ -408,7 +442,7 @@ def delete(eid: int) -> dict | None:
         remove_document(d["id"])
     for w in gone:
         library.remove(w["id"])
-        _DATE_CHECKED.difference_update({k for k in _DATE_CHECKED if k[0] == w["id"]})
+        _DATE_CHECKED.difference_update({k for k in _DATE_CHECKED if k[1] == w["id"]})
     with _lock, _conn() as db:
         for t, col in (("facts", "engagement_id"), ("roles", "engagement_id"), ("eng_files", "engagement_id"),
                        ("stages", "engagement_id"), ("runlog", "engagement_id"), ("engagements", "id")):
@@ -483,7 +517,7 @@ def add_upload(eid: int, tmp: Path, filename: str, sha: str, role: str | None = 
 # last year's valuation date, the model's own financial-year end. Confirmed when two or more agree and none
 # disagrees; otherwise the person is asked, and told why.
 
-_DATE_CHECKED: set = set()  # (workbook, date, last year's): weighed in this run
+_DATE_CHECKED: set = set()  # (engagement, workbook, date, last year's): weighed in this run
 _MONTH = r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
 _FILE_MONTH = re.compile(rf"(?i)(?<![a-z]){_MONTH}(?![a-z])[\s_.-]*(\d{{4}}|\d{{2}})(?!\d)")
 
@@ -553,13 +587,18 @@ def _agents_check_dates(eid: int, wbs: list[dict]) -> bool:
     if not w or w.get("status") != "done" or w.get("identity_confirmed") or not w.get("valuation_date") or not w.get("db_path"):
         return False
     prior = _prior_vd(eid)
-    key = (w["id"], w["valuation_date"], prior)
+    key = (eid, w["id"], w["valuation_date"], prior)
     if not prior or key in _DATE_CHECKED:
         return False
     _DATE_CHECKED.add(key)
     ident = (library.get(w["id"], full=True) or {}).get("identity") or {}
     done = ident.get("auto_check") or {}
     if (done.get("date"), done.get("prior")) == (w["valuation_date"], prior):
+        # weighed already, on this file and last year's date (another engagement, or before a restart): the same
+        # evidence, so the same answer, confirmed for this engagement where it agreed
+        if len(done.get("agree") or []) >= 2 and not done.get("disagree"):
+            _set_file_date(eid, w["id"], w["valuation_date"], "agents", done.get("agree"))
+            return True
         return False
     try:
         ev = _date_evidence(eid, w, ident.get("valuation_date_evidence"))
@@ -568,7 +607,7 @@ def _agents_check_dates(eid: int, wbs: list[dict]) -> bool:
         return False
     library.note_identity(w["id"], auto_check={"date": w["valuation_date"], "prior": prior, **ev, "at": time.time()})
     if len(ev["agree"]) >= 2 and not ev["disagree"]:
-        library.confirm_identity(w["id"], "agents", ev["agree"])
+        _set_file_date(eid, w["id"], w["valuation_date"], "agents", ev["agree"])  # this engagement's, not the file's
         return True
     return False
 
@@ -580,10 +619,8 @@ def confirm_date(eid: int, fid: int, valuation_date: str) -> dict:
         raise ValueError("that workbook isn't in this engagement")
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", valuation_date or ""):
         raise ValueError("give the date as YYYY-MM-DD")
-    if valuation_date == w.get("valuation_date"):  # right as it is: confirmed, nothing re-linked
-        library.confirm_identity(fid, "you")
-    else:
-        library.set_identity(fid, w.get("target_name"), w.get("project_name"), valuation_date)
+    # this engagement's judgement: the file is shared, and another engagement using it keeps its own
+    _set_file_date(eid, fid, valuation_date, "you")
     _touch(eid)
     return get(eid)
 
@@ -1042,16 +1079,16 @@ def _wiring(eid: int) -> dict:
     if vd:
         v = int(vd["value"])
         prior_vd = f"{v // 10000:04d}-{v // 100 % 100:02d}-{v % 100:02d}"
-    elif library.get(ov["id"]) and library.get(ov["id"])["valuation_date"]:
-        prior_vd = library.get(ov["id"])["valuation_date"]
+    elif ov.get("valuation_date"):  # the overlay's, as this engagement has it
+        prior_vd = ov["valuation_date"]
     return {"overlay": {"db_path": ov["db_path"], "filename": ov["filename"], "sheets": sheets,
                         "source_path": ov.get("source_path"), "sheets_by": by},
             "prior": {"db_path": prior["db_path"], "filename": prior["filename"],
                       "sheets": sorted(prior["sheets"]) if prior["sheets"] else None,
-                      "valuation_date": (library.get(prior["id"]) or {}).get("valuation_date"),
+                      "valuation_date": prior.get("valuation_date"),
                       "source_path": prior.get("source_path")} if prior else None,
             "current": {"db_path": cur["db_path"], "filename": cur["filename"], "sheets": None,
-                        "valuation_date": (library.get(cur["id"]) or {}).get("valuation_date"),
+                        "valuation_date": cur.get("valuation_date"),
                         "source_path": cur.get("source_path")} if cur else None,
             "client_link": client_link, "prior_valuation_date": prior_vd, "same_file": same_file,
             "client_sheets": copy or None}
@@ -1113,10 +1150,9 @@ def _dates(eid: int) -> dict:
     vd = next((f for f in reference(eid) if f["key"] == "valuation_date" and f.get("value")), None)
     out, confirmed = {}, {}
     for role, key in (("prior_overlay", "overlay"), ("prior_model", "prior_client"), ("current_model", "current_client")):
-        w = _role_wb(eid, role)
-        rec = library.get(w["id"]) if w else None
-        out[key] = (rec or {}).get("valuation_date")
-        confirmed[key] = bool((rec or {}).get("identity_confirmed"))
+        w = _role_wb(eid, role)  # the dates as this engagement has them (file_dates)
+        out[key] = (w or {}).get("valuation_date")
+        confirmed[key] = bool((w or {}).get("identity_confirmed"))
     if vd:
         v = int(vd["value"])
         out["overlay"] = f"{v // 10000:04d}-{v // 100 % 100:02d}-{v % 100:02d}"

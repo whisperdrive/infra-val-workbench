@@ -1075,6 +1075,33 @@ def typed_ends_check(first: int) -> None:
           "them pointing at typed figures: paired, held, nothing under them moving; a mid no longer the ends' midpoint holds)")
 
 
+def shared_dates_check(first: int) -> None:
+    """A workbook is shared by its content across engagements; its valuation date, and who confirmed it, is each
+    engagement's own: corrected in another engagement using the same client model, this one's date, roll and result
+    stay as they are (they re-rolled to the other's date, unflagged); the other's is the person's, not "the agents'"."""
+    cur_id = wb.roles(first)["current_model"]["id"]
+    mine = lambda e: next(w for w in wb.workbooks(e) if w["id"] == cur_id)
+    vd, key = mine(first)["valuation_date"], orc.inputs(first, "rebuild", orc._snapshot(first))
+    e2 = wb.create("Asset A, FY26 (the same model, another date)")["id"]
+    upload(e2, PACK_A[3])  # this year's client model alone: the same file, shared
+    assert any(w["id"] == cur_id for w in wb.workbooks(e2)), wb.workbooks(e2)
+    wb.confirm_date(e2, cur_id, "2026-12-31")
+    w2 = mine(e2)
+    assert (w2["valuation_date"], w2["identity_confirmed"]) == ("2026-12-31", 1), w2
+    assert wb.get(e2)["workbooks"][0]["identity_by"] == "you"
+    assert mine(first)["valuation_date"] == vd and orc.inputs(first, "rebuild", orc._snapshot(first)) == key
+    t0 = time.time()
+    while True:
+        try:
+            wb.delete(e2)
+            break
+        except ValueError as ex:
+            assert "wait for" in str(ex) and time.time() - t0 < 120, ex
+            time.sleep(0.5)
+    print("shared dates: ok (a shared client model's date corrected in another engagement: this one's date, roll and "
+          "rebuild as they were; the other's confirmed by the person)")
+
+
 def damaged_check(eid: int) -> None:
     """A file of a person's decisions damaged (a crash mid-save before saves were made whole, an edit by hand): never
     read as empty in silence. It's moved aside and kept, and the value holds until the person has made the decisions
@@ -1873,6 +1900,7 @@ def main() -> None:
     methods_check(eid)
     failures_check(eid)
     typed_ends_check(eid)
+    shared_dates_check(eid)
     damaged_check(eid)
     rows_context_check(eid)
     gating_check(eid)
