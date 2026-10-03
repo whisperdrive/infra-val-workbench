@@ -341,7 +341,9 @@ dialog#uploadDlg { border: 1px solid var(--rule-strong); border-radius: 10px; ba
 .dlg-head h2 { margin: 0; font-size: 16px; flex: 1; }
 .dlg-body { padding: 16px 18px 22px; display: grid; gap: 16px; }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; }
-table.specs { border-collapse: collapse; min-width: 860px; }
+table.specs { border-collapse: collapse; min-width: 860px; width: 100%; table-layout: fixed; }
+table.specs td { text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+table.specs thead tr:last-child th:not(:first-child) { text-align: right; white-space: normal; overflow-wrap: break-word; line-height: 1.3; }
 table.specs th[scope="row"] { text-align: left; font-weight: 600; position: sticky; left: 0; background: var(--surface); min-width: 210px; }
 table.specs td, table.specs th { padding: 5px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; font-size: 13px; }
 table.specs thead th { font-size: 12px; text-align: left; vertical-align: bottom; }
@@ -1592,7 +1594,7 @@ function bridgeSpec(steps, title, units, tied, step) {
 function flowsSpec(ch, units, years) {
   const ys = ch.years || [], s = ch.series || {};
   const series = [["last_year", "Last year's forecast"], ["this_year", "This year's forecast"]].filter(([k]) => s[k]).map(([k, name]) => ({name, range: (ch.rows || []).join(", "), data: ys.map(y => s[k][y] ?? null)}));
-  return {title: "Undiscounted forecast cash flows by financial year", kind: "bar", units: units || "", labels: ys, period_labels: ys, frequency: "annual", sign: 1, series,
+  return {title: "Undiscounted forecast cash flows by financial year", kind: "line", units: units || "", labels: ys, period_labels: ys, frequency: "annual", sign: 1, series,
     highlight: (years || []).map(y => ys.indexOf(y)).filter(i => i >= 0)};
 }
 function viewResult() {
@@ -1848,7 +1850,7 @@ function compareCard(R) {
     `<tr class="${r.flag ? "spec-flag" : ""}"><th scope="row">${esc(r.label)}${r.flag ? ` <span class="pill warn" title="Last year's report, overlay and rebuild should agree here">differ</span>` : ""}${r.note ? `<div class="small muted" style="font-weight:400">${esc(r.note)}</div>` : ""}</th>${r.cells.map((c, i) => `<td class="${c && (c.t === "num" || c.t === "n" || c.t === "pct" || c.t === "x") ? "num" : ""}${i >= 4 ? " spec-now" : ""}">${fmt(c)}</td>`).join("")}</tr>`).join("")).join("");
   return `<div class="card" id="compareCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">The models side by side</h2>${flags ? `<span class="pill warn">${flags} row${flags > 1 ? "s" : ""} where last year's don't agree</span>` : `<span class="pill ok">last year's agree</span>`}</div>
     <p class="sub">Each model's specifications in one place: the report, the overlay as Excel saved it and the rebuild should agree; the client models show the rows the value reads, in their own units; this year is rolled forward. Hover a figure for its source.</p>
-    <div class="scroll"><table class="specs"><thead><tr><th></th><th colspan="4" class="spec-grp">Last year</th><th colspan="2" class="spec-grp spec-now">This year</th></tr>
+    <div class="scroll"><table class="specs"><colgroup><col style="width:240px">${S.columns.map(() => "<col>").join("")}</colgroup><thead><tr><th></th><th colspan="4" class="spec-grp">Last year</th><th colspan="2" class="spec-grp spec-now">This year</th></tr>
       <tr><th></th>${S.columns.map((c, i) => `<th class="${i >= 4 ? "spec-now" : ""}">${esc(c.label)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div></div>`;
 }
 function linesCard(R) {

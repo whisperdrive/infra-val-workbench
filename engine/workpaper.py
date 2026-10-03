@@ -324,10 +324,11 @@ def _flows(S: _Sheet, book, res: dict):
         a, b = _num(ly.get(y)), _num(ty.get(y))
         S.line(y, a, b, b - a if a is not None and b is not None else None, fs=[None, f["num"], f["num"], f["chg"]])
     first, last = top + 1, top + len(C["years"])
-    ch = book.add_chart({"type": "column"})
-    for c, name, fill in ((1, "Last year's model", "#9aa7b4"), (2, "This year's model", ACCENT)):
+    ch = book.add_chart({"type": "line"})  # a line, as on the page: two forecasts' shapes over the years
+    for c, name, colour in ((1, "Last year's model", "#9aa7b4"), (2, "This year's model", ACCENT)):
         ch.add_series({"name": name, "categories": ["Cash flows", first, 0, last, 0],
-                       "values": ["Cash flows", first, c, last, c], "fill": {"color": fill}, "border": {"none": True}, "gap": 80})
+                       "values": ["Cash flows", first, c, last, c], "line": {"color": colour, "width": 2.25},
+                       "marker": {"type": "none"}})
     ch.set_title({"name": f"Cash flows by financial year ({_units(res)})", "name_font": {"size": 11}})
     ch.set_legend({"position": "bottom"})
     ch.set_y_axis({"num_format": "#,##0", "major_gridlines": {"visible": True, "line": {"color": "#e5e5e5"}}})
