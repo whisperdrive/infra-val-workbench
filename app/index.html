@@ -789,6 +789,8 @@ function heroSide(st, needs) {
   return `<div class="t">Nothing running</div><div class="small muted">${waiting ? `${esc(RAIL_NAME[waiting.stage])}: ${esc(waiting.note || "waiting for the step before it")}` : "Up to date with the files."}</div>${forYou}`;
 }
 const answerIn = secs => secs < 45 ? "The answer in under a minute" : `The answer in about ${secs < 90 ? "a minute" : `${Math.round(secs / 60)} min`}`;
+// the needs a card answers for (its "Go" lands here), listed on it with their Acknowledge buttons
+const cardNeeds = test => { const ns = (E.run?.needs || []).filter(n => test(n.id)); return ns.length ? needsList(ns) : ""; };
 function needsList(needs) {
   const pill = s => s === "block" ? `<span class="pill bad">Blocking</span>` : s === "check" ? `<span class="pill warn">Check</span>` : `<span class="pill">Note</span>`;
   const ackBtn = x => x.acked ? `<button class="btn small" type="button" data-unack="${esc(x.id)}" title="Take the acknowledgement back: the check holds again">Take back</button>`
@@ -1612,7 +1614,7 @@ function viewResult() {
       <div><h2>Last year to this year</h2><p class="sub" style="margin:0">${esc(u)} · equity value, ${R.head?.basis === "cum" ? "cum-distribution" : "ex-distribution"} · ${rateNow(R)?.applied ? `at this year's discount rate, ${esc(rateRange(rateNow(R).low, rateNow(R).high))}` : "at last year's discount rate"}${B.valuation_date ? ` · to ${esc(B.valuation_date)}` : ""}${heldNote(R)}</p></div>
       <div class="row">${state.hl?.step ? hlNote(STEP_SHORT[state.hl.step] || state.hl.step) : ""}<a class="btn small" href="${workpaperUrl()}" download title="The result, the bridge, the cash flows, the inputs and their checks, the facts, the review and the run log, as an Excel file">Export workpaper</a><div class="seg" role="group" aria-label="Which end">${["low", "mid", "high"].map(k => `<button type="button" data-end="${k}" class="${end === k ? "on" : ""}" aria-pressed="${end === k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div></div></div>
     ${from != null && to != null && !B.held ? `<div class="move"><span class="from">${vN(from)}</span><span class="muted">→</span><span class="to">${vN(to)}</span><span class="${to - from >= 0 ? "okt" : "warnt"}">${signed(to - from)}</span><span class="small muted">the ${end}${end === "mid" ? (R.methods?.preferred === "mid_rate" ? ", at the midpoint rate (the method preferred)" : ", the midpoint of the low and the high") : ""}</span></div>` : ""}
-    ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until what needs you is settled (rows to find, terms to confirm, cash flows to check): the bridge stops at last year's rebuilt value.</div>` : ""}
+    ${B.held ? `<div class="callout warn small" style="margin:10px 0">This year's value is held back until what needs you is settled (rows to find, terms to confirm, cash flows to check): the bridge stops at last year's rebuilt value.</div>` : ""}${cardNeeds(id => id === "damaged")}
     <div class="grid2" style="margin-top:10px"><div id="brChart"></div><div class="scroll"><table class="bridge"><thead><tr><th>Step</th><th class="num">Change</th><th class="num">Value</th></tr></thead><tbody>${rows}</tbody></table>
     ${(B.notes || []).length ? `<p class="small muted">${esc(B.notes.join("; "))}</p>` : ""}</div></div></div>
   ${ackedFold}
@@ -1676,7 +1678,8 @@ function bindRate() {
 // This year's value worked out other ways (engine/methods.py), each against the default; the one you prefer is this
 // year's value, with a bridge step of its own.
 function methodsCard(R) {
-  const M = R.methods; if (!M?.methods?.length) return M?.error ? `<div class="card" id="methodsCard"><h2>Methods</h2><p class="small muted">${esc(M.error)}</p></div>` : "";
+  const mNeeds = cardNeeds(id => id === "basis-method" || id === "method");
+  const M = R.methods; if (!M?.methods?.length) return M?.error ? `<div class="card" id="methodsCard"><h2>Methods</h2><p class="small muted">${esc(M.error)}</p>${mNeeds}</div>` : "";
   const rs = stageOf("result"), pending = busy(rs.status);
   const d = x => x == null ? `<span class="muted">–</span>` : Math.abs(x) < 0.05 ? `<span class="muted">same</span>` : signed(x);
   const lab = k => (M.methods.find(m => m.key === k) || {}).label || k;
@@ -1695,7 +1698,7 @@ function methodsCard(R) {
   if (prev && prev !== M.preferred && prev !== M.default && M.methods.find(m => m.key === prev)?.ok) back.push(`<button class="linkbtn" type="button" data-method="${esc(prev)}" data-label="${esc(lab(prev))}" ${pending ? "disabled" : ""}>Back to ${esc(lab(prev).toLowerCase())}</button>`);
   return `<div class="card" id="methodsCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Methods</h2><span class="row" style="gap:6px">${pending ? `<span class="pill info">recomputing the bridge</span>` : ""}${M.ties ? `<span class="pill ok">the recompute ties to the overlay</span>` : `<span class="pill warn" title="Recomputed in code, the overlay's own convention doesn't give the overlay's figure: the recomputed methods aren't like for like">the recompute doesn't tie</span>`}</span></div>
     <p class="sub">This year's value worked out other ways, on the same rolled-forward model and rates. The default is the overlay's own formulas with the periods ending on or before the new date cut off. <b>Prefer</b> makes a method this year's value: the bridge gets a "Method" step for the move from the default, and the choice is recorded with who made it and when.${M.flags?.length ? " The overlay's own forecast flags were found and rolled as a method of their own." : ""}</p>
-    ${who ? `<p class="small" style="margin:0 0 8px">${who}</p>` : ""}
+    ${who ? `<p class="small" style="margin:0 0 8px">${who}</p>` : ""}${mNeeds}
     <div class="scroll"><table class="stack-sm"><thead><tr><th>Method</th><th class="num">Low</th><th class="num">Mid</th><th class="num">High</th><th class="num">Mid vs default</th><th></th></tr></thead><tbody>${M.methods.map(row).join("")}</tbody></table></div>
     ${back.length ? `<p class="small" style="margin:8px 0 0">${back.join(" · ")}</p>` : ""}</div>`;
 }
@@ -1786,7 +1789,7 @@ function agentsCard() {
 // This year's cash flows against last year's, discounting by discounting (cashflows.py): how each is built and whether
 // the app cuts it off and time-checks it on the roll, the bridge's new-forecast step split into what moved, the checks.
 function flowsCard(R) {
-  const F = R.flows; if (!F?.cores?.length) return F?.error ? `<div class="card" id="flowsCard"><h2>This year's cash flows against last year's</h2><p class="small muted">The comparison couldn't run: ${esc(F.error)}</p></div>` : "";
+  const F = R.flows; if (!F?.cores?.length) return F?.error ? `<div class="card" id="flowsCard"><h2>This year's cash flows against last year's</h2><p class="small muted">The comparison couldn't run: ${esc(F.error)}</p>${cardNeeds(id => id.startsWith("cf-"))}</div>` : "";
   const S = R.flow_checks?.split || {}, end = state.bridgeEnd;
   const both = S.low && S.high && !S.low.why && !S.high.why;
   const sp = end === "mid" ? (both ? Object.fromEntries(Object.keys(S.low).map(k => [k, S.low[k] == null || S.high[k] == null ? null : (S.low[k] + S.high[k]) / 2])) : null) : S[end];
@@ -1841,7 +1844,8 @@ function drivesCard(R) {
     ${D.groups.map(g => fold(`drv-${g.group}`, esc(g.group), `${g.inputs.length} input row(s)`, `<div class="scroll"><table class="stack-sm">${head}<tbody>${g.inputs.map(line).join("")}</tbody></table></div>`)).join("")}</div>`;
 }
 function compareCard(R) {
-  const S = R.specs; if (!S?.sections?.length) return S?.error ? `<div class="card" id="compareCard"><h2>The models side by side</h2><p class="small muted">${esc(S.error)}</p></div>` : "";
+  const sNeeds = cardNeeds(id => ["basis", "interest", "interest-two", "interest-error"].includes(id));
+  const S = R.specs; if (!S?.sections?.length) return S?.error || sNeeds ? `<div class="card" id="compareCard"><h2>The models side by side</h2>${S?.error ? `<p class="small muted">${esc(S.error)}</p>` : ""}${sNeeds}</div>` : "";
   const fmt = c => { if (!c || c.v == null) return `<span class="muted">–</span>`;
     const v = c.t === "num" ? vN(c.v) : c.t === "n" ? String(c.v) : c.t === "pct" ? vPct(c.v) : c.t === "x" ? `${Number(c.v).toFixed(2)}x` : esc(String(c.v));
     return c.src ? `<span title="${esc(c.src)}">${v}</span>` : v; };
@@ -1849,7 +1853,7 @@ function compareCard(R) {
   const body = S.sections.map(s => `<tr class="spec-sec"><th colspan="${S.columns.length + 1}">${esc(s.title)}</th></tr>` + s.rows.map(r =>
     `<tr class="${r.flag ? "spec-flag" : ""}"><th scope="row">${esc(r.label)}${r.flag ? ` <span class="pill warn" title="Last year's report, overlay and rebuild should agree here">differ</span>` : ""}${r.note ? `<div class="small muted" style="font-weight:400">${esc(r.note)}</div>` : ""}</th>${r.cells.map((c, i) => `<td class="${c && (c.t === "num" || c.t === "n" || c.t === "pct" || c.t === "x") ? "num" : ""}${i >= 4 ? " spec-now" : ""}">${fmt(c)}</td>`).join("")}</tr>`).join("")).join("");
   return `<div class="card" id="compareCard"><div class="row" style="justify-content:space-between"><h2 style="margin:0">The models side by side</h2>${flags ? `<span class="pill warn">${flags} row${flags > 1 ? "s" : ""} where last year's don't agree</span>` : `<span class="pill ok">last year's agree</span>`}</div>
-    <p class="sub">Each model's specifications in one place: the report, the overlay as Excel saved it and the rebuild should agree; the client models show the rows the value reads, in their own units; this year is rolled forward. Hover a figure for its source.</p>
+    <p class="sub">Each model's specifications in one place: the report, the overlay as Excel saved it and the rebuild should agree; the client models show the rows the value reads, in their own units; this year is rolled forward. Hover a figure for its source.</p>${sNeeds}
     <div class="scroll"><table class="specs"><colgroup><col style="width:240px">${S.columns.map(() => "<col>").join("")}</colgroup><thead><tr><th></th><th colspan="4" class="spec-grp">Last year</th><th colspan="2" class="spec-grp spec-now">This year</th></tr>
       <tr><th></th>${S.columns.map((c, i) => `<th class="${i >= 4 ? "spec-now" : ""}">${esc(c.label)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div></div>`;
 }
