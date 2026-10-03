@@ -200,7 +200,10 @@ def file_dates(eid: int) -> dict:
     if isinstance(got, dict):
         return got
     seed = {}
-    for r in _q("SELECT file_id FROM eng_files WHERE engagement_id=?", eid):
+    # an engagement that ran before per-engagement dates keeps the dates it ran on (the library's record of its
+    # files); a new one starts with none of its own (a date another engagement set isn't its)
+    ran = _q("SELECT 1 FROM stages WHERE engagement_id=? AND finished_at IS NOT NULL LIMIT 1", eid)
+    for r in (_q("SELECT file_id FROM eng_files WHERE engagement_id=?", eid) if ran else []):
         rec = library.get(r["file_id"], full=True)
         if rec and rec.get("identity_confirmed"):
             conf = (rec.get("identity") or {}).get("confirmed") or {}
@@ -210,9 +213,15 @@ def file_dates(eid: int) -> dict:
 
 
 def _set_file_date(eid: int, fid: int, valuation_date: str | None, by: str, why: list | None = None) -> None:
+    """This engagement's date for a file: the agents' never replaces a person's."""
     file_dates(eid)  # seeded first
-    store.update(_file_dates_file(eid), lambda cur: {**(cur if isinstance(cur, dict) else {}), str(fid): {
-        "valuation_date": valuation_date, "by": by, "why": why or [], "at": time.time()}}, {})
+
+    def change(cur):
+        cur = cur if isinstance(cur, dict) else {}
+        if by != "you" and (cur.get(str(fid)) or {}).get("by") == "you":
+            return None
+        return {**cur, str(fid): {"valuation_date": valuation_date, "by": by, "why": why or [], "at": time.time()}}
+    store.update(_file_dates_file(eid), change, {})
 
 
 def workbooks(eid: int) -> list[dict]:
@@ -231,6 +240,8 @@ def workbooks(eid: int) -> list[dict]:
             w["identity_confirmed"] = 1 if d else 0
             if d:
                 w["valuation_date"] = d.get("valuation_date") or w["valuation_date"]
+            else:  # as the file says (its own reading), not a date another engagement wrote into the shared record
+                w["valuation_date"] = (rec.get("identity") or {}).get("valuation_date") or w["valuation_date"]
             w["date_by"], w["date_why"] = (d or {}).get("by"), (d or {}).get("why") or []
             w["sheet_names"] = _sheet_names(w) if w["status"] == "done" and w["db_path"] else []
             out.append(w)
@@ -577,6 +588,16 @@ def _date_evidence(eid: int, w: dict, cited: str | None) -> dict:
     return {"agree": agree, "disagree": disagree}
 
 
+EXPECTED = ("a year after last year's", "the model's financial year ends")  # what any date a year on would say
+
+
+def _date_agreed(ev: dict) -> bool:
+    """Two or more signals agree, none disagrees, and one of them is the file's own (another cell holding the date,
+    its name): "a year on" and "the financial year's end" agree with any month-end a year on, unread."""
+    agree = ev.get("agree") or []
+    return len(agree) >= 2 and not ev.get("disagree") and any(not a.startswith(EXPECTED) for a in agree)
+
+
 def _agents_check_dates(eid: int, wbs: list[dict]) -> bool:
     """This year's client model's valuation date, weighed once per date and last year's date (in this run, and kept
     with the workbook's identity across a restart): confirmed by the agents where two or more signals agree and
@@ -596,7 +617,7 @@ def _agents_check_dates(eid: int, wbs: list[dict]) -> bool:
     if (done.get("date"), done.get("prior")) == (w["valuation_date"], prior):
         # weighed already, on this file and last year's date (another engagement, or before a restart): the same
         # evidence, so the same answer, confirmed for this engagement where it agreed
-        if len(done.get("agree") or []) >= 2 and not done.get("disagree"):
+        if _date_agreed(done):
             _set_file_date(eid, w["id"], w["valuation_date"], "agents", done.get("agree"))
             return True
         return False
@@ -606,7 +627,7 @@ def _agents_check_dates(eid: int, wbs: list[dict]) -> bool:
         traceback.print_exc()
         return False
     library.note_identity(w["id"], auto_check={"date": w["valuation_date"], "prior": prior, **ev, "at": time.time()})
-    if len(ev["agree"]) >= 2 and not ev["disagree"]:
+    if _date_agreed(ev):
         _set_file_date(eid, w["id"], w["valuation_date"], "agents", ev["agree"])  # this engagement's, not the file's
         return True
     return False
@@ -1108,6 +1129,11 @@ def _wiring(eid: int) -> dict:
 
 
 def _overlay(eid: int) -> None:
+    with _session_lock(eid):  # the build and its publishing whole, one at a time per engagement
+        _overlay_build(eid)
+
+
+def _overlay_build(eid: int) -> None:
     import overlay as ovmod
     e = _q("SELECT name FROM engagements WHERE id=?", eid)[0]
     step = lambda frac, msg: _set("engagements", eid, overlay_status="running", overlay_step=msg,
@@ -1142,6 +1168,7 @@ def this_year_date(eid: int) -> str | None:
 
 def set_this_year_date(eid: int, valuation_date: str | None) -> dict:
     """Set (or clear, with None) this year's valuation date for the engagement: the roll-forward runs to it."""
+    _exists(eid)
     if valuation_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", valuation_date):
         raise ValueError("give the date as YYYY-MM-DD")
     last = _dates(eid)["dates"]
@@ -1179,6 +1206,26 @@ def balances_file(eid: int) -> Path:
     return OUT / "overlays" / f"e{eid}" / "balances.json"
 
 
+def _balance_decisions_still(eid: int, sess) -> dict:
+    """A person's balance choices still of the balance they were made on: last year's client model the same file, and
+    the row at that cell the same label (a replaced model reassigned a choice by its cell alone)."""
+    import overlay as ovmod
+    rl, out = roles(eid), {}
+    fid = (rl.get("prior_model") or rl.get("prior_overlay") or {}).get("id")
+    labels = (sess.prior or sess.ov).labels()
+    for cell, d in balance_decisions(eid).items():
+        if not isinstance(d, dict) or (d.get("file") is not None and d["file"] != fid):
+            continue
+        try:
+            s_, r_, _c = ovmod.parse_a1(cell)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if d.get("label") and _plain(labels.get((s_, r_), "")) != _plain(d["label"]):
+            continue
+        out[cell] = d
+    return out
+
+
 def balance_decisions(eid: int) -> dict:
     """A person's choices for the balances the overlay reads at the valuation date (overlay.balance_cells): {"Sheet!A1":
     {"keep": True (at its own date) / False (at this year's), "label", "by", "at"}}."""
@@ -1189,18 +1236,22 @@ def balance_decisions(eid: int) -> dict:
 def set_balance(eid: int, cell: str, keep: bool | None) -> dict:
     """Keep a balance at its own date (keep True), read it at this year's (False), or back to the app's choice (None).
     Only a balance the result lists."""
+    _exists(eid)
     res = (get(eid) or {}).get("result") or {}
     bal = (((res.get("figures") or {}).get("feed") or {}).get("balances")) or {}
     item = next((x for k in ("moved", "kept", "unmoved") for x in bal.get(k) or [] if x.get("cell") == cell), None)
     if not item:
         raise ValueError(f"{cell} isn't a balance the value reads at the valuation date")
 
+    rl = roles(eid)
+    fid = (rl.get("prior_model") or rl.get("prior_overlay") or {}).get("id")  # last year's client model, where it's read
+
     def change(got):
         got = got if isinstance(got, dict) else {}
         if keep is None:
             got.pop(cell, None)
         else:
-            got[cell] = {"keep": bool(keep), "label": item.get("label") or "", "by": "you", "at": time.time()}
+            got[cell] = {"keep": bool(keep), "label": item.get("label") or "", "by": "you", "at": time.time(), "file": fid}
         return got
     store.update(balances_file(eid), change, {})
     if eid in _SESSIONS:
@@ -1355,11 +1406,12 @@ def set_this_year_rate(eid: int, low, high=None) -> dict:
     """This year's discount rate (low None: back to last year's): a range's two ends, or one rate for both. The low
     end of the value is at the higher rate, whichever order they're given in. The roll-forward runs at it, and the
     bridge has a step of its own for it."""
+    _exists(eid)
     a, b = _rate_in(low), _rate_in(high)
     f = rate_file(eid)
     if a is None and b is None:
         with store.lock(f):
-            f.unlink(missing_ok=True)
+            store._retry(lambda: f.unlink(missing_ok=True))
         got = {}
     else:
         a, b = (a, b if b is not None else a) if a is not None else (b, b)
@@ -1408,6 +1460,7 @@ def confirm_term(eid: int, row: str, ok: bool, label: str | None = None) -> dict
     """Confirm a term this year's model adds belongs in this year's value, or one it drops is gone (ok), or take that
     back; kept with its label and the file it's in (_terms_still). The gate then works out whether the value can be
     shown again."""
+    _exists(eid)
     fid = (roles(eid).get("prior_model" if row.startswith("was:") else "current_model") or {}).get("id")
 
     def change(got):
@@ -1438,6 +1491,7 @@ def acks(eid: int) -> dict:
 
 def acknowledge(eid: int, nid: str, key: str | None, reason: str = "", title: str = "") -> dict:
     """Acknowledge a check on the figures it found (key), with the reason; key None takes it back."""
+    _exists(eid)
     def change(got):
         got = got if isinstance(got, dict) else {}
         if key:
@@ -1470,6 +1524,7 @@ def method_choice(eid: int) -> dict | None:
 def set_method(eid: int, key: str | None) -> dict:
     """The method this year's value is worked out by (None: the default). The bridge then has a step of its own
     for the move from the default to it."""
+    _exists(eid)
     import methods
     if key not in (None, "", methods.DEFAULT):
         if key not in methods.LABEL:
@@ -1497,6 +1552,7 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
     if getattr(sess, "horizon_set", None) != want:
         sess.horizon_set = want
         sess._pshift.clear()
+    _reload_picks(eid, sess)  # the row picks as the file has them now
     summary["held_values"] = _held_checked(eid, sess, summary)  # this year's figures a person set, while still theirs
     summary["this_year_rate"] = this_year_rate(eid)  # and this year's discount rate (result.this_year_rate)
     summary["method"] = preferred_method(eid)  # and the method this year's value is worked out by (methods.py)
@@ -1505,9 +1561,9 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
     # the files the engagement's checks are worked out on: an acknowledgement is of a check on these (result.hold)
     summary["files_key"] = sorted([k, r.get("kind"), r.get("id")] for k, r in roles(eid).items())
     summary["acks"] = acks(eid)  # and the checks a person acknowledged, with the reason (result.hold)
-    summary["damaged"] = store.damaged(OUT / "overlays" / f"e{eid}")  # and their files that couldn't be read
     roll = summary.get("roll")
     if not roll or not summary["wiring"].get("current"):
+        summary["damaged"] = store.damaged(OUT / "overlays" / f"e{eid}")  # (as at the end)
         return
     if roll.get("date_cells_plan") != ovmod.DATE_CELLS:
         # traced by older rules (before every date the discountings read was moved, their periods cut off, a date their
@@ -1533,16 +1589,35 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
         # the balances the value reads at last year's valuation date: read at this year's date (overlay.balance_cells)
         roll["balance_cells"] = ovmod.deep(ovmod.balance_cells, sess, summary) if sess.base_vd is not None else []
         roll["balances_plan"], roll["balances_vd"] = ovmod.BALANCES, roll.get("prior_valuation_date")
-    summary["balance_decisions"] = balance_decisions(eid)  # and the balances a person keeps at their own date, or not
+    summary["balance_decisions"] = _balance_decisions_still(eid, sess)  # and the balances a person keeps at their own date
     ovmod.set_balances(sess, roll.get("balance_cells"), summary["balance_decisions"])
     roll["confirmed"] = now["confirmed"]
+    summary["damaged"] = store.damaged(OUT / "overlays" / f"e{eid}")  # last: every decision file above read by now
+
+
+_SESSION_LOCKS: dict = {}
+_SESSION_GUARD = threading.Lock()
+
+
+def _session_lock(eid: int) -> threading.RLock:
+    """One build of an engagement's session at a time (a job and a page request after a restart both built one, and
+    the later won, without a pick made on the other)."""
+    with _SESSION_GUARD:
+        return _SESSION_LOCKS.setdefault(eid, threading.RLock())
 
 
 def overlay_session(eid: int):
     """The live module for an engagement, loaded from its saved build after a restart."""
-    import overlay as ovmod
     if eid in _SESSIONS:
         return _SESSIONS[eid]
+    with _session_lock(eid):
+        if eid in _SESSIONS:
+            return _SESSIONS[eid]
+        return _overlay_session(eid)
+
+
+def _overlay_session(eid: int):
+    import overlay as ovmod
     rows = _q("SELECT overlay_json FROM engagements WHERE id=?", eid)
     summary = json.loads(rows[0]["overlay_json"] or "null") if rows else None
     if not summary or not Path(summary["module"]).exists():
@@ -1913,7 +1988,33 @@ def _load_rowpicks(eid: int, sess) -> int:
                         now[a] = {**was, "to": b["to"], "card": b["card"]}
             return now
         _update_rowpicks(eid, merge)
+    sess.picks_state = _picks_state(eid)  # what the session holds is the file as it is now (_sync_roll compares)
     return stale
+
+
+def _picks_state(eid: int) -> str | None:
+    """rowpicks.json as it is on disk, to tell whether the session's picks are the file's."""
+    f = _rowpicks_file(eid)
+    try:
+        return f.read_text(encoding="utf-8") if f.exists() else None
+    except OSError:
+        return None
+
+
+def _reload_picks(eid: int, sess) -> None:
+    """The session's picks from the file again, where it changed since they were loaded (a pick made while the session
+    was being built, a damaged file moved aside, another session's write): the session never applies picks the file
+    doesn't hold, nor misses one it does."""
+    if not sess.rowmap or getattr(sess, "picks_state", None) == _picks_state(eid):
+        return
+    import overlay as ovmod
+
+    def again():
+        sess.rowmap.picks.clear()
+        sess.rowmap.pick_by.clear()
+        sess.rowmap._cache.clear()
+        _load_rowpicks(eid, sess)
+    ovmod.deep(again)
 
 
 def _read_rowpicks(eid: int) -> dict:
@@ -2082,6 +2183,12 @@ def row_info(eid: int, prior_row: str) -> dict:
     return ovmod.deep(row_found, sess, *_row_ref(prior_row), origins)
 
 
+def _exists(eid: int) -> None:
+    """A decision is for an engagement that exists (one deleted, or never made, isn't given a folder)."""
+    if not _q("SELECT 1 FROM engagements WHERE id=?", eid):
+        raise ValueError("no such engagement")
+
+
 def _worked(f: Path):
     """A worked-out file (the agents' run, the doctor's diagnosis): its contents, or None where it's missing or doesn't
     parse (it's worked out again; a person's decisions are kept apart, in store.py's files)."""
@@ -2242,27 +2349,26 @@ def doctor_holds(eid: int, cells: list[str] | None, release: bool = False) -> di
     """Hold the doctor's safe cells at Excel's saved value on every feed (cells: all of them when None), or
     release every hold. Only cells the doctor found safe can be held."""
     import overlay as ovmod
+    _exists(eid)
     f = _holds_file(eid)
-    held = store.read(f, {}) or {}
-    if release:
-        held = {}
-    else:
+    new = {}
+    if not release:
         res = _worked(_doctor_file(eid))
         safe = {h["cell"]: h for h in ((res or {}).get("evidence", {}).get("holds") or {}).get("safe") or []}
         if not safe:
             raise ValueError("the doctor found nothing that can be held: run it first")
-        pick = [c for c in (cells or list(safe)) if c in safe]
+        pick = [c for c in (cells if cells is not None else list(safe)) if c in safe]
         sess, summary = overlay_session(eid)
         with rodb.connect(sess.ov.path) as db:
             for c in pick:
                 k = ovmod.parse_a1(c)
                 row = db.execute("SELECT formula FROM cells WHERE sheet=? AND row=? AND col=?", k).fetchone()
-                held[c] = {"value": safe[c]["value"], "formula": row[0] if row else None, "why": safe[c]["title"],
-                           "at": time.time()}
-    store.write(f, held)
-    if eid in _SESSIONS:
-        import overlay as ovmod
-        ovmod.deep(_load_holds, eid, _SESSIONS[eid][0])
+                new[c] = {"value": safe[c]["value"], "formula": row[0] if row else None, "why": safe[c]["title"],
+                          "at": time.time()}
+    # merged into the file as it is now, one change at a time (two quick clicks both land)
+    store.update(f, lambda cur: {} if release else {**(cur if isinstance(cur, dict) else {}), **new}, {})
+    # (the rebuild's inputs, holds.json: it runs again on them, and loads them)
+    _touch(eid)
     return doctor_view(eid)
 
 

@@ -271,12 +271,19 @@ def _balances(sess, summary: dict) -> dict:
     labels = pri.labels()
     iso = lambda v: ov.to_date(v).isoformat()
     num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    def fc(s_, r_, b):  # last year's model's forecast of the balance at the date it's read at this year
+        c0 = pri.column_of(s_, b)
+        return num(pri.value(s_, r_, c0)) if c0 is not None else None
     moved = [{"row": f"{s_}!r{r_}", "col": c_, "cell": ov._a1(s_, r_, pri.column_of(s_, a) or c_),
               "label": labels.get((s_, r_), ""), "from": iso(a), "to": iso(b),
               "now": f"{s2}!r{r2}", "last": num(pri.value(s_, r_, pri.column_of(s_, a) or c_)), "this": num(cur.value(s2, r2, c3)),
-              "by": _by,
+              "forecast": fc(s_, r_, b), "by": _by,
+              "dcf": bool((getattr(sess, "balances", {}).get((s_, r_)) or {}).get("dcf")),
               "yours": (summary.get("balance_decisions") or {}).get(ov._a1(s_, r_, pri.column_of(s_, a) or c_), {}).get("keep") is False}
              for (s_, r_, c_), (a, b, s2, r2, c3, _by) in sorted(getattr(sess, "moved", {}).items())]
+    for x in moved:  # this year's figure against last year's forecast of it: how far off
+        f, t = x["forecast"], x["this"]
+        x["off"] = round(abs(t - f) / max(abs(f), 1e-9), 4) if isinstance(f, float) and isinstance(t, float) and f else None
     unmoved = [{"row": f"{s_}!r{r_}", "col": c_, "cell": ov._a1(s_, r_, c_), "label": labels.get((s_, r_), ""), "why": why,
                 "last": num(pri.value(s_, r_, c_))} for (s_, r_, c_), why in sorted(getattr(sess, "unmoved", {}).items())]
     after = []
@@ -299,9 +306,13 @@ def _balances(sess, summary: dict) -> dict:
         d = ov.serial(ov.date.fromisoformat(x["date"]))
         hit = sess.rowmap.locate(s_, r_) if sess.rowmap else None
         c2 = cur.column_of(hit[0], d) if hit else None
+        stood = (s_, r_, c_) in (getattr(sess, "kept_stood", {}) or {})
         kept.append({"row": f"{s_}!r{r_}", "col": c_, "cell": ov._a1(s_, r_, c_), "label": labels.get((s_, r_), ""),
-                     "date": x["date"], "why": why, "yours": why.endswith("by you"), "last": num(pri.value(s_, r_, c_)),
-                     "this": num(cur.value(hit[0], hit[1], c2)) if c2 is not None else None})
+                     "date": x["date"], "why": why + ("; this year's model has no column at that date, so last year's "
+                                                      "figure stands in" if stood else ""),
+                     "yours": why.endswith("by you"), "by_label": why.startswith("labelled"), "stood": stood,
+                     "last": num(pri.value(s_, r_, c_)),
+                     "this": num(pri.value(s_, r_, c_)) if stood else num(cur.value(hit[0], hit[1], c2)) if c2 is not None else None})
     return {"moved": moved, "unmoved": unmoved, "after": after, "kept": kept}
 
 
@@ -1543,6 +1554,9 @@ def held_list(sess, summary: dict, where: dict, figs: dict) -> list[dict]:
 # ---- all of it --------------------------------------------------------------------------------------------------
 
 REBUILT_CHECK = 1e-6   # last year rebuilt in Python against Excel's saved value, relative: a point to check
+TIE_LOOSE = 0.005  # a report figure whose last printed digit spans this share of it ties loosely: a point to check
+BALANCE_OFF_CHECK = 0.10  # a balance this year this far from last year's forecast of it (relative): a point to check
+BALANCE_OFF_HOLD = 0.50   # ... and this far: held
 REBUILT_HOLD = 0.001   # ... and this far apart: held until a person says why (another version of the client file?)
 
 
@@ -1567,6 +1581,13 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
         # round to it (another basis, a share, another unit, a sensitivity) holds the value until a person says why
         text = head["texts"].get(f"{e}_text") or head["texts"].get("value_text")
         tie = ov.tie(s0, text, where["scale"], where["sign"]) if text and isinstance(s0, float) else None
+        if tie and tie["ok"] and tie.get("x") and tie["tol"] / abs(tie["x"]) > TIE_LOOSE:
+            # printed to few digits, it ties anything within its last digit: a cell off by that much ties as well
+            out.append(hold(summary, f"tie-loose-{e}", [c, s0, text],
+                            f"The report's {e} ({text}) is printed to few digits: anything within ±{tie['tol']:g} ties",
+                            f"{c}: Excel saved {unit(s0):,.2f}, which rounds to it; so would a figure up to "
+                            f"{tie['tol'] / abs(tie['x']):.1%} away. Check the cell against a more precise figure in the "
+                            "report, if it has one", severity="check"))
         if text and not (tie and tie["ok"]):
             out.append(hold(summary, f"tie-{e}", [c, s0, text],
                             f"The overlay's {e} doesn't round to the report's ({text})",
@@ -1611,9 +1632,19 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
                         + ": held, they stay at what Excel saved last year, so this year's value doesn't take those "
                           "changes in. Release them on the Rebuild page, or acknowledge why it's right"))
     bal = ((figs.get("feed") or {}).get("balances")) or {}
+    off = [x for x in bal.get("moved") or [] if (x.get("off") or 0) > BALANCE_OFF_HOLD]
+    if off:  # this year's balance far from last year's forecast of it: a wrong row, a placeholder, a sign
+        fmt = lambda v: f"{v:,.1f}" if isinstance(v, float) else "–"
+        out.append(hold(summary, "balance-off", [[x["row"], x["col"], x["this"], x["forecast"]] for x in off],
+                        f"{len(off)} balance(s) at this year's date far from last year's forecast of them",
+                        "; ".join(f"{x['label'] or x['row']} at {x['to']}: {fmt(x['this'])} this year, {fmt(x['forecast'])} "
+                                  f"in last year's model ({x['off']:.0%} off; {x['now']})" for x in off[:6])
+                        + ". In the client models' units. Check it's the right row and figure, or acknowledge why"))
     if bal.get("moved"):  # balances read at the valuation date, read at this year's date: a person sees the move
         fmt = lambda v: f"{v:,.1f}" if isinstance(v, float) else "–"
-        app = any(x.get("by") == "the app" for x in bal["moved"])  # moved by the app: new, a point to check; else a note
+        # moved by the app (new), or a figure revised beyond the band from last year's forecast: a point to check;
+        # else a note (the periods or the overlay's own date moved it, as they did before)
+        app = any(x.get("by") == "the app" or (x.get("off") or 0) > BALANCE_OFF_CHECK for x in bal["moved"])
         out.append(hold(summary, "balance-moved", [[x["row"], x["col"], x["this"]] for x in bal["moved"]],
                         f"{len(bal['moved'])} balance(s) the overlay reads at the valuation date, read at this year's date",
                         "; ".join(f"{x['label'] or x['row']}: {fmt(x['last'])} at {x['from']} → {fmt(x['this'])} at "
@@ -1621,18 +1652,21 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
                                   + {"the app": ", moved by the app: the overlay reads it by a plain reference, which the "
                                                 "periods don't move (a fixed horizon)",
                                      "the periods": ", moved with the periods"}.get(x.get("by"), ", read by the overlay's own "
-                                                                                                 "date") + ")"
+                                                                                                 "date")
+                                  + (f"; last year's model had {fmt(x['forecast'])} for that date" if isinstance(x.get("forecast"), float)
+                                     and (x.get("off") or 0) > BALANCE_OFF_CHECK else "") + ")"
                                   for x in bal["moved"][:6])
                         + ". In the client models' units. Last year the overlay read each in one column, last year's "
                           "valuation date's; this year's value reads this year's", severity="check" if app else "info"))
-    if bal.get("kept"):  # kept at their own date: a fixed date by its label, or a person's choice
+    if bal.get("kept"):  # kept at their own date: a fixed date by its label (a word-match: a point to check), or yours
         fmt = lambda v: f"{v:,.1f}" if isinstance(v, float) else "–"
         out.append(hold(summary, "balance-kept", [[x["row"], x["col"], x["why"]] for x in bal["kept"]],
                         f"{len(bal['kept'])} balance(s) the overlay reads at the valuation date kept at their own date",
                         "; ".join(f"{x['label'] or x['row']} at {x['date']} ({x['why']}): {fmt(x['this'])} this year"
                                   for x in bal["kept"][:6])
                         + ". In the client models' units. Read it at this year's date on the cash-flow card if the label "
-                          "misleads", severity="info"))
+                          "misleads",
+                        severity="check" if any(x.get("by_label") or x.get("stood") for x in bal["kept"]) else "info"))
     if bal.get("after"):  # read at a date after last year's: not moved, what it was meant to be isn't clear
         fmt = lambda v: f"{v:,.1f}" if isinstance(v, float) else "–"
         out.append(hold(summary, "balance-after", [[x["row"], x["col"], x["this"]] for x in bal["after"]],
@@ -1664,6 +1698,81 @@ def _discounts(db, cell: str) -> bool:
         return bool(dcftrace.cores(dcftrace.trace(db, cell)))
     except ValueError:
         return False
+
+
+DECLARED = re.compile(r"(distribution|dividend)", re.I)
+DECLARED_HOW = re.compile(r"\b(declared|payable|unpaid|accrued|to be paid|outstanding)\b", re.I)
+
+
+def _declared_holds(sess, summary: dict, head: dict, figs: dict, held_inputs: list, where: dict) -> list[dict]:
+    """An ex-distribution value, and this year's client model holding a distribution declared and not yet paid at this
+    year's date (a row labelled so, a figure at the date's column), where the overlay deducts no distribution: not a
+    balance it reads (a declared distribution moved to this year's date), not an input typed in it (held at last
+    year's, or set), not a term of its equity cell. The value would include it."""
+    if head.get("basis") == "cum" or not sess.current or not figs.get("this_year"):
+        return []
+    vd1 = ((figs.get("roll") or {}).get("valuation_date") or "")[:10]
+    if not vd1:
+        return []
+    when = ov.serial(date.fromisoformat(vd1))
+    bal = (figs.get("feed") or {}).get("balances") or {}
+    if any(DECLARED.search(x.get("label") or "") for k in ("moved", "kept", "unmoved") for x in bal.get(k) or []):
+        return []
+    if any(DECLARED.search(x.get("label") or "") for x in held_inputs or []):
+        return []
+    with rodb.connect(summary["wiring"]["overlay"]["db_path"]) as db:
+        if cell_basis(db, where.get("low") or "")[0] == "ex":
+            return []
+    cur, found = sess.current, []
+    for (s, r), lab in cur.labels().items():
+        if not (lab and DECLARED.search(lab) and DECLARED_HOW.search(lab)):
+            continue
+        c = cur.column_of(s, when)
+        v = cur.value(s, r, c) if c is not None else None
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and abs(v) > 1e-9:
+            found.append((s, r, lab, float(v)))
+    if not found:
+        return []
+    said = "; ".join(f"{lab} {v:,.1f} at {vd1} ({s}!r{r})" for s, r, lab, v in found[:4])
+    return [hold(summary, "declared", [[s, r, v] for s, r, _l, v in found],
+                 "This year's model has a distribution declared at this year's date the overlay doesn't deduct",
+                 f"{said}, in the client model's units. This year's value is ex-distribution, and nothing in the overlay "
+                 "deducts a distribution: the value would include it. Add the deduction (an input the overlay types in), "
+                 "or acknowledge why it's right")]
+
+
+def _own_inputs_moved(sess, summary: dict, where: dict) -> list[dict]:
+    """The figures typed on the overlay's own sheets, under the value, where this year's client model has the same
+    sheet and another figure at the cell (a client's inputs sheet the overlay took as its own: its growth or rate moved
+    in this year's model, and the overlay keeps last year's). A point to check."""
+    import lineage
+    if not sess.current:
+        return []
+    own = set(summary.get("sheets") or [])
+    theirs = {x for (x,) in sess.current.db.execute("SELECT sheet FROM sheets")}
+    both = own & theirs
+    if not both:
+        return []
+    cells = [ov.parse_a1(c) for c in dict.fromkeys(x for x in (where.get("low"), where.get("high")) if x)]
+    try:
+        sess.configure("prior" if sess.prior or sess.client_sheets else "workbook")
+        typed, _ = lineage.walk(sess, cells)
+    finally:
+        sess.configure("workbook")
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+    moved = []
+    for k in sorted(typed):
+        if k[0] in both:
+            a, b = sess.ov.value(*k), sess.current.value(*k)
+            if num(a) and num(b) and not ov.same(float(a), float(b)):
+                moved.append((ov._a1(*k), float(a), float(b), sess.ov.labels().get(k[:2], "")))
+    if not moved:
+        return []
+    return [hold(summary, "own-inputs", [[c, a, b] for c, a, b, _l in moved],
+                 f"{len(moved)} figure(s) on the overlay's own sheets differ in this year's model",
+                 "; ".join(f"{lab or c}: {a:,.4g} in the overlay, {b:,.4g} in this year's model ({c})" for c, a, b, lab in moved[:6])
+                 + ". The overlay keeps its own figures; this year's model has the same sheet with others. Check which "
+                   "this year's value should use", severity="check")]
 
 
 def _equity_holds(summary: dict, where: dict, figs: dict, rows: dict | None) -> list[dict]:
@@ -1705,8 +1814,11 @@ def _equity_holds(summary: dict, where: dict, figs: dict, rows: dict | None) -> 
                                   "acknowledge why it's right"))
     mid, lo, hi = where.get("mid"), where.get("low"), where.get("high")
     if mid and mid not in (lo, hi) and all(num(x.get(k)) for x in (last, now) for k in (mid, lo, hi)):
-        tol = lambda a, b: abs(a - b) <= 1e-6 * max(1.0, abs(b))
-        if tol(last[mid], (last[lo] + last[hi]) / 2) and not tol(now[mid], (now[lo] + now[hi]) / 2):
+        # the mid a midpoint last year (to its rounding), and this year moving otherwise than the ends' midpoint by
+        # more than a tenth of a percent of the value: the ends aren't worked out from the model the mid is
+        tol = lambda a, b: abs(a - b) <= max(0.5, 1e-6 * abs(b))
+        apart = abs((now[mid] - last[mid]) - ((now[lo] + now[hi]) / 2 - (last[lo] + last[hi]) / 2))
+        if tol(last[mid], (last[lo] + last[hi]) / 2) and apart > 1e-3 * max(1.0, abs(last[mid])):
             out.append(hold(summary, "equity-mid", [mid, now[mid], now[lo], now[hi]],
                             "This year's low and high don't move with the overlay's mid",
                             f"last year {mid} was the midpoint of {lo} and {hi}; this year it's {now[mid]:,.2f} against a "
@@ -1789,7 +1901,16 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
             f"{type(ex).__name__}: {ex}: the share of the cash flows the overlay values (100% or the interest held) "
             "wasn't compared with the report's")]}
     held_inputs = ov.deep(held_list, sess, summary, where, figs)
-    cfc["holds"] = cfc["holds"] + inter["holds"] + basis_holds + _gate_holds(summary, head, where, figs, unit) \
+    try:  # a distribution declared at this year's date the overlay doesn't deduct
+        declared = ov.deep(_declared_holds, sess, summary, head, figs, held_inputs, where)
+    except Exception as ex:
+        declared = [hold(summary, "declared-error", [type(ex).__name__], "A declared distribution couldn't be looked for",
+                         f"{type(ex).__name__}: {ex}", severity="check")]
+    try:  # the overlay's own sheets this year's model has too (the client's inputs sheet taken as the overlay's)
+        declared += ov.deep(_own_inputs_moved, sess, summary, where)
+    except Exception:
+        pass
+    cfc["holds"] = cfc["holds"] + inter["holds"] + basis_holds + declared + _gate_holds(summary, head, where, figs, unit) \
         + (_equity_holds(summary, where, figs, cfc.get("rows")) if figs.get("this_year") else [])
     if figs.get("gaps") is not None:
         figs["gaps"]["holds"] = cfc["holds"]
@@ -1848,6 +1969,20 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
                    "error": f"{type(ex).__name__}: {ex}"}
             if asked and not summary.get("method"):
                 inv["by"] = "basis"
+    if this_year is not None and summary.get("method") and (inv or {}).get("preferred") != summary["method"]:
+        # the method a person chose couldn't be worked out: this year's figure would be the default's under their choice
+        m = next((x for x in (inv or {}).get("methods") or [] if x["key"] == summary["method"]), {})
+        why = (inv or {}).get("error") or m.get("why") or "the method wasn't worked out"
+        h = hold(summary, "method-unapplied", [why, summary["method"], (inv or {}).get("preferred")],
+                 "The method you chose can't be worked out here: this year's value would be the default's",
+                 f"{why}. Fix what stops it, choose another method on the methods card, or acknowledge why the "
+                 "default is right")
+        cfc["holds"].append(h)
+        if not h["acked"] and figs.get("gaps") is not None:
+            figs["gaps"]["holds"] = cfc["holds"]
+            figs["gaps"]["reliable"] = False
+            br = ov.deep(bridges, sess, summary, head, where, figs)
+            this_year = None
     if this_year is not None and head.get("basis") == "cum" and not summary.get("method") \
             and (inv or {}).get("preferred") != "overlay_on_date":
         # a cum value keeps the period ending on the new date; without that method it's the ex figure under a cum label

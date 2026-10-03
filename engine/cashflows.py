@@ -25,11 +25,13 @@ EXACT = 1e-9          # a cash flow the same as last year's, relative
 ZERO_EXACT = 1e-4     # a zero-roll ratio this close to 1 while the model's rows changed: too exact to be a revision
 SPLIT_CHECK = 0.005   # what's left of the new-forecast step after the cash flows' change, as a share of last year's value
 SPLIT_HOLD = 0.02     # ... and this much: held until a person says why
+SIGN_FLIP = 0.01      # a discounting's present value changing sign, both years at least this share of the value: held
 SIGN_MIN = 0.005      # the cash flows' change, as a share of last year's value, from which its sign must be the step's
 MIN_PERIODS = 2       # periods both years have after the new date, at least, to call the cash flows the same
 # the checks' ids (the diagnostics may carry them: they're the app's words)
 IDS = ("cf-stale", "cf-same", "cf-exact", "cf-split-low", "cf-split-high", "cf-sign-low", "cf-sign-high", "cf-tv-nil",
-       "cf-short", "cf-horizon", "cf-standin", "cf-error", "cf-uncut", "cf-untimed", "cf-xnpv", "cf-ondate")
+       "cf-short", "cf-horizon", "cf-standin", "cf-error", "cf-uncut", "cf-untimed", "cf-xnpv", "cf-ondate", "cf-flip",
+       "cf-midperiod")
 KINDS = ("sumproduct", "pv row", "xnpv", "npv", "unknown")
 
 
@@ -225,6 +227,39 @@ def checks(sess, summary: dict, where: dict, figs: dict, fl: dict, unit) -> dict
     cells = [c for c in (where.get("low"), where.get("high")) if c]
     rows = _changed_rows(sess, summary, cells, vd1)
     have = [c for c in fl["cores"] if c.get("last") and c.get("this")]
+
+    # a discounting whose present value turns the other way (a sign convention changed in a row it reads: tax shown
+    # positive, a credit stream going negative): both material, last year's and this year's at last year's rate
+    ref0 = max([abs(v) for v in (figs.get("rebuilt") or {}).values() if isinstance(v, float)] + [0.0]) or 1.0
+    for c in have:
+        a, b = c["last"].get("pv"), c["this"].get("pv")
+        if isinstance(a, float) and isinstance(b, float) and a * b < 0 and min(abs(a), abs(b)) > SIGN_FLIP * ref0:
+            holds.append(result.hold(summary, f"cf-flip-{c['cell']}", [c["cell"], a, b],
+                                     f"{c.get('label') or c['cell']} turns the other way: {unit(a):,.1f} last year, "
+                                     f"{unit(b):,.1f} this year at last year's rate",
+                                     f"{c['cell']}'s present value changed sign: a row it reads may have changed its sign "
+                                     "convention (tax shown positive, a credit as a cost). Check the rows it reads, or "
+                                     "acknowledge why it's right", check="cf-flip"))
+
+    # this year's date inside a period of a discounting (a mid-year date on annual periods): the period is kept whole,
+    # though part of it was earned before the date. A point to check, once
+    for c in have:
+        ends = sorted(c["this"]["periods"])
+        if not vd1 or vd1[:10] in ends:
+            continue
+        before, after = [e for e in ends if e < vd1[:10]], [e for e in ends if e > vd1[:10]]
+        if before and after:
+            e0, e1 = before[-1], after[0]
+            d = lambda x: date.fromisoformat(x[:10])
+            frac = (d(vd1) - d(e0)).days / max(1, (d(e1) - d(e0)).days)
+            p = c["this"]["periods"][e1]
+            holds.append(result.hold(summary, f"cf-midperiod-{c['cell']}", [c["cell"], vd1[:10], e1],
+                                     f"This year's valuation date ({vd1[:10]}) falls inside the period ending {e1}",
+                                     f"{frac:.0%} of the period from {e0} to {e1} is before the date, and its whole cash flow "
+                                     f"({unit(p['cf']):,.1f}) is kept in this year's value, the part earned before the date "
+                                     "with it. Check whether it should be prorated (the methods card's mid-period is the "
+                                     "nearest)", severity="check", check="cf-midperiod"))
+            break
 
     # stale: this year's discounted cash flows are last year's while the model's rows behind them changed
     same_cores = []

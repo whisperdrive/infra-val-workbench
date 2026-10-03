@@ -998,9 +998,14 @@ def failures_check(eid: int) -> None:
         summary["acks"] = {"basis-method": {"key": h["key"], "reason": "test"}}
         res = compute()
         assert holds(res)["basis-method"]["acked"] and res["values"]["this_year"] is not None
+        # a method a person chose, not worked out: held too (the default's figure under their choice)
+        summary["acks"], summary["method"] = {}, "mid_period"
+        res = compute()
+        h = holds(res).get("method-unapplied")
+        assert h and h["severity"] == "block" and res["values"]["this_year"] is None, list(holds(res))
     finally:
         cashflows.checks, interest.check, methods.inventory, keyfacts.conclusion, result.cell_basis = keep
-        summary["acks"] = wb.acks(eid)
+        summary["acks"], summary["method"] = wb.acks(eid), wb.preferred_method(eid)
         with orc._lock:
             orc._active.pop((eid, "result"), None)
     print("failures: ok (the cash-flow checks or the interest check crashing holds the value; a cum value whose own "
@@ -1114,6 +1119,55 @@ def edits_check(first: int) -> None:
     assert len([h for h in orc.history(first, "roles", limit=200) if h["event"] == "start"]) == runs
     print("edits: ok (an edited growth rate reruns the result, a second edit of a rate range the rebuild; an unused "
           "fact's edit doesn't ask the roles' second opinion again; the older roles fingerprint recognised, nothing run)")
+
+
+def decisions_check(first: int) -> None:
+    """A person's decisions as the file has them, always: picks written by another (a session built meanwhile, a
+    restore) are the session's on its next look, and a damaged picks file leaves the session with none of them (and
+    the value held), not with what it had; gpt-sol's equity pick never replaces a person's; a decision for an
+    engagement that doesn't exist is refused; a new engagement doesn't take another's confirmed date of a shared file."""
+    import library
+    import rowfind
+    sess, summary = wb.overlay_session(first)
+    f = wb._rowpicks_file(first)
+    keep = f.read_text(encoding="utf-8") if f.exists() else None
+    try:
+        wb.store.write(f, {"CashFlow!r8": {"to": "-", "by": "you"}})
+        wb._sync_roll(first, sess, summary)
+        assert sess.rowmap.picks.get(("CashFlow", 8)) == rowfind.STAND_IN, sess.rowmap.picks
+        f.write_text('{"CashFlow!r8": {"to', encoding="utf-8")
+        wb._sync_roll(first, sess, summary)
+        assert ("CashFlow", 8) not in sess.rowmap.picks and any(x["file"] == "rowpicks.json" for x in summary["damaged"])
+    finally:
+        for x in f.parent.glob("rowpicks.json.damaged-*"):
+            x.unlink()
+        if keep is None:
+            f.unlink(missing_ok=True)
+        else:
+            f.write_text(keep, encoding="utf-8")
+        wb._sync_roll(first, sess, summary)
+    # gpt-sol's pick after a person's: the person's stands
+    e = wb.create("Asset A, FY26 (picks)")["id"]
+    orc.set_equity_pick(e, {"low": "Summary!C9", "high": "Summary!E9"}, "you")
+    orc.set_equity_pick(e, {"low": "Summary!D9", "high": "Summary!D9"}, "orchestrator", "the model's pick")
+    got = orc.equity_pick(e)
+    assert (got["by"], got["low"]) == ("you", "Summary!C9"), got
+    # a new engagement and a shared file confirmed elsewhere (the library's record, as before per-engagement dates)
+    cur_id = wb.roles(first)["current_model"]["id"]
+    library.confirm_identity(cur_id, "you")
+    upload(e, PACK_A[3])
+    w = next(x for x in wb.workbooks(e) if x["id"] == cur_id)
+    assert not w["identity_confirmed"], w
+    wb.delete(e)
+    for bad in (lambda: wb.acknowledge(999999, "cf-stale", "k", "x"), lambda: wb.set_method(999999, None),
+                lambda: wb.set_this_year_rate(999999, 8.0)):
+        try:
+            bad()
+            raise AssertionError("a decision for no engagement was taken")
+        except ValueError as ex:
+            assert "no such engagement" in str(ex), ex
+    print("decisions: ok (picks as the file has them, a damaged one leaving none; gpt-sol's equity pick not over a "
+          "person's; a new engagement not taking another's confirmed date; no decisions for no engagement)")
 
 
 def lapse_check(first: int) -> None:
@@ -1972,6 +2026,7 @@ def main() -> None:
     methods_check(eid)
     failures_check(eid)
     typed_ends_check(eid)
+    decisions_check(eid)
     edits_check(eid)
     lapse_check(eid)
     shared_dates_check(eid)

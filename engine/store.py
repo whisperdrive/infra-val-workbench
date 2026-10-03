@@ -19,8 +19,9 @@ from pathlib import Path
 
 _LOCKS: dict[str, threading.RLock] = {}
 _GUARD = threading.Lock()
-TRIES = 20      # Windows: a file another reader has open can't be replaced or opened for a moment
-WAIT = 0.05     # seconds between tries
+TRIES = 40      # Windows: a file another reader (antivirus, an indexer, a sync client) has open can't be replaced or
+WAIT = 0.05     # opened for a moment: tried again, the wait doubling from WAIT up to MAX_WAIT (about 15 s in all)
+MAX_WAIT = 0.5
 
 
 def lock(path) -> threading.RLock:
@@ -30,13 +31,15 @@ def lock(path) -> threading.RLock:
 
 
 def _retry(fn):
+    wait = WAIT
     for i in range(TRIES):
         try:
             return fn()
         except PermissionError:
             if i == TRIES - 1:
                 raise
-            time.sleep(WAIT)
+            time.sleep(wait)
+            wait = min(wait * 2, MAX_WAIT)
 
 
 def read(path, default=None):
@@ -67,7 +70,11 @@ def write(path, data) -> None:
     with lock(p):
         tmp = p.with_name(f".{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
         tmp.write_text(json.dumps(data, indent=1, default=str), encoding="utf-8")
-        _retry(lambda: os.replace(tmp, p))
+        try:
+            _retry(lambda: os.replace(tmp, p))
+        except OSError:
+            tmp.unlink(missing_ok=True)  # the old file stands; the half-step isn't left behind
+            raise
 
 
 def update(path, change, default=None):

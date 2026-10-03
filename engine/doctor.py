@@ -41,6 +41,7 @@ import xlruntime
 from overlay import _a1, _feed, _show, parse_a1, tie
 from xlruntime import XLError, same, serial, to_date
 
+VERSION = 2             # the doctor's rules: a diagnosis by older ones is made again (what a reference reads; what moves)
 WALK_LIMIT = 40000      # cells looked at per figure and feed
 CLOSURE_LIMIT = 20000   # cells looked at to decide a hold is safe
 HOLD_CANDIDATES = 400   # root cells checked for a hold, at most ...
@@ -562,6 +563,17 @@ class Doctor:
                 pass
         for cut in getattr(sess, "cutoffs", None) or []:
             moving.add(tuple(cut[:3]))
+        try:  # and the discountings' own inputs (the rate, the growth: this year's rate goes on them)
+            from overlay import _cores
+            for core in _cores(self.db, self.summary.get("outputs") or []):
+                for v in (core.get("inputs") or {}).values():
+                    if isinstance(v, str) and ":" not in v:
+                        try:
+                            moving.add(parse_a1(v.lstrip("=").replace("$", "")))
+                        except (TypeError, ValueError, AttributeError):
+                            pass
+        except Exception:
+            pass
         safe, unsafe, skipped = [], [], 0
         t0 = time.time()
         for i, c in enumerate(cand):

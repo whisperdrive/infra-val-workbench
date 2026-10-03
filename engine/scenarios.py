@@ -19,7 +19,7 @@ from xml.etree import ElementTree as ET
 import overlay as ov
 
 SELECTOR = re.compile(r"scenario|sensitivit|\bswitch|\btoggle|\bselect|\b(active|current|chosen|live|run)\s+case\b|"
-                      r"^\s*(case|active)\b", re.I)
+                      r"^\s*(case|active)\b|\bcases?\b[^()]*\(\s*\d|\bcase\s*$|\bP\d{2}\b", re.I)
 AMOUNT = re.compile(r"[$€£%]|\bm\b|\bbn\b|'000|\bk\b", re.I)  # the units of an amount, not of an option
 SAVED = re.compile(r"\bsaved?\b|time ?stamp|last (updated|modified)|date modified", re.I)
 OPTIONS = 20  # a selector's number is a whole number from 0 to this

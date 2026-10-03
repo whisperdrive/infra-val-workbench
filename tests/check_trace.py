@@ -1095,6 +1095,33 @@ def doctor_check() -> None:
           "safe to hold; reading only the overlay's own typed input, safe)")
 
 
+def rules_check() -> None:
+    """Small rules: a report figure printed to few digits ties loosely, and says so; the agents confirm a model's date
+    only with a sign from the file itself, not "a year on" and "the financial year's end" alone; a case selector
+    named so is found as one, a heading isn't."""
+    import overlay as ov
+    import result
+    import scenarios
+    import workbench as wbm
+    t = ov.tie(2345.0, "2.3", scale=1000.0)
+    assert t["ok"] and abs(t["tol"] - 0.05) < 1e-12 and t["x"] == 2.3, t
+    figs = {"saved": {"S!C9": 2345.0}, "rebuilt": {"S!C9": 2345.0}}
+    gate = result._gate_holds({}, {"texts": {"low_text": "2.3", "high_text": "2.3"}},
+                              {"low": "S!C9", "high": "S!C9", "scale": 1000.0, "sign": 1}, figs, lambda v: v)
+    assert {h["id"] for h in gate} >= {"tie-loose-low", "tie-loose-high"}, [h["id"] for h in gate]
+    assert not result._gate_holds({}, {"texts": {"low_text": "2,345.0"}}, {"low": "S!C9", "high": "S!C9", "scale": 1.0,
+                                                                           "sign": 1}, figs, lambda v: v)
+    assert not wbm._date_agreed({"agree": ["a year after last year's valuation date (2025-06-30)",
+                                           "the model's financial year ends in June"], "disagree": []})
+    assert wbm._date_agreed({"agree": ["a year after last year's valuation date (2025-06-30)",
+                                       "the file name says Jun 2026"], "disagree": []})
+    for lab in ("Volume case (1 central, 2 lenders)", "Traffic case", "P50/P90 switch"):
+        assert scenarios.SELECTOR.search(lab), lab
+    assert not scenarios.SELECTOR.search("Base case capex")
+    print("rules: ok (a figure printed to few digits ties loosely, said; a date confirmed only with a sign from the file; "
+          "case selectors found by their names)")
+
+
 def balances_check() -> None:
     """A balance the overlay reads at last year's valuation date (net debt from the client model's balance row), on a
     fixed horizon (the periods keep their dates both years): this year's value deducts this year's balance at this
@@ -1111,7 +1138,7 @@ def balances_check() -> None:
     vd, new, rate = date(2025, 6, 30), date(2026, 6, 30), 0.09
 
     def run(ref: str, current_ends=None, to=None, declared=False, nd_at=None, nd_label="Net debt", decisions=None,
-            holds=None):
+            holds=None, nd_this=None, unpaid=None, flip=False, cur_val=None):
         out = Path(tempfile.mkdtemp(prefix="balances_"))
         ends = {w: [date(2025 + k, 6, 30) for k in range(10)] for w in ("prior", "current")}
         if current_ends:
@@ -1131,8 +1158,16 @@ def balances_check() -> None:
             cl.write(10, 1, "Net debt")
             for k, e in enumerate(ends[which]):
                 cl.write_datetime(5, 3 + k, e, dt)
-                cl.write_number(8, 3 + k, cfs[which][k])
-                cl.write_number(10, 3 + k, nd[k])
+                cl.write_number(8, 3 + k, -cfs[which][k] if (flip and which == "current") else cfs[which][k])
+                cl.write_number(10, 3 + k, nd_this if (nd_this is not None and which == "current" and k == 1) else nd[k])
+            if unpaid is not None and which == "current":  # a distribution declared at this year's date, not yet paid
+                cl.write(12, 1, "Distribution declared and unpaid")
+                for k in range(len(ends[which])):
+                    cl.write_number(12, 3 + k, unpaid if k == 1 else 0.0)
+            if cur_val is not None and which == "current":  # this year's model with a sheet named as the overlay's
+                cv = wbk.add_worksheet("Val")
+                cv.write(4, 1, "Discount rate")
+                cv.write_number(4, 2, cur_val)
             if nd_at:  # a balance sheet of half-years, the same dates both years: net debt at each
                 bs = wbk.add_worksheet("BS")
                 bs.write(1, 1, "Half-year ending")
@@ -1194,6 +1229,8 @@ def balances_check() -> None:
         cfc = ov.deep(cashflows.checks, sess, summary, where, figs, fl, lambda x: x)
         cfc["layer"] = fl
         gate = result._gate_holds(summary, {"texts": {}}, where, figs, lambda x: x)
+        gate += ov.deep(result._declared_holds, sess, summary, {"basis": "ex"}, figs, [], where)
+        gate += ov.deep(result._own_inputs_moved, sess, summary, where)
         return roll, figs, cfc, gate
     for ref, how in (("plain", "the app"), ("index", "the overlay's own date")):
         roll, figs, cfc, gate = run(ref)
@@ -1240,7 +1277,15 @@ def balances_check() -> None:
     roll, figs, cfc, gate = run("plain", nd_label="Net debt at financial close")
     bal = figs["feed"]["balances"]
     assert not bal["moved"] and bal["kept"] and "financial close" in bal["kept"][0]["why"], bal
-    assert figs["this_year"]["Val!C18"] < v_plain - 19.9 and ("balance-kept", "info") in [(h["id"], h["severity"]) for h in gate]
+    # (a word-match: a point to check, not a note)
+    assert figs["this_year"]["Val!C18"] < v_plain - 19.9 and ("balance-kept", "check") in [(h["id"], h["severity"]) for h in gate]
+    # ordinary debt labels aren't fixed dates: an acquisition facility, net debt at close
+    for label in ("Acquisition facility", "Net debt at close", "Less: acquisition debt"):
+        roll, figs, cfc, gate = run("plain", nd_label=label)
+        assert figs["feed"]["balances"]["moved"] and not figs["feed"]["balances"]["kept"], (label, figs["feed"]["balances"])
+    # this year's balance far from last year's forecast of it (a wrong row, a placeholder): held
+    roll, figs, cfc, gate = run("plain", nd_this=50.0)
+    assert ("balance-off", "block") in [(h["id"], h["severity"]) for h in gate], [h["id"] for h in gate]
     roll, figs, cfc, gate = run("plain", nd_label="Net debt at financial close", decisions={"Client!D11": {"keep": False}})
     assert figs["feed"]["balances"]["moved"][0]["yours"] and abs(figs["this_year"]["Val!C18"] - v_plain) < 1e-9
     roll, figs, cfc, gate = run("plain", decisions={"Client!D11": {"keep": True}})
@@ -1251,13 +1296,29 @@ def balances_check() -> None:
     hm = figs["holds_moved"]
     assert hm and hm[0]["cell"] == "Val!C17" and hm[0]["inputs"] == ["Client!D11"], hm  # (200 last year, 180 this)
     assert ("doctor-moved", "block") in [(h["id"], h["severity"]) for h in gate], gate
+    # a distribution declared at this year's date in this year's model, the overlay deducting none: held
+    roll, figs, cfc, gate = run("plain", unpaid=15.0)
+    assert ("declared", "block") in [(h["id"], h["severity"]) for h in gate], [h["id"] for h in gate]
+    # this year's cash flows' sign turned (a convention changed): the discounting turns the other way, held
+    roll, figs, cfc, gate = run("plain", flip=True)
+    assert any(h["id"].startswith("cf-flip-") and h["severity"] == "block" for h in cfc["holds"]), [h["id"] for h in cfc["holds"]]
+    # a mid-year valuation date on annual periods: the period it falls in kept whole, a point to check
+    roll, figs, cfc, gate = run("plain", to=date(2025, 12, 31))
+    mp = [h for h in cfc["holds"] if h["id"].startswith("cf-midperiod-")]
+    assert mp and mp[0]["severity"] == "check" and "50%" in mp[0]["detail"], [h["id"] for h in cfc["holds"]]
+    # this year's model with a sheet named as the overlay's, its rate another: a point to check
+    roll, figs, cfc, gate = run("plain", cur_val=0.095)
+    oi = next((h for h in gate if h["id"] == "own-inputs"), None)
+    assert oi and oi["severity"] == "check" and "Val!C5" in oi["detail"], [h["id"] for h in gate]
     # rolling horizon (this year's model a year further on): the plain reference moves with the periods, as before;
     # the same value, a note, not a point to check
     roll, figs, cfc, gate = run("plain", current_ends=[date(2026 + k, 6, 30) for k in range(10)])
     bal = figs["feed"]["balances"]["moved"]
     # (this year's model a year on: its first column, 30 June 2026, holds 200 here)
     assert not roll["fixed_horizon"] and bal and bal[0]["by"] == "the periods" and bal[0]["this"] == 200.0, (roll, bal)
-    assert [(h["id"], h["severity"]) for h in gate if h["id"].startswith("balance")] == [("balance-moved", "info")], gate
+    # (this fixture's 200 at 30 June 2026 is 11% off last year's forecast of 180 for that date: a point to check, said)
+    bm = [h for h in gate if h["id"].startswith("balance")]
+    assert [(h["id"], h["severity"]) for h in bm] == [("balance-moved", "check")] and "had 180.0" in bm[0]["detail"], bm
     # a three-month roll on an annual model: no column at the new date, so the balance can't be this year's: held
     roll, figs, cfc, gate = run("plain", to=date(2025, 9, 30))
     assert roll["months"] == 3 and "balance-unmoved" in {h["id"] for h in gate}, (roll["months"], [h["id"] for h in gate])
@@ -1980,6 +2041,7 @@ if __name__ == "__main__":
     forward_check()
     flows_check()
     loose_roll_check()
+    rules_check()
     balances_check()
     doctor_check()
     interest_check()

@@ -24,22 +24,25 @@ from xlsxwriter.utility import xl_col_to_name as COL  # noqa: E402
 import build_map  # noqa: E402
 
 ENDS = [date(2026 + k, 6, 30) for k in range(8)]
+ENDS_Q = [date(2026 + (3 * k + 8) // 12, (3 * k + 8) % 12 + 1, 30 if (3 * k + 8) % 12 + 1 in (6, 9) else 31)
+          for k in range(24)]  # quarter ends from 30 Sep 2026
 # kinds of change the row tools still settle wrongly (the second review, 3 October 2026; docs/hardening.md S1, S9):
 # taken off as each is fixed, so the measure stays honest and a new wrong row anywhere else fails the check
 KNOWN_WRONG = {"costs and tax merged", "small copies swapped, close figures"}
 # kinds where leaving the rows open (for the models or a person) is the right answer: nothing in the model says which
 OPEN_OK = {"downside above, no headings, no value row", "downside above, base renamed, the value reads both",
            "copies swapped, no headings, no value row", "copies swapped, close figures",
-           "rebuilt, low case beside a revised central"}
+           "rebuilt, low case beside a revised central", "last year's figures pasted, no value row"}
 LINES = (("Revenue", 100.0), ("Operating costs", -40.0), ("Tax paid", -15.0))  # then Distributions, their sum
 
 
 def _book(path: Path, sheet="CF", blocks=(("Base case", 1.0, None),), prior_block=False, order=None, drop=None,
-          merge=None, value="base", lines=LINES) -> dict:
+          merge=None, value="base", lines=LINES, quarterly=(), mirror=None) -> dict:
     """A client model: blocks of lines under headings, each ending in Distributions (the sum), and an Equity value
     reading the base case's. blocks: (key, growth on last year's, labels {line: label} or None[, heading shown (None:
     no heading; default the key)[, sheet (default the model's sheet)]]). merge: (line, line, label): the two lines as
-    one. lines: the block's lines (before Distributions). value: the Equity value reads the base case's distributions ("base"), every block's ("both"), or there's none
+    one. lines: the block's lines (before Distributions). quarterly: sheets on quarter ends. mirror: a sheet whose
+    block reads the base case's rows (formulas). value: the Equity value reads the base case's distributions ("base"), every block's ("both"), or there's none
     (None). -> {(key, line): (sheet, row)} (1-based)."""
     wb = xlsxwriter.Workbook(path)
     dt = wb.add_format({"num_format": "dd-mmm-yy"})
@@ -49,7 +52,7 @@ def _book(path: Path, sheet="CF", blocks=(("Base case", 1.0, None),), prior_bloc
         if name not in sheets:
             ws = sheets[name] = wb.add_worksheet(name)
             ws.write(1, 1, "Period ending")
-            for k, e in enumerate(ENDS):
+            for k, e in enumerate(ENDS_Q if name in quarterly else ENDS):
                 ws.write_datetime(1, 3 + k, e, dt)
             next_row[name] = 3
         return sheets[name]
@@ -70,18 +73,30 @@ def _book(path: Path, sheet="CF", blocks=(("Base case", 1.0, None),), prior_bloc
             lines = [(label, both) if n == a else (n, v) for n, v in lines if n != b2]
         if order:
             lines = [next(x for x in lines if x[0] == n) for n in order if any(x[0] == n for x in lines)]
+        n = len(ENDS_Q) if on in quarterly else len(ENDS)
         for i, (line, base) in enumerate(lines):
             ws.write(top + i, 1, (names or {}).get(line, line))
-            for k in range(len(ENDS)):
-                ws.write_number(top + i, 3 + k, base * g * 1.03 ** k)
+            for k in range(n):
+                ws.write_number(top + i, 3 + k, base * g * 1.03 ** k / (4 if on in quarterly else 1))
             where[(key, line)] = (on, top + i + 1)
         dr = top + len(lines)
         ws.write(dr, 1, (names or {}).get("Distributions", "Distributions"))
-        for k in range(len(ENDS)):
+        for k in range(n):
             c = COL(3 + k)
             ws.write_formula(dr, 3 + k, f"=SUM({c}{top + 1}:{c}{dr})", None, sum(v for _, v in lines) * g * 1.03 ** k)
         where[(key, "Distributions")] = (on, dr + 1)
         next_row[on] = dr + 2
+    if mirror:  # a summary sheet reading the base case's rows: a mirror, not another line
+        ms, base_rows = ws_for(mirror), [(ln, where[("Base case", ln)]) for ln in [x[0] for x in LINES] + ["Distributions"]
+                                         if ("Base case", ln) in where]
+        r0 = next_row[mirror]
+        ms.write(r0, 0, "Summary")
+        for i, (ln, (bs, br)) in enumerate(base_rows):
+            ms.write(r0 + 1 + i, 1, ln)
+            for k in range(len(ENDS)):
+                c = COL(3 + k)
+                ms.write_formula(r0 + 1 + i, 3 + k, f"='{bs}'!{c}{br}", None, 0.0)
+        next_row[mirror] = r0 + 2 + len(base_rows)
     ws, r = sheets[sheet], next_row[sheet]
     reads = [where[(b[0], "Distributions")] for b in blocks if value == "both" or b[0] == "Base case"] if value else []
     if reads:
@@ -151,6 +166,25 @@ def pairs(out: Path) -> list[dict]:
                                                         "last": {"blocks": (("Base case", 1.0, None, None),
                                                                             ("Downside case", 0.9, None, None)),
                                                                  "value": None}}),
+        # the review of the fixes (3 October 2026): a pasted copy of last year's figures under last year's heading,
+        # this year's base renamed: not the copy (the model's value decides; without one, open)
+        ("last year's figures pasted under last year's heading", {"blocks": (
+            ("Prior copy", 1.0, None, "Base case", "Prior model"), ("Base case", 1.04, None, "Management forecast"))}),
+        ("last year's figures pasted, no value row", {"blocks": (
+            ("Prior copy", 1.0, None, "Base case", "Prior model"), ("Base case", 1.04, None, "Management forecast")),
+            "value": None}),
+        # two assets, both years, their headings alike but for a word or a letter: the heading decides
+        ("two assets, alike headings", {"blocks": (("Asset 2", 0.97, None, "Asset 2 - Southern wind farm"),
+                                                   ("Base case", 1.04, None, "Asset 1 - Northern wind farm")),
+                                        "last": {"blocks": (("Asset 2", 0.95, None, "Asset 2 - Southern wind farm"),
+                                                            ("Base case", 1.0, None, "Asset 1 - Northern wind farm"))}}),
+        ("tranches A and B", {"blocks": (("Tranche B", 0.6, None, "Tranche B"), ("Base case", 1.04, None, "Tranche A")),
+                              "last": {"blocks": (("Tranche B", 0.58, None, "Tranche B"), ("Base case", 1.0, None, "Tranche A"))}}),
+        # a quarterly sheet of the same lines new this year beside the annual one: the periods decide
+        ("a quarterly sheet added", {"blocks": (("Quarterly", 1.04, None, "Base case", "CFQ"), ("Base case", 1.04, None)),
+                                     "quarterly": ("CFQ",)}),
+        # a summary sheet reading the base case's rows (formulas): a mirror, not the line
+        ("a summary sheet mirroring the base", {"blocks": (("Base case", 1.04, None),), "mirror": "Summary"}),
         # ... and with copies too small to be seen as copies of a block (a line and its total): matched by their
         # order, the residual of S1
         ("small copies swapped, close figures", {"blocks": (("Downside case", 0.9995, None, None),

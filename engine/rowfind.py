@@ -749,7 +749,15 @@ class RowFinder:
                 "above": near((-1, -2)), "below": near((1, 2)),
                 "reads": sorted({labels.get(x, "") for x in reads.get(k, ())} - {""})[:8],
                 "fed": sorted({labels.get(x, "") for x in by.get(k, ())} - {""})[:8],
-                "figures": [round(v, 6) for _w, v in sorted(ser.items())[:4]], "file": wb.path}
+                "figures": [round(v, 6) for _w, v in sorted(ser.items())[:4]],
+                "dated": [[w, round(v, 6)] for w, v in sorted(ser.items())[:8]], "file": wb.path,
+                "occurrence": self._occurrence(wb, k)}
+
+    def _occurrence(self, wb, k: tuple) -> list | None:
+        """[which, of how many]: the row among the workbook's rows with its label, in order."""
+        lab = _norm(wb.labels().get(k, ""))
+        same = sorted(x for x, l in wb.labels().items() if l and _norm(l) == lab) if lab else []
+        return [same.index(k), len(same)] if k in same else None
 
     def matches(self, card: dict, k: tuple) -> bool:
         """Whether this year's row k is the row a card describes: its label, heading and kind the same; and where its
@@ -762,9 +770,20 @@ class RowFinder:
             return False
         if len(self._index()["by_label"].get(_norm(card.get("label") or ""), [])) < 2:
             return True
+        if card.get("position") is not None and now["position"] != card["position"]:
+            return False
+        # the same occurrence of its label, of as many as when it was picked: nothing inserted or removed since
+        occ, now_occ = card.get("occurrence"), self._occurrence(self.current, k)
+        if occ and now_occ == occ:
+            return True
+        # else its figures where they're history (up to last year's valuation date: a corrected forecast revises the
+        # rest); all of them where the card has none of those, or no dates
+        since, ser = getattr(self, "since", None), self._series(self.current, *k)
+        hist = [(w, v) for w, v in card.get("dated") or [] if since is not None and w <= since]
+        if hist:
+            return all(w in ser and abs(ser[w] - v) <= 1e-6 * max(1.0, abs(v)) for w, v in hist)
         a, b = card.get("figures") or [], now["figures"]
-        return (card.get("position") is None or now["position"] == card["position"]) and bool(a) and len(a) == len(b) \
-            and all(abs(x - y) <= 1e-6 * max(1.0, abs(x)) for x, y in zip(a, b))
+        return bool(a) and len(a) == len(b) and all(abs(x - y) <= 1e-6 * max(1.0, abs(x)) for x, y in zip(a, b))
 
     def refind(self, card: dict) -> tuple[tuple | None, str]:
         """This year's row for a card, in a model that changed since the pick: the same label, heading and kind on the
@@ -817,11 +836,19 @@ class RowFinder:
     def _copies(self, s: str, r: int, res: dict, found: dict) -> None:
         """Last year's label in more than one place this year where it wasn't before (a downside or P90 case inserted
         above the base, the base renamed, no headings at all), or in copies of a block: the label, the neighbours, the
-        trace and the lineage are the same in every copy, so none of them says which copy is meant. Two things can:
-          the heading   the one whose heading names last year's case, surely and well ahead (structure.which_copy)
+        trace and the lineage are the same in every copy, so none of them says which copy is meant. The candidates
+        are this year's rows with the label that could be the line item: not a pasted copy of last year's figures, a
+        row of another shape or kind, nor a mirror of another candidate (a row only reading one of them). Where they
+        all hold the same figures, it doesn't matter which. Else what can decide:
+          the heading   the one whose heading names last year's case, surely (exactly, on one copy only), or well
+                        ahead of the others (structure.which_copy)
           the value     the one whose rows reach the row of the model's own valuation last year's row reached (the
                         equity value, the NPV), where exactly one does
-        Else the row is left in doubt (copies_open), for the models or a person: never the first occurrence."""
+          the periods   the one on last year's row's timeline (annual, not the quarterly copy beside it)
+          the sheet     the copies there both years (as many as last year's): the one on the sheet last year's sheet
+                        became, where one is
+        A pick other than the row found must carry last year's numbers within the band, or the row is left in doubt
+        (copies_open), for the models or a person: never the first occurrence."""
         import structure
         k = res["found"]
         lab = _norm(self.prior.labels().get((s, r), ""))
@@ -839,8 +866,22 @@ class RowFinder:
         blocks = {x: structure.block_of(cur["blocks"], *x) for x in cands}
         paired = any(blocks[a] and blocks[b] and frozenset((name(blocks[a]), name(blocks[b]))) in pairs
                      for a in cands for b in cands if a != b)
-        if not paired and len(cands) <= self._prior_count(lab):
+        before = self._prior_count(lab)
+        if not paired and len(cands) <= before:
             return  # as often as last year (and no copies of a block): the occurrences match in order
+        # the rows that could be it: not last year's figures pasted in, another shape or kind of row, or a mirror;
+        # one holding last year's forecast exactly beside revised rows (suspect_copy) stays a candidate but can't be
+        # picked (this year's own row can be unrevised too)
+        cands = [x for x in cands if not (self.is_copy(s, r, x) or self.other_shape(s, r, x) or self._kind_clash(s, r, x))]
+        odd = {x for x in cands if self.suspect_copy(s, r, x)}
+        reads = self._index()["edges"][1][0]
+        mirrors = [x for x in cands if reads.get(x) and set(reads[x]) <= set(cands) - {x}]
+        cands = [x for x in cands if x not in mirrors] or cands
+        if len(cands) < 2 or all(self._same_series(cands[0], x) for x in cands[1:]):
+            if len(cands) == 1 and cands[0] != k and cands[0] not in odd and self.check(s, r, cands[0])["ok"]:
+                self._take(res, found, k, cands[0], "block", "the one row with the label that could be it (the others "
+                           "are copies of last year's figures, mirrors or another kind of row)")
+            return
         res["in_place"] = False  # its place may be the copy's: a decider below, or doubt
         info = cur["info"]
         # a heading is the block's, else the row's section: never the sheet's name, which says where a copy is, not
@@ -850,12 +891,21 @@ class RowFinder:
         want_bl = [{**mine, "heading": mine.get("heading") or pri["info"].get((s, r), {}).get("section") or ""}] if mine \
             else [{"sheet": s, "rows": [r], "heading": pri["info"].get((s, r), {}).get("section") or ""}]
         w = structure.which_copy(want_bl, cur["blocks"], cur["copies"], (s, r), cands, heading_of=heading)
-        pick, why, how = w["pick"], w["why"], "block"
+        pick, why, how = (w["pick"], w["why"], "block") if w["pick"] not in odd else (None, None, None)
         if not pick:
             v = self._by_value(s, r, cands)
-            if v:
+            if v and v[0] not in odd:
                 pick, why, how = v[0], v[1], "value"
-        if pick:
+        if not pick:
+            f = self._by_periods(s, r, cands)
+            if f and f[0] not in odd:
+                pick, why, how = f[0], f[1], "block"
+        if not pick and len(cands) <= before:
+            home = self.sheet_for(s)
+            there = [x for x in cands if x[0] == home] if home else []
+            if len(there) == 1 and there[0] not in odd:
+                pick, why, how = there[0], f"the copy on {home}, the sheet last year's became (as many copies as last year)", "block"
+        if pick and (pick == k or self.check(s, r, pick)["ok"]):
             fam = "place" if how == "block" else "role"
             if pick == k:
                 (found.get(k) or {})[how] = (1.0, why)
@@ -864,18 +914,38 @@ class RowFinder:
                 res["evidence"].append((how, why))
                 res["confidence"] = round(max(res["confidence"], CONFIDENT), 2)
             else:
-                found.setdefault(pick, {})[how] = (1.0, why)
-                found[pick].setdefault("label", (1.0, "the same label, in that copy"))
-                res.update(found=pick, how=how, confidence=round(max(res["confidence"], CONFIDENT + 0.1), 2),
-                           evidence=[(how, why), ("label", "the same label, in that copy")],
-                           alternatives=[{"row": f"{k[0]}!r{k[1]}", "label": self.current.labels().get(k, ""), "score": 0.0,
-                                          "evidence": ["found first, in another copy"]}] + res["alternatives"])
+                self._take(res, found, k, pick, how, why)
             res["copy_decided"] = fam
             return
         res["confidence"] = min(res["confidence"], round(CONFIDENT - 0.01, 2))
         res["copies_open"] = [f"{x[0]}!r{x[1]} '{heading(x)}'" for x in cands]
         res["evidence"].append(("block", f"the label is in {len(cands)} places this year (" + "; ".join(res["copies_open"][:4])
-                                         + "): neither the headings nor the model's own value say which is last year's"))
+                                         + "): neither the headings nor the model's own value say which is last year's"
+                                         + ("; the one they point to is outside the numbers band" if pick else "")))
+
+    def _take(self, res: dict, found: dict, k, pick, how: str, why: str) -> None:
+        """The row found switched to another (a copy decided by its heading, value, periods or sheet)."""
+        found.setdefault(pick, {})[how] = (1.0, why)
+        found[pick].setdefault("label", (1.0, "the same label, in that copy"))
+        res.update(found=pick, how=how, confidence=round(max(res["confidence"], CONFIDENT + 0.1), 2), in_place=False,
+                   evidence=[(how, why), ("label", "the same label, in that copy")],
+                   alternatives=[{"row": f"{k[0]}!r{k[1]}", "label": self.current.labels().get(k, ""), "score": 0.0,
+                                  "evidence": ["found first, in another copy"]}] + res["alternatives"])
+
+    def _by_periods(self, s: str, r: int, cands: list[tuple]) -> tuple | None:
+        """The one candidate whose periods are as long as last year's row's (an annual row, not the quarterly copy
+        beside it). -> (row, why) or None."""
+        def plen(ser):
+            ws = sorted(ser)
+            gaps = sorted(b - a for a, b in zip(ws, ws[1:]))
+            return round(gaps[len(gaps) // 2] / 30.44) if gaps else None
+        mine = plen(self._series(self.prior, s, r))
+        if not mine:
+            return None
+        hits = [x for x in cands if plen(self._series(self.current, *x)) == mine]
+        if len(hits) != 1 or len(hits) == len(cands):
+            return None
+        return hits[0], f"the copy with last year's row's periods ({mine} months), not the others'"
 
     def _prior_count(self, lab: str) -> int:
         """How many of last year's rows have this label, on the sheets this year's are counted on (where the finder

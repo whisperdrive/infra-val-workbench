@@ -130,13 +130,16 @@ def equity_pick(eid: int) -> dict | None:
 
 
 def set_equity_pick(eid: int, pick: dict | None, by: str, why: str = "") -> None:
+    """The equity cells picked, by a person ("you") or gpt-sol: gpt-sol's never replaces a person's (a person picking
+    while its call was out had theirs overwritten)."""
     import store
     f = equity_file(eid)
     if pick is None:
         with store.lock(f):
-            f.unlink(missing_ok=True)
+            store._retry(lambda: f.unlink(missing_ok=True))
         return
-    store.write(f, {**pick, "by": by, "why": why, "at": time.time()})
+    new = {**pick, "by": by, "why": why, "at": time.time()}
+    store.update(f, lambda cur: None if by != "you" and isinstance(cur, dict) and cur.get("by") == "you" else new, None)
 
 
 def person_picks(picks: dict) -> dict:
@@ -708,7 +711,8 @@ def _rebuild_job(eid: int, key: str):
         # The doctor's gate is keyed on the rebuild's inputs WITHOUT the held cells, not on the stage's own key: holding
         # cells changes the stage's key (so the rebuild runs again), and gating on it would run the doctor again after
         # every hold, and hold again, for ever. Once per rebuild of the same files, roles and facts.
-        core = inputs(eid, "rebuild", _snapshot(eid), holds=False)
+        import doctor
+        core = _h([inputs(eid, "rebuild", _snapshot(eid), holds=False), doctor.VERSION])
         if not [h for h in history(eid, "rebuild", "validation") if h["inputs"] == core and h["event"] == "note"]:
             log(eid, "rebuild", "note", f"{off} of {val['cells']:,} cells differ from Excel: the doctor looks at them",
                 issue="validation", inputs=core)
@@ -720,12 +724,14 @@ def _rebuild_job(eid: int, key: str):
         safe = (((doc.get("result") or {}).get("evidence") or {}).get("holds") or {}).get("safe") or []
         new = [h for h in safe if h["cell"] not in {x["cell"] for x in doc.get("held") or []}] if not doc.get("stale") else []
         if new:
-            needs.append({"id": "doctor-holds", "stage": "rebuild", "severity": "check",
-                          "title": f"{len(new)} cell(s) Python can't work out could be held at Excel's value",
-                          "detail": "the doctor found they read nothing that changes between the years (the client "
-                                    "model, an assumption, the dates the roll moves): holding them at what Excel saved "
-                                    "is yours to decide, on the Rebuild page",
-                          "go": {"step": "rebuild", "anchor": "doctorCard"}})
+            import result
+            needs.append(_acked({"id": "doctor-holds", "stage": "rebuild", "severity": "check",
+                                 "title": f"{len(new)} cell(s) Python can't work out could be held at Excel's value",
+                                 "detail": "the doctor found they read nothing that changes between the years (the client "
+                                           "model, an assumption, the dates the roll moves): holding them at what Excel "
+                                           "saved is yours to decide, on the Rebuild page (or acknowledge, not holding them)",
+                                 "go": {"step": "rebuild", "anchor": "doctorCard"}},
+                                result.fingerprint(sorted(h["cell"] for h in new)), wb.acks(eid).get("doctor-holds")))
         needs.append({"id": "validation", "stage": "rebuild", "severity": "info",
                       "title": f"{off} of {val['cells']:,} overlay cells differ from Excel in Python",
                       "detail": "shown on Rebuild; they matter only if they're under the equity value",
@@ -878,8 +884,9 @@ def _result_job(eid: int, key: str):
     dc = (g or {}).get("date_cells") or {}
     for h in (g or {}).get("holds") or []:  # this year's cash flows against last year's (cashflows.py)
         anchor = ("equityPick" if h["id"].startswith("equity-") else "doctorCard" if h["id"] == "doctor-moved"
+                  else "heldCard" if h["id"].startswith("declared") else "compareCard" if h["id"] == "own-inputs"
                   else "bridgeCard" if h["id"].startswith(("cf-split", "cf-sign")) or h["id"] == "damaged"
-                  else "methodsCard" if h["id"] == "basis-method"
+                  else "methodsCard" if h["id"] in ("basis-method", "method-unapplied")
                   else "compareCard" if h["id"] in ("basis", "interest", "interest-two", "interest-error")
                   else "tieCard" if h["id"].startswith(("rebuild-", "tie-"))
                   else "datesCard" if h["id"] == "roll-assumed" else "termsCard" if h["id"] == "terms-error"
@@ -1067,11 +1074,7 @@ def _result_job(eid: int, key: str):
                                 "figure to the cent; it doesn't, so the recomputed methods (mid-period, mid-year, the other "
                                 "day count) differ from the default by more than their convention",
                       "go": {"step": "result", "anchor": "methodsCard"}})
-    if inv.get("asked") and inv.get("asked") != inv.get("preferred"):
-        m = next((x for x in inv.get("methods") or [] if x["key"] == inv["asked"]), {})
-        needs.append({"id": "method", "stage": "result", "severity": "check",
-                      "title": "The preferred method can't be worked out here: this year's value is the default's",
-                      "detail": m.get("why") or inv.get("error") or "", "go": {"step": "result", "anchor": "methodsCard"}})
+    # (a preferred method not worked out holds the value: result's method-unapplied and basis-method holds)
     rt = ((res.get("inputs") or {}).get("rate") or {}).get("this_year") or {}
     if rt and not rt.get("applied"):
         needs.append({"id": "rate-this-year", "stage": "result", "severity": "check",
@@ -1244,7 +1247,8 @@ KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact"
          ("date-overlay", "check-date", "A date to check"),
          ("date", "confirm-date", "A date to confirm"), ("equity", "pick-cells", "Cells to pick"),
          ("rows-models", "retry", "A step to try again"), ("doctor-holds", "check-cells", "Cells to hold"),
-         ("doctor-moved", "check-cells", "Cells to hold"), ("damaged", "check-decisions", "Decisions to make again"), ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),
+         ("doctor-moved", "check-cells", "Cells to hold"), ("declared", "check-input", "A model input to check"),
+         ("own-inputs", "check-input", "A model input to check"), ("damaged", "check-decisions", "Decisions to make again"), ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),
          ("rate-", "check-input", "A model input to check"), ("growth-", "check-input", "A model input to check"),
          ("franking-", "check-input", "A model input to check"), ("tie-", "check-tie", "A tie to check"),
          ("review-", "review-point", "A review point"), ("failed-", "retry", "A step that failed"),
@@ -1297,6 +1301,15 @@ def typical(eid: int) -> dict:
     return out
 
 
+def _date_settled(eid: int) -> bool:
+    """This year's valuation date set for the engagement, or this year's model's confirmed since the rebuild asked (the
+    rebuild doesn't run again for it, so its question would stand)."""
+    if wb.this_year_date(eid):
+        return True
+    cur = wb._role_wb(eid, "current_model")
+    return bool(cur and cur.get("identity_confirmed"))
+
+
 def view(eid: int) -> dict:
     """The stages (status, note, what's running now), the needs-you list, and the latest of the run log. Reading it
     starts nothing."""
@@ -1313,7 +1326,8 @@ def view(eid: int) -> dict:
         stages.append({"stage": name, "label": LABEL[name], "status": rec["status"] or "waiting", "note": live,
                        "started_at": rec["started_at"], "finished_at": rec["finished_at"], "typical_secs": took.get(name)})
         if rec["status"] != "waiting":  # a stage waiting on the one before: its needs may no longer stand
-            needs += [dress(n) for n in rec["data"].get("needs") or []]
+            needs += [dress(n) for n in rec["data"].get("needs") or []
+                      if not (n.get("id") == "date" and _date_settled(eid))]
     sev = {"block": 0, "check": 1, "info": 2}
     needs.sort(key=lambda n: sev.get(n["severity"], 3))
     running = [{"job": j if isinstance(j, str) else j[0], "state": st} for (x, j), st in list(_active.items()) if x == eid]

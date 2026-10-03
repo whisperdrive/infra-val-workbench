@@ -197,10 +197,16 @@ GENERIC = {"case", "cases", "scenario", "scenarios", "forecast", "forecasts", "c
 FLOOR, MARGIN = 0.75, 0.5  # a copy is picked by its heading only this sure, and this far ahead of the next
 
 
+def _htokens(text: str) -> set:
+    """A heading's words, short ones too ("Tranche A", "Asset 2"): a letter or a number can be all that tells two
+    copies apart."""
+    return set(re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+
 def heading_fit(want: str, got: str) -> float | None:
     """How surely a heading names the same case as last year's: 1 the same, 0 another case, between where the words
     say partly, None where neither says anything (both empty or only generic words)."""
-    a, b = _words(want), _words(got)
+    a, b = _htokens(want), _htokens(got)
     if not a and not b:
         return None
     if a and a == b:
@@ -231,6 +237,11 @@ def which_copy(prior_bl: list[dict], cur_bl: list[dict], cur_copies: list[dict],
     if len(scored) < 2:
         return {"pick": None, "why": "no copies among the candidates", "ambiguous": []}
     best, nxt = scored[0][0] or 0.0, scored[1][0] or 0.0
+    # the heading itself, exactly, on one copy only: that copy ("Asset 1 - Northern" against "Asset 2 - Southern")
+    exact = [k for f, k in scored if f == 1.0 and _htokens(head(k)) == _htokens(want)]
+    if want and len(exact) == 1:
+        k = exact[0]
+        return {"pick": k, "why": f"the copy headed '{head(k)}', as last year's block was", "ambiguous": []}
     if best >= FLOOR and best - nxt >= MARGIN:
         k = scored[0][1]
         return {"pick": k, "why": f"the copy headed '{head(k)}', as last year's block was ('{want}')", "ambiguous": []}
