@@ -1563,9 +1563,11 @@ function assumptionsCard(R) {
 }
 function equityPickCard() {
   const needs = (E.run?.needs || []).find(n => n.id === "equity" || n.id === "equity-rows");
-  const w = E.result?.where, open = !!needs;
+  const held = (E.run?.needs || []).filter(n => n.id.startsWith("equity-") && n.id !== "equity-rows" && n.severity !== "info");
+  const w = E.result?.where, open = !!needs || !!held.length;
   const cands = needs?.candidates || EQ.cands;
   return `<details class="card fold" id="equityPick" data-k="equitypick" ${open ? "open" : ""}><summary><span class="ft">${open ? "Pick last year's equity value cells" : "Pick other cells for last year's equity value"}</span></summary>
+    ${cardNeeds(id => id.startsWith("equity-") && id !== "equity-rows")}
     <p class="small muted">The low and the high of the report's equity value, as cells on the overlay's sheets (Sheet!A1). ${w ? `Now: ${esc(w.low)} / ${esc(w.high)} (${esc(w.how || "")}).` : ""} Cells holding the report's figures:</p>
     ${cands?.length ? `<div class="scroll"><table><thead><tr><th>Cell</th><th>Line item</th><th class="num">Value</th><th>The report's</th><th>Basis</th></tr></thead><tbody>${cands.map(c => `<tr><td class="mono">${esc(c.cell)}</td><td>${esc(c.label || "")}</td><td class="num">${esc(fmt(c.value, 1))}</td><td>${esc(c.part === "value" ? "mid / preferred" : c.part)}</td><td>${esc(c.basis)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="small"><button class="btn small" id="eqLoad" type="button">Find them</button></p>`}
     <form class="row" id="eqForm" style="margin-top:10px"><label class="small">Low<br><input type="text" name="low" value="${esc(w?.low || "")}" placeholder="Summary!C9"></label>

@@ -1020,37 +1020,43 @@ def typed_ends_check(first: int) -> None:
     where = wb.get(first)["result"]["where"]
     lo, hi = where["low"], where["high"]
     holds = lambda w, f, rows: {h["id"]: h for h in result._equity_holds(summary, w, f, rows)}
-    h = holds(where, {"rebuilt": {lo: 100.0, hi: 120.0}, "this_year": {lo: 100.0, hi: 130.0}}, {"changed": 3})
-    assert set(h) == {"equity-unmoved-low"} and h["equity-unmoved-low"]["severity"] == "block", h
-    assert not holds(where, {"rebuilt": {lo: 100.0, hi: 120.0}, "this_year": {lo: 100.0, hi: 130.0}}, {"changed": 0})
+    # the pack's own ends discount: one unmoved isn't held for that alone (a model can leave a value where it was)
+    assert not holds(where, {"rebuilt": {lo: 100.0, hi: 120.0}, "this_year": {lo: 100.0, hi: 130.0}}, {"changed": 3})
     w2 = {**where, "mid": "Summary!Z99"}
     h = holds(w2, {"rebuilt": {lo: 100.0, hi: 120.0, "Summary!Z99": 110.0},
                    "this_year": {lo: 101.0, hi: 121.0, "Summary!Z99": 125.0}}, {"changed": 3})
     assert set(h) == {"equity-mid"}, h
-    # the pack with the ex-distribution low and high pasted as figures, its mid working the value out
-    out = Path(tempfile.mkdtemp(prefix="pasted_"))
-    orig = xlsxwriter.worksheet.Worksheet.write_formula
+    def run(way: str):
+        """The pack with the ex-distribution low and high typed in ("pasted": as figures; "pointed": formulas reading
+        figures typed further down), its mid working the value out: the engagement's needs and result."""
+        out = Path(tempfile.mkdtemp(prefix=f"{way}_"))
+        orig = xlsxwriter.worksheet.Worksheet.write_formula
 
-    def pasted(self, row, col=None, *args, **kw):
-        if isinstance(row, str) and self.name == "Summary" and row in ("C9", "E9", "D9"):
-            formula, fmt, value = (list((col,) + args) + [None, None, None])[:3]
-            return self.write_number(row, value, fmt) if row != "D9" else orig(self, row, "=D7+D8", fmt, value)
-        return orig(self, row, col, *args, **kw)
-    keep = make_pack.OUT, make_pack.ROOT
-    xlsxwriter.worksheet.Worksheet.write_formula, make_pack.OUT, make_pack.ROOT = pasted, out, out
-    try:
-        make_pack.main()
-    finally:
-        xlsxwriter.worksheet.Worksheet.write_formula, (make_pack.OUT, make_pack.ROOT) = orig, keep
-    e = wb.create("Asset A, FY26 (ends pasted)")
-    eid = e["id"]
-    confirm_insurance(eid)
-    for name in PACK_A:
-        tmp = Path(tempfile.mkdtemp()) / name
-        shutil.copy(out / name, tmp)
-        wb.add_upload(eid, tmp, name, library.sha256_file(tmp))
-    v = wait(eid, lambda v: status(v)["result"] in (*orc.SETTLED, "blocked", "failed") and not v["busy"], "the result", 600)
-    res = wb.get(eid)["result"] or {}
+        def typed(self, row, col=None, *args, **kw):
+            if isinstance(row, str) and self.name == "Summary" and row in ("C9", "E9", "D9"):
+                formula, fmt, value = (list((col,) + args) + [None, None, None])[:3]
+                if row == "D9":
+                    return orig(self, row, "=D7+D8", fmt, value)
+                if way == "pasted":
+                    return self.write_number(row, value, fmt)
+                self.write_number(f"{row[0]}30", value, fmt)  # the figure typed further down, the end pointing at it
+                return orig(self, row, f"={row[0]}30", fmt, value)
+            return orig(self, row, col, *args, **kw)
+        keep = make_pack.OUT, make_pack.ROOT
+        xlsxwriter.worksheet.Worksheet.write_formula, make_pack.OUT, make_pack.ROOT = typed, out, out
+        try:
+            make_pack.main()
+        finally:
+            xlsxwriter.worksheet.Worksheet.write_formula, (make_pack.OUT, make_pack.ROOT) = orig, keep
+        eid = wb.create(f"Asset A, FY26 (ends {way})")["id"]
+        confirm_insurance(eid)
+        for name in PACK_A:
+            tmp = Path(tempfile.mkdtemp()) / name
+            shutil.copy(out / name, tmp)
+            wb.add_upload(eid, tmp, name, library.sha256_file(tmp))
+        v = wait(eid, lambda v: status(v)["result"] in (*orc.SETTLED, "blocked", "failed") and not v["busy"], "the result", 600)
+        return eid, v, wb.get(eid)["result"] or {}
+    eid, v, res = run("pasted")
     w = res.get("where") or {}
     assert w.get("low") not in ("Summary!C9", "Summary!E9") and w.get("high") not in ("Summary!C9", "Summary!E9"), w
     need = next((n for n in v["needs"] if n["id"] == "equity-typed"), None)
@@ -1058,8 +1064,15 @@ def typed_ends_check(first: int) -> None:
     assert res["values"]["this_year"] is None, res["values"]
     assert not [x for x in res.get("held") or [] if x["cell"] in ("Summary!C9", "Summary!E9", "Summary!D9")], res.get("held")
     wb.delete(eid)
-    print("typed ends: ok (a typed end, an end left at last year's while the model changed, and a mid no longer the "
-          "ends' midpoint each hold; the pack with its low and high pasted: not paired, held saying so, not held inputs)")
+    # the ends formulas pointing at typed figures: paired (they're formulas), and held: nothing under them moves
+    eid, v, res = run("pointed")
+    assert (res.get("where") or {}).get("low") == "Summary!C9", res.get("where")
+    ids = {n["id"]: n for n in v["needs"]}
+    assert ids.get("equity-unmoved-low", {}).get("severity") == "block" and "equity-unmoved-high" in ids, list(ids)
+    assert res["values"]["this_year"] is None, res["values"]
+    wb.delete(eid)
+    print("typed ends: ok (the pack with its low and high pasted: not paired, held saying so, not held inputs; with "
+          "them pointing at typed figures: paired, held, nothing under them moving; a mid no longer the ends' midpoint holds)")
 
 
 def damaged_check(eid: int) -> None:

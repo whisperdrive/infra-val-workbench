@@ -1620,6 +1620,14 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
     return out
 
 
+def _discounts(db, cell: str) -> bool:
+    """Whether a discounting is under the cell (dcftrace)."""
+    try:
+        return bool(dcftrace.cores(dcftrace.trace(db, cell)))
+    except ValueError:
+        return False
+
+
 def _equity_holds(summary: dict, where: dict, figs: dict, rows: dict | None) -> list[dict]:
     """Last year's equity cells as this year's value: each worked out, not typed (pasted, or an Excel data table's
     result: this year's model can't move it); not left exactly at last year's while this year's model changed; and,
@@ -1647,13 +1655,16 @@ def _equity_holds(summary: dict, where: dict, figs: dict, rows: dict | None) -> 
                                 f"{cell} holds a figure typed in (pasted, or an Excel data table's result): this year's "
                                 f"model can't move it, so this year's {e} would be last year's. Pick the cells that work "
                                 "the value out (Rebuild, the equity cells), or acknowledge why it's right"))
-            elif num(last.get(cell)) and num(now.get(cell)) and (rows or {}).get("changed") and \
-                    abs(now[cell] - last[cell]) <= 1e-12 * max(1.0, abs(last[cell])):
-                out.append(hold(summary, f"equity-unmoved-{e}", [cell, last[cell], (rows or {}).get("changed")],
-                                f"This year's {e} is last year's to the cent while this year's model changed",
-                                f"{cell}: {last[cell]:,.2f} both years, though {rows['changed']} row(s) the value reads were "
-                                "revised: nothing under it reads this year's model. Pick the cells that work the value "
-                                "out, or acknowledge why it's right"))
+            elif num(last.get(cell)) and num(now.get(cell)) and abs(now[cell] - last[cell]) <= 1e-12 * max(1.0, abs(last[cell])) \
+                    and not _discounts(db, cell):
+                # worked out, but from nothing this year's model moves (a formula pointing at a typed table, say): no
+                # discounting under it and last year's figure to the cent
+                out.append(hold(summary, f"equity-unmoved-{e}", [cell, last[cell]],
+                                f"This year's {e} is last year's to the cent, with no discounting under it",
+                                f"{cell}: {last[cell]:,.2f} both years" + (f", though {rows['changed']} row(s) the value reads "
+                                                                           f"were revised" if (rows or {}).get("changed") else "")
+                                + ": nothing under it reads this year's model. Pick the cells that work the value out, or "
+                                  "acknowledge why it's right"))
     mid, lo, hi = where.get("mid"), where.get("low"), where.get("high")
     if mid and mid not in (lo, hi) and all(num(x.get(k)) for x in (last, now) for k in (mid, lo, hi)):
         tol = lambda a, b: abs(a - b) <= 1e-6 * max(1.0, abs(b))
