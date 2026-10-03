@@ -950,6 +950,99 @@ def rate_check(eid: int) -> None:
           f"({move:+.1f} at the mid), the roll-forward's steps and the zero-roll check at last year's; back, the first result)")
 
 
+def failures_check(eid: int) -> None:
+    """A check that can't run holds the value, rather than letting it through: the cash-flow checks crashing, the
+    interest check crashing, and a cum-distribution value whose own method (keeping the period ending on the new
+    date) can't be worked out, which would otherwise be the ex figure under a cum label. Each is a hold a person can
+    acknowledge. Worked out beside the stored result, the orchestrator kept off the result while it runs."""
+    import cashflows
+    import interest
+    import keyfacts
+    import methods
+    import result
+    sess, summary = wb.overlay_session(eid)
+    wb._sync_roll(eid, sess, summary)
+    fy = wb.profile_view(eid)["fields"]["fy_end_month"]["value"] or 12
+    compute = lambda: result.compute(sess, summary, wb.reference(eid), orc._report_md(eid), fy, orc.equity_pick(eid))
+
+    def boom(*a, **k):
+        raise RuntimeError("broken on purpose")
+    holds = lambda res: {h["id"]: h for h in res["figures"]["gaps"]["holds"]}
+    with orc._lock:
+        orc._active[(eid, "result")] = "running"
+    keep = cashflows.checks, interest.check, methods.inventory, keyfacts.conclusion, result.cell_basis
+    try:
+        assert compute()["values"]["this_year"] is not None
+        cashflows.checks = boom
+        res = compute()
+        h = holds(res)["cf-error"]
+        assert h["severity"] == "block" and h["key"] and res["values"]["this_year"] is None, h
+        cashflows.checks = keep[0]
+        interest.check = boom
+        res = compute()
+        h = holds(res)["interest-error"]
+        assert h["severity"] == "block" and res["values"]["this_year"] is None and res["interest"]["error"], h
+        interest.check = keep[1]
+        # the report concluding cum-distribution, the overlay cell's own label silent
+        keyfacts.conclusion = lambda *a, **k: (lambda h: {**h, "basis": "cum", "other": None} if h else h)(keep[3](*a, **k))
+        result.cell_basis = lambda db, cell: (None, "")
+        res = compute()
+        assert res["head"]["basis"] == "cum" and res["methods"]["by"] == "basis" and "basis-method" not in holds(res), \
+            (res["methods"].get("preferred"), res["methods"].get("error"))
+        methods.inventory = boom
+        res = compute()
+        h = holds(res)["basis-method"]
+        assert h["severity"] == "block" and "broken on purpose" in h["detail"] and res["values"]["this_year"] is None, h
+        assert res["methods"]["asked"] == "overlay_on_date" and res["methods"]["by"] == "basis", res["methods"]
+        assert res["bridges"]["mid"]["steps"][-1]["key"] != "this_year" or res["bridges"]["held"], res["bridges"]["mid"]
+        summary["acks"] = {"basis-method": {"key": h["key"], "reason": "test"}}
+        res = compute()
+        assert holds(res)["basis-method"]["acked"] and res["values"]["this_year"] is not None
+    finally:
+        cashflows.checks, interest.check, methods.inventory, keyfacts.conclusion, result.cell_basis = keep
+        summary["acks"] = wb.acks(eid)
+        with orc._lock:
+            orc._active.pop((eid, "result"), None)
+    print("failures: ok (the cash-flow checks or the interest check crashing holds the value; a cum value whose own "
+          "method can't be worked out holds rather than going out ex; each can be acknowledged)")
+
+
+def damaged_check(eid: int) -> None:
+    """A file of a person's decisions damaged (a crash mid-save before saves were made whole, an edit by hand): never
+    read as empty in silence. It's moved aside and kept, and the value holds until the person has made the decisions
+    again and acknowledged; then it goes through, the file still listed."""
+    f = wb.acks_file(eid)
+    keep = f.read_text(encoding="utf-8") if f.exists() else None
+    finished = lambda: orc.stage(eid, "result").get("finished_at")
+    t0 = finished()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text('{"cf-stale": {"key": "abc", "reas', encoding="utf-8")
+    wb._touch(eid)
+    orc.poke()
+    v = wait(eid, lambda v: finished() != t0 and not v["busy"] and any(n["id"] == "damaged" for n in v["needs"]),
+             "the damaged file's hold")
+    n = next(n for n in v["needs"] if n["id"] == "damaged")
+    assert n["severity"] == "block" and "acks.json" in n["title"] and "acks.json.damaged-" in n["detail"], n
+    assert n["kind_label"] == "Decisions to make again" and wb.get(eid)["result"]["values"]["this_year"] is None
+    t0 = finished()
+    wb.acknowledge(eid, "damaged", n["ack"], "made them again, for the test", n["title"])
+    orc.poke()
+    v = wait(eid, lambda v: finished() != t0 and not v["busy"] and status(v)["result"] in orc.SETTLED, "the value again")
+    n = next(n for n in v["needs"] if n["id"] == "damaged")
+    assert n["severity"] == "info" and wb.get(eid)["result"]["values"]["this_year"] is not None, n
+    for x in f.parent.glob("acks.json.damaged-*"):
+        x.unlink()
+    t0 = finished()
+    if keep is None:
+        f.unlink(missing_ok=True)
+    else:
+        f.write_text(keep, encoding="utf-8")
+    orc.poke()
+    wait(eid, lambda v: finished() != t0 and not v["busy"] and status(v)["review"] in orc.SETTLED
+         and not any(n["id"] == "damaged" for n in v["needs"]), "the result as before")
+    print("damaged: ok (a damaged decisions file moved aside and kept, the value held until acknowledged, then through)")
+
+
 def methods_check(eid: int) -> None:
     """This year's value worked out other ways (engine/methods.py), on the same feed: the default is this year's value;
     the recompute ties to the overlay's own formulas; mid-period and mid-year are worth more than end of period, the mid
@@ -1710,6 +1803,8 @@ def main() -> None:
     held_check(eid)
     rate_check(eid)
     methods_check(eid)
+    failures_check(eid)
+    damaged_check(eid)
     rows_context_check(eid)
     gating_check(eid)
     roles_check()

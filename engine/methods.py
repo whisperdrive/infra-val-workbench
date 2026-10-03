@@ -87,8 +87,10 @@ def own_flags(sess, db, cores: list[dict]) -> list[tuple]:
                     and not isinstance(v, bool)}
             if len(nums) < 2 or set(nums.values()) - {0.0, 1.0}:
                 continue
-            after = sorted((tl[col], nums.get(col)) for col in tl if tl[col] > base)
-            if all(nums.get(col) in (0.0, None) for col in tl if tl[col] <= base) and after and after[0][1] == 1.0:
+            # by date, then column (a quarterly block and an annual summary share dates: a blank beside a figure on
+            # the same date isn't compared with it)
+            after = sorted((tl[col], col, nums.get(col)) for col in tl if tl[col] > base)
+            if all(nums.get(col) in (0.0, None) for col in tl if tl[col] <= base) and after and after[0][2] == 1.0:
                 out.append((s_, r_))
     return out
 

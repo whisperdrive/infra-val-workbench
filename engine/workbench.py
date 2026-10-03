@@ -29,6 +29,7 @@ from pathlib import Path
 
 import calllog
 import docingest
+import store
 import extlinks
 import keyfacts
 import lessons
@@ -1085,11 +1086,8 @@ def _this_year_file(eid: int) -> Path:
 def this_year_date(eid: int) -> str | None:
     """This year's valuation date as set for the engagement (a client model's own date is the model's, which a
     fresh model built for another date doesn't make this year's), or None."""
-    f = _this_year_file(eid)
-    try:
-        return json.loads(f.read_text(encoding="utf-8")).get("valuation_date") if f.exists() else None
-    except (OSError, ValueError):
-        return None
+    got = store.read(_this_year_file(eid), {})
+    return got.get("valuation_date") if isinstance(got, dict) else None
 
 
 def set_this_year_date(eid: int, valuation_date: str | None) -> dict:
@@ -1100,9 +1098,7 @@ def set_this_year_date(eid: int, valuation_date: str | None) -> dict:
     base = last.get("overlay") or last.get("prior_client")
     if valuation_date and base and valuation_date <= base[:10]:
         raise ValueError(f"this year's valuation date must be after last year's ({base[:10]})")
-    f = _this_year_file(eid)
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps({"valuation_date": valuation_date}), encoding="utf-8")
+    store.write(_this_year_file(eid), {"valuation_date": valuation_date})
     if eid in _SESSIONS:
         sess, summary = _SESSIONS[eid]
         _sync_roll(eid, sess, summary)
@@ -1138,13 +1134,8 @@ def held_values(eid: int) -> dict:
     """This year's figures a person set for the inputs held at last year's: {cell: {"value", "label", "by", "from",
     "was", "at", "file"}}. Each keeps what it was set for (the input's label, last year's figure, the overlay it was
     set on), so it's applied only while its cell is still that input (_held_checked)."""
-    try:
-        return json.loads(held_file(eid).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-_HELD = threading.Lock()  # held.json read, merged and written by one at a time (a person setting, the session moving)
+    got = store.read(held_file(eid), {})
+    return got if isinstance(got, dict) else {}
 
 
 def _plain(text) -> str:
@@ -1213,14 +1204,14 @@ def _held_checked(eid: int, sess, summary: dict) -> dict:
                               "how": f"{changed}: {why}; " + (f"{len(hits)} inputs have its label and last year's figure"
                                                              if hits else "no input has its label and last year's figure")})
     if moved:  # saved where they were found, merged into the file as it is now (a person may have set one meanwhile)
-        with _HELD:
-            now = held_values(eid)
+        def move(now):
+            now = now if isinstance(now, dict) else {}
             for a, (b, how) in moved.items():
                 if a in now and b not in now and now[a].get("at") == vals[a].get("at"):
                     x = now.pop(a)
                     now[b] = {**x, "file": path, "moved_from": x.get("moved_from") or a, "moved_how": how}
-            f = held_file(eid)
-            f.write_text(json.dumps(now, indent=1), encoding="utf-8")
+            return now
+        store.update(held_file(eid), move, {})
     return out
 
 
@@ -1237,16 +1228,15 @@ def set_held(eid: int, cell: str, value: float | None, source: str = "typed") ->
         path = overlay_session(eid)[0].ov.path
     except Exception:
         path = None
-    with _HELD:
-        vals = held_values(eid)
+    def change(vals):
+        vals = vals if isinstance(vals, dict) else {}
         if value is None:
             vals.pop(cell, None)
         else:
             vals[cell] = {"value": float(value), "label": item["label"], "by": "you", "from": source, "was": item["value"],
                           "at": time.time(), "file": path}
-        f = held_file(eid)
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(vals, indent=1), encoding="utf-8")
+        return vals
+    store.update(held_file(eid), change, {})
     if eid in _SESSIONS:
         sess, summary = _SESSIONS[eid]
         summary["held_values"] = _held_checked(eid, sess, summary)
@@ -1261,10 +1251,8 @@ def rate_file(eid: int) -> Path:
 def this_year_rate(eid: int) -> dict:
     """This year's discount rate as a person set it: {"low", "high" (the low end at the higher rate), "by", "at"},
     or {} for last year's."""
-    try:
-        return json.loads(rate_file(eid).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    got = store.read(rate_file(eid), {})
+    return got if isinstance(got, dict) else {}
 
 
 def _rate_in(v) -> float | None:
@@ -1286,13 +1274,13 @@ def set_this_year_rate(eid: int, low, high=None) -> dict:
     a, b = _rate_in(low), _rate_in(high)
     f = rate_file(eid)
     if a is None and b is None:
-        f.unlink(missing_ok=True)
+        with store.lock(f):
+            f.unlink(missing_ok=True)
         got = {}
     else:
         a, b = (a, b if b is not None else a) if a is not None else (b, b)
         got = {"low": max(a, b), "high": min(a, b), "by": "you", "at": time.time()}
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(got), encoding="utf-8")
+        store.write(f, got)
     if eid in _SESSIONS:
         _SESSIONS[eid][1]["this_year_rate"] = got
     _touch(eid)  # the result's inputs changed: the orchestrator works it out again
@@ -1306,23 +1294,21 @@ def terms_file(eid: int) -> Path:
 def terms_confirmed(eid: int) -> dict:
     """The terms a person confirmed (result._term_changes): this year's new ones as belonging in this year's value,
     by this year's row, and last year's gone ones as gone, by "was:" and last year's row: {key: {"label", "by", "at"}}."""
-    try:
-        return json.loads(terms_file(eid).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    got = store.read(terms_file(eid), {})
+    return got if isinstance(got, dict) else {}
 
 
 def confirm_term(eid: int, row: str, ok: bool, label: str | None = None) -> dict:
     """Confirm a term this year's model adds belongs in this year's value, or one it drops is gone (ok), or take that
     back. The gate then works out whether the value can be shown again."""
-    got = terms_confirmed(eid)
-    if ok:
-        got[row] = {"label": label or "", "by": "you", "at": time.time()}
-    else:
-        got.pop(row, None)
-    f = terms_file(eid)
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(got), encoding="utf-8")
+    def change(got):
+        got = got if isinstance(got, dict) else {}
+        if ok:
+            got[row] = {"label": label or "", "by": "you", "at": time.time()}
+        else:
+            got.pop(row, None)
+        return got
+    got = store.update(terms_file(eid), change, {})
     if eid in _SESSIONS:
         _SESSIONS[eid][1]["terms_confirmed"] = sorted(got)
     _touch(eid)
@@ -1336,23 +1322,20 @@ def acks_file(eid: int) -> Path:
 def acks(eid: int) -> dict:
     """The checks a person acknowledged, each on the figures it found: {id: {"key", "reason", "title", "by", "at"}}.
     A hold acknowledged lets this year's value through, marked; on other figures it holds again."""
-    try:
-        got = json.loads(acks_file(eid).read_text(encoding="utf-8"))
-        return got if isinstance(got, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    got = store.read(acks_file(eid), {})
+    return got if isinstance(got, dict) else {}
 
 
 def acknowledge(eid: int, nid: str, key: str | None, reason: str = "", title: str = "") -> dict:
     """Acknowledge a check on the figures it found (key), with the reason; key None takes it back."""
-    got = acks(eid)
-    if key:
-        got[nid] = {"key": key, "reason": reason.strip(), "title": title, "by": "you", "at": time.time()}
-    else:
-        got.pop(nid, None)
-    f = acks_file(eid)
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(got), encoding="utf-8")
+    def change(got):
+        got = got if isinstance(got, dict) else {}
+        if key:
+            got[nid] = {"key": key, "reason": reason.strip(), "title": title, "by": "you", "at": time.time()}
+        else:
+            got.pop(nid, None)
+        return got
+    got = store.update(acks_file(eid), change, {})
     if eid in _SESSIONS:
         _SESSIONS[eid][1]["acks"] = got
     _touch(eid)
@@ -1370,19 +1353,14 @@ def preferred_method(eid: int) -> str | None:
 
 def method_choice(eid: int) -> dict | None:
     """The method a person chose, with who, when and the one it replaced: {"key", "by", "at", "previous"}, or None."""
-    try:
-        got = json.loads(method_file(eid).read_text(encoding="utf-8"))
-        return got if isinstance(got, dict) else None
-    except (OSError, ValueError):
-        return None
+    got = store.read(method_file(eid), None)
+    return got if isinstance(got, dict) else None
 
 
 def set_method(eid: int, key: str | None) -> dict:
     """The method this year's value is worked out by (None: the default). The bridge then has a step of its own
     for the move from the default to it."""
     import methods
-    f = method_file(eid)
-    was = preferred_method(eid)
     if key not in (None, "", methods.DEFAULT):
         if key not in methods.LABEL:
             raise ValueError(f"no method {key}: one of {', '.join(methods.LABEL)}")
@@ -1393,8 +1371,8 @@ def set_method(eid: int, key: str | None) -> dict:
     if key in (None, "", methods.DEFAULT):
         key = None
     # who chose it, when, and what it replaced (for "back to" the previous one); the default chosen is kept too
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps({"key": key, "by": "you", "at": time.time(), "previous": was}), encoding="utf-8")
+    store.update(method_file(eid), lambda was: {"key": key, "by": "you", "at": time.time(),
+                                                 "previous": (was if isinstance(was, dict) else {}).get("key")})
     if eid in _SESSIONS:
         _SESSIONS[eid][1]["method"] = key
     _touch(eid)  # the result's inputs changed: the orchestrator works it out again
@@ -1415,6 +1393,7 @@ def _sync_roll(eid: int, sess, summary: dict) -> None:
     summary["method_choice"] = method_choice(eid)  # who chose it, when, and the one it replaced
     summary["terms_confirmed"] = sorted(terms_confirmed(eid))  # and the terms a person confirmed (result._term_changes)
     summary["acks"] = acks(eid)  # and the checks a person acknowledged, with the reason (result.hold)
+    summary["damaged"] = store.damaged(OUT / "overlays" / f"e{eid}")  # and their files that couldn't be read
     roll = summary.get("roll")
     if not roll or not summary["wiring"].get("current"):
         return
@@ -1745,8 +1724,8 @@ def _load_holds(eid: int, sess) -> None:
     """The cells a person chose to hold at Excel's saved value, while each is still the same cell: the same
     formula and the same saved value as when it was held (a rebuilt workbook that changed it drops the hold)."""
     import overlay as ovmod
-    f = _holds_file(eid)
-    held = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    held = store.read(_holds_file(eid), {})
+    held = held if isinstance(held, dict) else {}
     keep = {}
     with rodb.connect(sess.ov.path) as db:
         for cell, h in held.items():
@@ -1761,8 +1740,6 @@ def _load_holds(eid: int, sess) -> None:
 def _rowpicks_file(eid: int) -> Path:
     return OUT / "overlays" / f"e{eid}" / "rowpicks.json"
 
-
-_PICKS = threading.Lock()  # rowpicks.json read, merged and written by one at a time
 
 
 def _load_rowpicks(eid: int, sess) -> int:
@@ -1810,31 +1787,28 @@ def _load_rowpicks(eid: int, sess) -> int:
         except (ValueError, KeyError, TypeError):
             continue
     if changed:  # the cards added or moved, merged into the file as it is now (a person or the agents may have written)
-        with _PICKS:
-            now = _read_rowpicks(eid)
+        def merge(now):
             for a, b in picks.items():
                 if isinstance(b, dict) and b.get("card") and a in now:
                     was = now[a] if isinstance(now[a], dict) else {"to": now[a], "by": "you"}
                     if was.get("to") in (b.get("to"), next((x["was"] for x in sess.pick_notes if x["row"] == a), None)):
                         now[a] = {**was, "to": b["to"], "card": b["card"]}
-            _write_rowpicks(eid, now)
+            return now
+        _update_rowpicks(eid, merge)
     return stale
 
 
 def _read_rowpicks(eid: int) -> dict:
     """{"Sheet!r9": "Sheet!r12" | "-" | {"to", "by": "you" | "agent", "why", "checked_by"}}: a person's picks were
     saved as plain strings before the agents made picks too."""
-    f = _rowpicks_file(eid)
-    try:
-        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
-    except (OSError, ValueError):
-        return {}
+    got = store.read(_rowpicks_file(eid), {})
+    return got if isinstance(got, dict) else {}
 
 
-def _write_rowpicks(eid: int, picks: dict) -> None:
-    f = _rowpicks_file(eid)
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(picks, indent=1), encoding="utf-8")
+def _update_rowpicks(eid: int, change) -> dict:
+    """change(picks) -> picks, on the file as it is now, one at a time (a person's quick picks, the agents' run, the
+    cards added on loading all land)."""
+    return store.update(_rowpicks_file(eid), lambda got: change(got if isinstance(got, dict) else {}), {})
 
 
 def _row_ref(text: str) -> tuple[str, int]:
@@ -1957,7 +1931,6 @@ def row_pick(eid: int, prior_row: str, current_row: str | None) -> dict:
     to = rowfind.STAND_IN if keep else _row_ref(current_row) if current_row else None
     if to and not keep and not sess.current.db.execute("SELECT 1 FROM rows WHERE sheet=? AND row=?", to).fetchone():
         raise ValueError(f"{current_row} isn't a line item in this year's model")
-    picks = _read_rowpicks(eid)
     if to and not keep:  # what the finder had, against the person's pick: learned from, without a word of the client's
         try:
             import evidence
@@ -1967,12 +1940,15 @@ def row_pick(eid: int, prior_row: str, current_row: str | None) -> dict:
             evidence.record(ex.get("agreed"), ex.get("confidence"), ex.get("found") == to, sorted(picked), ex.get("how"))
         except Exception:
             pass
-    if to:
-        picks[prior_row] = {"to": current_row, "by": "you", **({"card": ovmod.deep(sess.rowmap.card, sess.current, to)}
-                                                             if not keep else {})}
-    else:
-        picks.pop(prior_row, None)
-    _write_rowpicks(eid, picks)
+    card = ovmod.deep(sess.rowmap.card, sess.current, to) if to and not keep else None
+
+    def change(picks):  # on the file as it is now: two quick picks both land
+        if to:
+            picks[prior_row] = {"to": current_row, "by": "you", **({"card": card} if not keep else {})}
+        else:
+            picks.pop(prior_row, None)
+        return picks
+    _update_rowpicks(eid, change)
     ovmod.deep(sess.rowmap.pick, s, r, to)
     return ovmod.deep(row_found, sess, s, r)
 
@@ -1986,6 +1962,30 @@ def row_info(eid: int, prior_row: str) -> dict:
     got = _q("SELECT json_extract(result_json, '$.figures.gaps.dcf_origins') AS o FROM engagements WHERE id=?", eid)
     origins = json.loads((got[0]["o"] if got else None) or "[]")  # the rows the discounted cash flows come from
     return ovmod.deep(row_found, sess, *_row_ref(prior_row), origins)
+
+
+def _worked(f: Path):
+    """A worked-out file (the agents' run, the doctor's diagnosis): its contents, or None where it's missing or doesn't
+    parse (it's worked out again; a person's decisions are kept apart, in store.py's files)."""
+    try:
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+    except (OSError, ValueError):
+        return None
+
+
+def agent_picks(picks: dict, decisions: list[dict], cards: dict, version: int) -> dict:
+    """The row picks with an agents' run's decisions in: a person's stand; the agents' earlier picks stand too, but for
+    the rows this run looked at and those made by another version of the row finder (a run looks only at the rows still
+    open: replacing every earlier pick dropped the ones it had no reason to look at)."""
+    looked = {d["row"] for d in decisions}
+    out = {k: v for k, v in picks.items() if not (isinstance(v, dict) and v.get("by") == "agent"
+                                                   and (k in looked or v.get("v") != version))}
+    for d in decisions:
+        if d.get("decision") and d["row"] not in out:
+            out[d["row"]] = {"to": d["decision"], "by": "agent", "v": version, "why": d.get("why"),
+                             "checked_by": d.get("review") or d.get("how"), "agreed": d.get("agreed"),
+                             "card": cards.get(d["row"])}
+    return out
 
 
 def _rowagent_file(eid: int) -> Path:
@@ -2018,28 +2018,24 @@ def _rows_job(eid: int, cells: list[str]) -> None:
     kept = [n["note"] for n in notes if isinstance(n, dict) and n.get("note")]
     res = rowagent.run(sess, summary, cells, step, reader, kept)
     nf.parent.mkdir(parents=True, exist_ok=True)
-    nf.write_text(json.dumps([{"note": n, "model": sess.current.path} for n in res.get("notes") or []]), encoding="utf-8")
+    store.write(nf, [{"note": n, "model": sess.current.path} for n in res.get("notes") or []])
     if reader is not None:
         res["models"] = {"proposes": reader.model, "checks": reader.reviewer_model}
     else:
         res["models_error"] = why
-    # the agents' picks, beside a person's (a person's always win; the agents' from an earlier run are replaced)
-    picks = {k: v for k, v in _read_rowpicks(eid).items() if not (isinstance(v, dict) and v.get("by") == "agent")}
+    # the agents' picks, beside a person's (a person's always win). Their earlier picks stand, but for the rows they
+    # looked at in this run and those made by another row finder: a run only looks at the rows still open, so replacing
+    # every earlier pick dropped the ones it had no reason to look at
+    cards = {}
     for d in res["decisions"]:
-        if d.get("decision") and d["row"] not in picks:
-            card = None
-            if d["decision"] != "-":
-                try:
-                    card = ovmod.deep(sess.rowmap.card, sess.current, _row_ref(d["decision"]))
-                except Exception:
-                    card = None
-            picks[d["row"]] = {"to": d["decision"], "by": "agent", "v": rowfind.VERSION, "why": d.get("why"),
-                               "checked_by": d.get("review") or d.get("how"), "agreed": d.get("agreed"), "card": card}
-    _write_rowpicks(eid, picks)
+        if d.get("decision") and d["decision"] != "-":
+            try:
+                cards[d["row"]] = ovmod.deep(sess.rowmap.card, sess.current, _row_ref(d["decision"]))
+            except Exception:
+                cards[d["row"]] = None
+    _update_rowpicks(eid, lambda picks: agent_picks(picks, res["decisions"], cards, rowfind.VERSION))
     res["at"], res["v"] = time.time(), rowfind.VERSION
-    f = _rowagent_file(eid)
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(res, default=str), encoding="utf-8")
+    store.write(_rowagent_file(eid), res)
     _set("engagements", eid, rows_status="done", rows_step="Done")
 
 
@@ -2078,8 +2074,7 @@ def rows_view(eid: int) -> dict:
     if not rows:
         raise ValueError("no such engagement")
     e = rows[0]
-    f = _rowagent_file(eid)
-    res = json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+    res = _worked(_rowagent_file(eid))
     import rowfind
     built = max([(_role_wb(eid, k) or {}).get("processed_at") or 0 for k in ("prior_overlay", "prior_model", "current_model")]
                 + [e["overlay_started_at"] or 0])
@@ -2107,9 +2102,7 @@ def _doctor_job(eid: int) -> None:
         traceback.print_exc()
         res["diagnosis_error"] = friendly(ex)
     res["text"] = doctor.report_text(res)
-    f = _doctor_file(eid)
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(res, default=str), encoding="utf-8")
+    store.write(_doctor_file(eid), res)
     _set("engagements", eid, doctor_status="done", doctor_step="Done")
 
 
@@ -2119,9 +2112,8 @@ def doctor_view(eid: int) -> dict:
     if not rows:
         raise ValueError("no such engagement")
     e = rows[0]
-    f = _doctor_file(eid)
-    res = json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
-    held = json.loads(_holds_file(eid).read_text(encoding="utf-8")) if _holds_file(eid).exists() else {}
+    res = _worked(_doctor_file(eid))
+    held = store.read(_holds_file(eid), {}) or {}
     return {"status": e["doctor_status"], "step": e["doctor_step"], "error": e["doctor_error"], "secs": e["doctor_secs"],
             "overlay_status": e["overlay_status"], "result": res,
             "stale": bool(res and e["overlay_started_at"] and res["at"] < e["overlay_started_at"]),
@@ -2133,11 +2125,11 @@ def doctor_holds(eid: int, cells: list[str] | None, release: bool = False) -> di
     release every hold. Only cells the doctor found safe can be held."""
     import overlay as ovmod
     f = _holds_file(eid)
-    held = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    held = store.read(f, {}) or {}
     if release:
         held = {}
     else:
-        res = json.loads(_doctor_file(eid).read_text(encoding="utf-8")) if _doctor_file(eid).exists() else None
+        res = _worked(_doctor_file(eid))
         safe = {h["cell"]: h for h in ((res or {}).get("evidence", {}).get("holds") or {}).get("safe") or []}
         if not safe:
             raise ValueError("the doctor found nothing that can be held: run it first")
@@ -2149,8 +2141,7 @@ def doctor_holds(eid: int, cells: list[str] | None, release: bool = False) -> di
                 row = db.execute("SELECT formula FROM cells WHERE sheet=? AND row=? AND col=?", k).fetchone()
                 held[c] = {"value": safe[c]["value"], "formula": row[0] if row else None, "why": safe[c]["title"],
                            "at": time.time()}
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(held, default=str), encoding="utf-8")
+    store.write(f, held)
     if eid in _SESSIONS:
         import overlay as ovmod
         ovmod.deep(_load_holds, eid, _SESSIONS[eid][0])

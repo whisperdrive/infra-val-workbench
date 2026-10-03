@@ -47,7 +47,8 @@ def _vocabulary() -> set[str]:
     words |= set(cashflows.IDS) | set(cashflows.KINDS) | set(lineage.GROUPS)
     words |= {"identity", "place", "role", "numbers", "structure"} | {"interest", "interest-two", "inside", "after", "basis",
                                                           "rebuild-low", "rebuild-high", "tie-low", "tie-high", "roll-assumed",
-                                                          "terms-error", "lines-error", "other-link", "role-check"}
+                                                          "terms-error", "lines-error", "other-link", "role-check",
+                                                          "basis-method", "interest-error", "damaged", "rows-models"}
     words |= {"waiting", "queued", "running", "done", "attention", "blocked", "failed", "error", "pending", "approved",
               "rejected", "agreed", "escalated", "withdrawn", "open", "ready", "processing", "unread", "verified",
               "flagged", "resolved", "edited", "figure", "confirmed", "confirmed by the reviewer", "corrected", "disputed",

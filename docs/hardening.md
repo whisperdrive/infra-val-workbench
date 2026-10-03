@@ -150,7 +150,9 @@ reviewer's own session.
 - **S5. A shared workbook's date set in another engagement** (re-run). Workbooks are shared by content; a date
   corrected in one engagement re-rolls every other engagement using the file: 3,384.7 became 3,542.4 with no hold,
   its date still shown as confirmed by the agents.
-- **S6. Decisions lost or corrupted** (re-run). The decision files (acks, terms, rate, method, row picks, held) are
+- ~~**S6. Decisions lost or corrupted**~~ — fixed: every decision file through `store.py` (one writer at a time, written
+  whole, a damaged one moved aside and the value held until acknowledged); the agents keep their earlier picks.
+  Was (re-run): The decision files (acks, terms, rate, method, row picks, held) are
   written in place without locks and read as empty when damaged: eight acknowledgements at once lost 151 of 160; a
   damaged rate file drops this year's rate with no flag; two quick row picks while the overlay thread is busy keep
   one; the rows job drops the agents' earlier picks on every rerun.
@@ -165,13 +167,16 @@ reviewer's own session.
 
 ### After an internal failure
 
-- **S10. Cum becomes ex** (code re-read). If the methods inventory raises, `asked` falls back to the person's
+- ~~**S10. Cum becomes ex**~~ — fixed: the basis's method kept as asked, a cum value without it held; the sort that
+  could raise, by date then column. Was (code re-read): If the methods inventory raises, `asked` falls back to the person's
   preference, dropping the basis's on-date method: a cum value published on the ex basis, no method need. A natural
   trigger: `methods.py` sorting `(date, None)` flags.
-- **S11. The cash-flow checks crashing** collapse into one `cf-error` point to check, removing `cf-split`; an interest
+- ~~**S11.**~~ — fixed: `cf-error` and `interest-error` are holds a person can acknowledge. Was: **the cash-flow checks
+  crashing** collapse into one `cf-error` point to check, removing `cf-split`; an interest
   check failing raises nothing.
-- **S12. A damaged `equity.json` or `holds.json`** freezes the engagement silently (the loop swallows the error).
-- **S13. Azure down** leaves the rows "done"; nothing reruns them when it's back.
+- ~~**S12.**~~ — fixed by `store.py`: moved aside, the value held. Was: **a damaged `equity.json` or `holds.json`** freezes the engagement silently (the loop swallows the error).
+- ~~**S13.**~~ — fixed: a point to check with a try again. Was: **Azure down** leaves the rows "done"; nothing reruns
+  them when it's back.
 
 ### Medium
 
@@ -184,11 +189,12 @@ reviewer's own session.
 - Circular references on this year's feed take last year's saved value; an unknown function in a branch not taken
   last year falls through IFERROR silently.
 - Every fact edit reruns the roles' second opinion (cost).
-- Model calls don't pass `store=False`: Azure keeps requests and responses (up to 30 days by default).
+- ~~Model calls don't pass `store=False`~~ — fixed: every call asks Azure to keep nothing.
 - A single figure off the timeline stands in at last year's where its case column's heading is reworded (reviewer).
 
 ### Low
-Folders deleted with errors ignored; charts and fonts from public CDNs; the diagnostics' version pattern too broad;
+~~A job the loop queued just as its engagement was deleted ran on, writing its log for an engagement that's gone~~ —
+fixed: a job for a deleted engagement doesn't run, and nothing is written for one. Folders deleted with errors ignored; charts and fonts from public CDNs; the diagnostics' version pattern too broad;
 low ≤ high not checked after the roll; `time` and `new-terms` holds shown as "a note"; the review prompt's wording.
 
 ### What would make it harder to get wrong
@@ -203,4 +209,5 @@ low ≤ high not checked after the roll; `time` and `new-terms` holds shown as "
 5. Judgements per engagement; the library holds only what's true of a file.
 6. Fingerprints of what each job read, with a test editing each field a person can edit.
 7. The doctor's holds a person's decision; runtime health (cycles, unsupported calls) checked on this year's feed.
-8. The failing variants in `tests/variants.py`, so its measure is honest.
+8. ~~The failing variants in `tests/variants.py`~~ — done: 51 of 68 rows right, the 17 wrong all in the 5 kinds listed
+   in `variants.KNOWN_WRONG` (S1, S9 and the merged row), each taken off the list when it's fixed.

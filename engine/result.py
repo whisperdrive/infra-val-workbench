@@ -1498,6 +1498,14 @@ def _gate_holds(summary: dict, head: dict, where: dict, figs: dict, unit) -> lis
                         "This year's value reads another linked workbook at last year's figures",
                         f"{said}. Only the client model's link is fed from this year's model; these cells keep the values "
                         "Excel saved last year. Map them to this year's file, or say why they don't change"))
+    bad = summary.get("damaged") or []  # a file of a person's decisions that didn't parse, moved aside (store.py)
+    if bad:
+        names = ", ".join(dict.fromkeys(x["file"] for x in bad))
+        out.append(hold(summary, "damaged", [x["aside"] for x in bad],
+                        f"Your decisions in {names} couldn't be read: the file was damaged",
+                        f"It's kept as {', '.join(x['aside'] for x in bad)}, and what it held isn't applied (a crash while "
+                        "it was being saved, or an edit by hand). Make those decisions again (acknowledgements, row picks, "
+                        "figures for held inputs, this year's rate, date or method, as the file held), then acknowledge"))
     return out
 
 
@@ -1560,16 +1568,20 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
     try:  # this year's cash flows against last year's, period by period, and the checks on them
         fl = ov.deep(cashflows.layer, sess, summary, where, figs)
         cfc = ov.deep(cashflows.checks, sess, summary, where, figs, fl, unit)
-    except Exception as ex:  # beside the value: but the checks not running is itself a point to check
+    except Exception as ex:  # the checks not running holds the value: a person says why it's right without them
         fl, cfc = {"cores": [], "error": f"{type(ex).__name__}: {ex}"}, {"holds": [hold(
-            summary, "cf-error", [type(ex).__name__], "The cash-flow checks couldn't run",
-            f"{type(ex).__name__}: {ex}: this year's cash flows weren't compared with last year's", severity="check")],
+            summary, "cf-error", [type(ex).__name__, str(ex)[:200]], "The cash-flow checks couldn't run",
+            f"{type(ex).__name__}: {ex}: this year's cash flows weren't compared with last year's, so a stale forecast, "
+            "a forecast step the cash flows don't explain or a stand-in would go unseen")],
             "split": {}}
     import interest
     try:  # the interest valued: the report's against the share the overlay applies to the cash flows
         inter = interest.check(summary, facts, fl.get("trees") or {})
-    except Exception as ex:
-        inter = {"report": None, "model": None, "holds": [], "error": f"{type(ex).__name__}: {ex}"}
+    except Exception as ex:  # not checked is held, as the cash-flow checks are
+        inter = {"report": None, "model": None, "error": f"{type(ex).__name__}: {ex}", "holds": [hold(
+            summary, "interest-error", [type(ex).__name__, str(ex)[:200]], "The interest valued couldn't be checked",
+            f"{type(ex).__name__}: {ex}: the share of the cash flows the overlay values (100% or the interest held) "
+            "wasn't compared with the report's")]}
     held_inputs = ov.deep(held_list, sess, summary, where, figs)
     cfc["holds"] = cfc["holds"] + inter["holds"] + basis_holds + _gate_holds(summary, head, where, figs, unit)
     if figs.get("gaps") is not None:
@@ -1624,9 +1636,26 @@ def compute(sess, summary: dict, facts: list[dict], markdown: str, fy_end: int, 
             elif summary.get("method_choice"):
                 inv["choice"] = {k: summary["method_choice"].get(k) for k in ("by", "at", "previous")}
             this_year = methods.apply(br, inv) or this_year  # the preferred method's, with its own bridge step
-        except Exception as ex:  # beside the value, not in its way
-            inv = {"methods": [], "default": methods.DEFAULT, "preferred": methods.DEFAULT, "asked": summary.get("method"),
+        except Exception as ex:  # beside the value: but a cum value without its own method is held, below
+            inv = {"methods": [], "default": methods.DEFAULT, "preferred": methods.DEFAULT, "asked": asked,
                    "error": f"{type(ex).__name__}: {ex}"}
+            if asked and not summary.get("method"):
+                inv["by"] = "basis"
+    if this_year is not None and head.get("basis") == "cum" and not summary.get("method") \
+            and (inv or {}).get("preferred") != "overlay_on_date":
+        # a cum value keeps the period ending on the new date; without that method it's the ex figure under a cum label
+        m = next((x for x in (inv or {}).get("methods") or [] if x["key"] == "overlay_on_date"), {})
+        why = (inv or {}).get("error") or m.get("why") or "the method wasn't worked out"
+        h = hold(summary, "basis-method", [why, (inv or {}).get("preferred")],
+                 "This year's value is cum-distribution, but the period ending on the new date isn't kept",
+                 f"{why}. Without it, this year's figure is the ex-distribution one under a cum label: fix what stops "
+                 "it, choose a method on the methods card, or acknowledge with why it's right")
+        cfc["holds"].append(h)
+        if not h["acked"] and figs.get("gaps") is not None:
+            figs["gaps"]["holds"] = cfc["holds"]
+            figs["gaps"]["reliable"] = False
+            br = ov.deep(bridges, sess, summary, head, where, figs)  # the bridge stops at last year's, as held
+            this_year = None
     import specs
     try:  # the models side by side, the way a shop compares products' specifications
         spec = specs.build(sess, summary, facts, head, where, tie, figs, _flows_public(fl, unit), asm, inputs, rec,

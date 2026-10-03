@@ -61,8 +61,9 @@ def stage(eid: int, name: str) -> dict:
 def _put(eid: int, name: str, **fields) -> None:
     if "data" in fields:
         fields["data_json"] = json.dumps(fields.pop("data"), default=str)
-    with wb._lock, wb._conn() as db:
-        db.execute("INSERT OR IGNORE INTO stages(engagement_id, stage) VALUES (?,?)", (eid, name))
+    with wb._lock, wb._conn() as db:  # nothing for an engagement deleted meanwhile (a job finishing after it went)
+        db.execute("INSERT OR IGNORE INTO stages(engagement_id, stage) SELECT ?, ? WHERE EXISTS "
+                   "(SELECT 1 FROM engagements WHERE id=?)", (eid, name, eid))
         db.execute(f"UPDATE stages SET {', '.join(f'{k}=?' for k in fields)} WHERE engagement_id=? AND stage=?",
                    (*fields.values(), eid, name))
 
@@ -70,8 +71,10 @@ def _put(eid: int, name: str, **fields) -> None:
 def log(eid: int, name: str, event: str, text: str, issue: str | None = None, inputs: str | None = None,
         data=None) -> None:
     """One line of the run log: start, done, attention, blocked, failed, decide, verify, escalate, person, note."""
-    wb._exec("INSERT INTO runlog(engagement_id, at, stage, event, issue, inputs, text, data_json) VALUES (?,?,?,?,?,?,?,?)",
-             eid, time.time(), name, event, issue, inputs, text, json.dumps(data, default=str) if data is not None else None)
+    wb._exec("INSERT INTO runlog(engagement_id, at, stage, event, issue, inputs, text, data_json) SELECT ?,?,?,?,?,?,?,? "
+             "WHERE EXISTS (SELECT 1 FROM engagements WHERE id=?)",  # not for an engagement deleted meanwhile
+             eid, time.time(), name, event, issue, inputs, text, json.dumps(data, default=str) if data is not None else None,
+             eid)
 
 
 def history(eid: int, name: str | None = None, issue: str | None = None, limit: int = 60) -> list[dict]:
@@ -114,17 +117,19 @@ def equity_file(eid: int) -> Path:
 
 def equity_pick(eid: int) -> dict | None:
     """The cells picked for last year's equity value (by gpt-sol or a person), where the pairing couldn't tell."""
-    t = _file_state(equity_file(eid))
-    return json.loads(t) if t else None
+    import store
+    got = store.read(equity_file(eid), None)
+    return got if isinstance(got, dict) else None
 
 
 def set_equity_pick(eid: int, pick: dict | None, by: str, why: str = "") -> None:
+    import store
     f = equity_file(eid)
     if pick is None:
-        f.unlink(missing_ok=True)
+        with store.lock(f):
+            f.unlink(missing_ok=True)
         return
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps({**pick, "by": by, "why": why, "at": time.time()}), encoding="utf-8")
+    store.write(f, {**pick, "by": by, "why": why, "at": time.time()})
 
 
 def person_picks(picks: dict) -> dict:
@@ -166,6 +171,7 @@ def inputs(eid: int, name: str, snap: dict, holds: bool = True, rows_version: in
            _file_state(wb.method_file(eid)),  # and the method this year's value is worked out by
            _file_state(wb.terms_file(eid)),  # and the new terms a person confirmed belong in it
            _file_state(wb.acks_file(eid)),  # and the checks a person acknowledged, with the reason
+           [x["aside"] for x in wb.store.damaged(ov_dir)],  # and their files moved aside as damaged
            _result_version()]  # and the result's rules: a result worked out by older rules is worked out again
     return _h(res) if name == "result" else _h(["review", result_digest(eid)])
 
@@ -371,6 +377,8 @@ def _worker(lane: str) -> None:
 
 
 def _run(eid: int, job, key: str | None) -> None:
+    if not wb._q("SELECT 1 FROM engagements WHERE id=?", eid):  # deleted after the loop queued it: nothing to do
+        return
     if isinstance(job, tuple):  # a report: read it, or its key facts
         kind, did = job
         name = "files" if kind == "doc" else "facts"
@@ -778,9 +786,26 @@ def _rows_job(eid: int, key: str):
             "id": "equity-rows", "stage": "rows", "severity": "block", "title": "Pick last year's equity value cells first",
             "detail": "the rows to roll forward are the ones under the equity value", "go": {"step": "rebuild", "anchor": "equityPick"}}]}
     wb._rows_job(eid, cells)
-    res = (wb.rows_view(eid).get("result") or {})
+    return rows_outcome(wb.rows_view(eid).get("result") or {})
+
+
+def rows_outcome(res: dict) -> tuple:
+    """The rows stage's outcome from the agents' run: done, or, where the models couldn't be reached for rows left
+    open, a point to check with a try again."""
     n = len([d for d in res.get("decisions") or [] if d.get("decision")])
-    return "done", f"the row agents found {n} row(s) the finder wasn't sure of" if n else "this year's rows found", {}
+    note = f"the row agents found {n} row(s) the finder wasn't sure of" if n else "this year's rows found"
+    # the models not reached (Azure down, a sign-in lapsed): not "done", which nothing would rerun once they're back
+    unreached = [d for d in res.get("decisions") or [] if not d.get("decision")
+                 and str(d.get("why") or "").startswith("the models couldn't be asked")]
+    left = [d for d in res.get("decisions") or [] if not d.get("decision")]
+    if unreached or (res.get("models_error") and left):  # (no model needed where nothing was left open)
+        unreached = unreached or left
+        said = res.get("models_error") or unreached[0]["why"]
+        return "attention", note + "; the models couldn't be reached", {"needs": [{
+            "id": "rows-models", "stage": "rows", "severity": "check", "retry": "rows",
+            "title": f"The models couldn't be reached for {len(unreached) or 'the'} row(s) the finder wasn't sure of",
+            "detail": f"{said}. Those rows wait for you; try again once the models are back"}]}
+    return "done", note, {}
 
 
 def _time_text(x: dict, t: float) -> str:
@@ -829,8 +854,10 @@ def _result_job(eid: int, key: str):
     g = res["figures"].get("gaps")
     dc = (g or {}).get("date_cells") or {}
     for h in (g or {}).get("holds") or []:  # this year's cash flows against last year's (cashflows.py)
-        anchor = ("bridgeCard" if h["id"].startswith(("cf-split", "cf-sign")) else "compareCard"
-                  if h["id"] in ("basis", "interest", "interest-two") else "tieCard" if h["id"].startswith(("rebuild-", "tie-"))
+        anchor = ("bridgeCard" if h["id"].startswith(("cf-split", "cf-sign")) or h["id"] == "damaged"
+                  else "methodsCard" if h["id"] == "basis-method"
+                  else "compareCard" if h["id"] in ("basis", "interest", "interest-two", "interest-error")
+                  else "tieCard" if h["id"].startswith(("rebuild-", "tie-"))
                   else "datesCard" if h["id"] == "roll-assumed" else "termsCard" if h["id"] == "terms-error"
                   else "linesCard" if h["id"] == "lines-error" else "flowsCard")
         step = "rebuild" if anchor == "tieCard" else "workbench" if anchor == "datesCard" else "result"
@@ -1192,7 +1219,7 @@ KINDS = (("fact-", "confirm-fact", "A fact to confirm"), ("missing-", "add-fact"
          ("new-lines", "check-lines", "Cash-flow lines to check"), ("scenario", "check-scenario", "A scenario to confirm"),
          ("date-overlay", "check-date", "A date to check"),
          ("date", "confirm-date", "A date to confirm"), ("equity", "pick-cells", "Cells to pick"),
-         ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),
+         ("rows-models", "retry", "A step to try again"), ("damaged", "check-decisions", "Decisions to make again"), ("rows", "find-rows", "Rows to find"), ("reconcile-", "check-reconcile", "A reconciliation to check"),
          ("rate-", "check-input", "A model input to check"), ("growth-", "check-input", "A model input to check"),
          ("franking-", "check-input", "A model input to check"), ("tie-", "check-tie", "A tie to check"),
          ("review-", "review-point", "A review point"), ("failed-", "retry", "A step that failed"),

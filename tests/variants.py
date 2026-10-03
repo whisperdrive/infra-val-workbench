@@ -7,7 +7,10 @@ measured on them: how many rows each settles rightly, leaves open for the models
 
 The changes: revised figures only; rows renamed; a downside case inserted above the base; the sheet renamed; a
 prior-forecast block (last year's figures, by formulas) beside renamed rows; rows reordered in their block; a row
-dropped. All names and figures are made up.
+dropped; and, from the second review, copies of the block whose headings don't name last year's (the base renamed,
+no headings, a P90 above a P50, the base moved to its own sheet), a rebuilt model with a low case beside a revised
+central one, and two rows merged. KNOWN_WRONG lists the kinds the tools still get wrong, until they're fixed. All
+names and figures are made up.
 """
 import sys
 from datetime import date
@@ -21,42 +24,65 @@ from xlsxwriter.utility import xl_col_to_name as COL  # noqa: E402
 import build_map  # noqa: E402
 
 ENDS = [date(2026 + k, 6, 30) for k in range(8)]
+# kinds of change the row tools still settle wrongly (the second review, 3 October 2026; docs/hardening.md S1, S9):
+# taken off as each is fixed, so the measure stays honest and a new wrong row anywhere else fails the check
+KNOWN_WRONG = {"downside above, base renamed", "downside above, no headings", "P90 above, base as P50",
+               "rebuilt, low case beside a revised central", "costs and tax merged"}
 LINES = (("Revenue", 100.0), ("Operating costs", -40.0), ("Tax paid", -15.0))  # then Distributions, their sum
 
 
-def _book(path: Path, sheet="CF", blocks=(("Base case", 1.0, None),), prior_block=False, order=None, drop=None) -> dict:
+def _book(path: Path, sheet="CF", blocks=(("Base case", 1.0, None),), prior_block=False, order=None, drop=None,
+          merge=None) -> dict:
     """A client model: blocks of lines under headings, each ending in Distributions (the sum), and an Equity value
-    reading the base case's. blocks: (heading, growth on last year's, labels {line: label} or None). -> {(heading,
-    line): (sheet, row)} (1-based)."""
+    reading the base case's. blocks: (key, growth on last year's, labels {line: label} or None[, heading shown (None:
+    no heading; default the key)[, sheet (default the model's sheet)]]). merge: (line, line, label): the two lines as
+    one. -> {(key, line): (sheet, row)} (1-based)."""
     wb = xlsxwriter.Workbook(path)
     dt = wb.add_format({"num_format": "dd-mmm-yy"})
-    ws = wb.add_worksheet(sheet)
-    ws.write(1, 1, "Period ending")
-    for k, e in enumerate(ENDS):
-        ws.write_datetime(1, 3 + k, e, dt)
-    where, r = {}, 3
-    for heading, g, names in blocks:
-        ws.write(r, 0, heading)
+    sheets, next_row = {}, {}
+
+    def ws_for(name):
+        if name not in sheets:
+            ws = sheets[name] = wb.add_worksheet(name)
+            ws.write(1, 1, "Period ending")
+            for k, e in enumerate(ENDS):
+                ws.write_datetime(1, 3 + k, e, dt)
+            next_row[name] = 3
+        return sheets[name]
+    ws_for(sheet)
+    where = {}
+    for b in blocks:
+        key, g, names = b[:3]
+        heading = b[3] if len(b) > 3 else key
+        on = b[4] if len(b) > 4 and b[4] else sheet
+        ws, r = ws_for(on), next_row.get(on, 3)
+        if heading:
+            ws.write(r, 0, heading)
         top = r + 1
         lines = [x for x in LINES if x[0] != drop]
+        if merge:
+            a, b2, label = merge
+            both = sum(v for n, v in lines if n in (a, b2))
+            lines = [(label, both) if n == a else (n, v) for n, v in lines if n != b2]
         if order:
             lines = [next(x for x in lines if x[0] == n) for n in order if any(x[0] == n for x in lines)]
         for i, (line, base) in enumerate(lines):
             ws.write(top + i, 1, (names or {}).get(line, line))
             for k in range(len(ENDS)):
                 ws.write_number(top + i, 3 + k, base * g * 1.03 ** k)
-            where[(heading, line)] = (sheet, top + i + 1)
+            where[(key, line)] = (on, top + i + 1)
         dr = top + len(lines)
         ws.write(dr, 1, (names or {}).get("Distributions", "Distributions"))
         for k in range(len(ENDS)):
             c = COL(3 + k)
-            ws.write_formula(dr, 3 + k, f"=SUM({c}{top + 1}:{c}{dr})", None, sum(b for _, b in lines) * g * 1.03 ** k)
-        where[(heading, "Distributions")] = (sheet, dr + 1)
-        r = dr + 2
-    base = next(b for b in blocks if b[0] == "Base case")
-    bd = where[("Base case", "Distributions")]
+            ws.write_formula(dr, 3 + k, f"=SUM({c}{top + 1}:{c}{dr})", None, sum(v for _, v in lines) * g * 1.03 ** k)
+        where[(key, "Distributions")] = (on, dr + 1)
+        next_row[on] = dr + 2
+    ws, r = sheets[sheet], next_row[sheet]
+    bs, bd = where[("Base case", "Distributions")]
+    ref = "" if bs == sheet else f"'{bs}'!"
     ws.write(r, 1, "Equity value")
-    ws.write_formula(r, 2, f"=SUM(D{bd[1]}:{COL(3 + len(ENDS) - 1)}{bd[1]})", None, 1.0)
+    ws.write_formula(r, 2, f"=SUM({ref}D{bd}:{ref}{COL(3 + len(ENDS) - 1)}{bd})", None, 1.0)
     if prior_block:  # last year's figures, by formulas from a sheet of them: a prior-forecast comparison
         pf = wb.add_worksheet("Prior")
         ws.write(r + 2, 0, "Last valuation's forecast")
@@ -88,6 +114,18 @@ def pairs(out: Path) -> list[dict]:
         ("everything renamed", {"blocks": (("Base case", 1.04, {**renames, "Revenue": "Sales"}),)}),
         ("prior-forecast block, downside", {"blocks": (("Downside case", 0.95, None), ("Base case", 1.04, None)),
                                             "prior_block": True}),
+        # the second review's (3 October 2026): the row tools get these wrong today, listed in KNOWN_WRONG until fixed
+        ("downside above, base renamed", {"blocks": (("Downside case", 0.93, None),
+                                                      ("Base case", 1.04, None, "Management forecast"))}),
+        ("downside above, no headings", {"blocks": (("Downside case", 0.93, None, None), ("Base case", 1.04, None, None))}),
+        ("P90 above, base as P50", {"blocks": (("P90 case", 0.85, None), ("Base case", 1.04, None, "P50 case"))}),
+        ("base moved to its own sheet", {"blocks": (("Downside case", 0.93, None), ("Base case", 1.04, None, "Base case",
+                                                                                     "Base"))}),
+        ("rebuilt, low case beside a revised central", {"blocks": (
+            ("Low case", 0.90, {**renames, "Revenue": "Sales"}, "Low"),
+            ("Base case", 1.20, {**renames, "Revenue": "Sales"}, "Central"))}),
+        ("costs and tax merged", {"blocks": (("Base case", 1.04, None),),
+                                  "merge": ("Operating costs", "Tax paid", "Operating costs and tax")}),
     ]
     out_pairs = []
     for name, kw in specs:
@@ -96,7 +134,7 @@ def pairs(out: Path) -> list[dict]:
         db = build_map.main(str(out / f"{slug}.xlsx"), str(out / f"db_{slug}"))["db"]
         truth = {}
         for (heading, line), k in last_where.items():
-            truth[k] = where.get(("Base case", line))  # None where this year's model has no such row
+            truth[k] = where.get(("Base case", line))  # None where this year's model has no such row (merged, dropped)
         out_pairs.append({"name": name, "last": last, "this": db, "truth": truth})
     return out_pairs
 

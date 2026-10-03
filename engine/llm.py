@@ -78,6 +78,7 @@ def create(llm: OpenAI, model: str, on_wait=None, purpose: str | None = None, lo
     entry = ratelimit.acquire(model, est, on_wait)
     r, err, t0 = None, None, time.time()
     try:
+        kwargs.setdefault("store", False)  # nothing kept on Azure: no call reads an earlier response back
         r = llm.responses.create(model=model, **kwargs)
         return r
     except Exception as e:
