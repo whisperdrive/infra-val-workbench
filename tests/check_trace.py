@@ -1524,6 +1524,63 @@ def pick_card_check() -> None:
           "is another row now; in a model without the row, nothing found)")
 
 
+def agent_context_check() -> None:
+    """The row agents' context between calls (rowagent.agent_row, with a scripted reader): a note learned on one step is
+    in every later prompt (and kept for the other rows); the searcher's own reasons stay in its trail; the reviewer sees
+    that trail, the row's role in the valuation, and that a candidate looks like a copy of last year's figures."""
+    import overlay as ov
+    import rowagent
+    import rowfind
+    out = Path(tempfile.mkdtemp(prefix="context_"))
+    ends = [date(2026 + k, 6, 30) for k in range(6)]
+
+    def book(name, this):
+        wb = xlsxwriter.Workbook(out / f"{name}.xlsx")
+        dt = wb.add_format({"num_format": "dd-mmm-yy"})
+        ws = wb.add_worksheet("CF")
+        ws.write(1, 1, "Period ending")
+        ws.write(3, 0, "Cash flow")
+        for i, lab in enumerate(("Revenue", "Operating costs", "Cash to equity" if this else "Distributions")):
+            ws.write(4 + i, 1, lab)
+        for k, e in enumerate(ends):
+            c = COL(3 + k)
+            ws.write_datetime(1, 3 + k, e, dt)
+            ws.write_number(4, 3 + k, 100.0 * (1.05 if this else 1) * 1.03 ** k)
+            ws.write_number(5, 3 + k, -40.0 * (1.05 if this else 1) * 1.03 ** k)
+            ws.write_formula(6, 3 + k, f"={c}5+{c}6", None, 60.0 * (1.05 if this else 1) * 1.03 ** k)
+        wb.close()
+        return ov.Workbook(build_map.main(str(out / f"{name}.xlsx"), str(out / f"db_{name}"))["db"])
+    last, this = book("last", False), book("this", True)
+    f = rowfind.RowFinder(ov.RowMap(last, this), last, this)
+    f.since = ov.serial(date(2025, 6, 30))
+    script = [{"action": "search", "query": "equity", "row": None, "why": "the label may have changed",
+               "confidence": "medium", "note": "this year's cash-flow sheet renames distributions"},
+              {"action": "propose", "row": "CF!r7", "query": None, "why": "made of revenue and costs, as last year's",
+               "confidence": "high", "note": None}]
+    prompts = []
+
+    class Reader:
+        model, reviewer_model = "luna", "sol"
+
+        def _call(self, model, prompt, png, schema, purpose):
+            prompts.append((purpose, prompt))
+            if purpose == "row-review":
+                return {"verdict": "accept", "why": "the same line item", "better_row": None}
+            return script[len([p for p, _ in prompts if p == "row-agent"]) - 1]
+    notes = []
+    got = rowagent.agent_row(Reader(), f, {"sheet": "CF", "r": 7, "role": "read by the overlay at DCF!r5; it reaches "
+                                                                         "the equity value"}, notes=notes)
+    assert got["decision"] == ("CF", 7), got
+    assert notes == ["this year's cash-flow sheet renames distributions"], notes
+    luna2 = [p for k, p in prompts if k == "row-agent"][1]
+    sol = next(p for k, p in prompts if k == "row-review")
+    assert "renames distributions" in luna2 and "because: the label may have changed" in luna2, luna2[-900:]
+    assert "the label may have changed" in sol and "reaches the equity value" in sol and "renames distributions" in sol, sol[-1200:]
+    assert "means the same" in sol and "sanity check" in sol
+    print("agent context: ok (a note learned on one step in every later prompt and kept; the searcher's reasons in its "
+          "trail; the reviewer sees the trail, the row's role in the valuation and the notes)")
+
+
 if __name__ == "__main__":
     main()
     mid_year_check()
@@ -1547,3 +1604,4 @@ if __name__ == "__main__":
     case_column_check()
     meaning_check()
     pick_card_check()
+    agent_context_check()

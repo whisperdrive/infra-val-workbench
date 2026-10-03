@@ -1901,7 +1901,18 @@ def _rows_job(eid: int, cells: list[str]) -> None:
         reader = docingest.Reader(e["model"] or DEFAULT_MODEL, e["reviewer_model"] or DEFAULT_REVIEWER, _logger(eid))
     except Exception as ex:
         why = friendly(ex)
-    res = rowagent.run(sess, summary, cells, step, reader)
+    nf = OUT / "overlays" / f"e{eid}" / "notes.json"  # what the agents learned about this year's model, kept
+    try:
+        notes = json.loads(nf.read_text(encoding="utf-8")) if nf.exists() else []
+        notes = notes if isinstance(notes, list) else []
+    except (OSError, ValueError):
+        notes = []
+    if notes and (notes[0] if isinstance(notes[0], dict) else {}).get("model") != sess.current.path:
+        notes = []  # learned about another version of this year's model
+    kept = [n["note"] for n in notes if isinstance(n, dict) and n.get("note")]
+    res = rowagent.run(sess, summary, cells, step, reader, kept)
+    nf.parent.mkdir(parents=True, exist_ok=True)
+    nf.write_text(json.dumps([{"note": n, "model": sess.current.path} for n in res.get("notes") or []]), encoding="utf-8")
     if reader is not None:
         res["models"] = {"proposes": reader.model, "checks": reader.reviewer_model}
     else:

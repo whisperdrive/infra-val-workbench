@@ -141,11 +141,36 @@ def by_meaning(finder, s: str, r: int) -> dict | None:
             "rebuilt": True}
 
 
-def run(sess, summary: dict, cells: list[str], step=None, reader=None) -> dict:
+def role_of(sess, summary: dict, cells: list[str], s: str, r: int) -> str | None:
+    """A client row's role in last year's valuation, in words: the overlay rows that read it and the path its figures
+    take to the equity value (structure.lineage), or None."""
+    import structure
+    try:
+        w = summary.get("wiring") or {}
+        pri = sess.prior or sess.ov
+        targets = {ovmod.parse_a1(c)[:2] for c in cells}
+        L = structure.lineage(pri.path, (s, r), w["overlay"]["db_path"], w.get("client_link"), targets)
+    except Exception:
+        return None
+    olab, plab = sess.ov.labels(), pri.labels()
+    reads = L.get("overlay_reads") or []
+    if not reads and not L.get("reaches_value"):
+        return None
+    name = lambda k, lab: f"{k[0]}!r{k[1]} {lab.get(k, '')}".strip()
+    out = "read by the overlay at " + "; ".join(name(k, olab) for k in reads[:4]) if reads else ""
+    if L.get("via"):
+        cut = L["via"].index("(the overlay)") if "(the overlay)" in L["via"] else 0
+        path = [name(k, olab) for k in L["via"][cut + 1:]]
+        out += ("; " if out else "") + "it reaches the equity value through " + " → ".join(path[:6])
+    return out or None
+
+
+def run(sess, summary: dict, cells: list[str], step=None, reader=None, notes: list | None = None) -> dict:
     """One pass over the rows the gate is waiting on: by what they mean, then (with a reader) by the models. Session
     work goes through overlay.deep (one thread for every session), a step at a time, and the model calls happen
     outside it, so the page stays responsive while the agents work."""
     step = step or (lambda msg: None)
+    notes = notes if notes is not None else []
     finder = sess.rowmap
     if not finder:
         return {"decisions": [], "why": "no current client model"}
@@ -172,9 +197,12 @@ def run(sess, summary: dict, cells: list[str], step=None, reader=None) -> dict:
     if reader is not None and todo:
         done = [0]
 
+        for d in todo:
+            d["role"] = ovmod.deep(role_of, sess, summary, cells, d["sheet"], d["r"])
+
         def work(d):
             try:
-                got = agent_row(reader, finder, d)
+                got = agent_row(reader, finder, d, notes=notes)
             except Exception as e:  # a model that isn't there: the row stays open, the rest go on
                 got = {"decision": None, "why": f"the models couldn't be asked: {type(e).__name__}: {e}"[:300]}
             done[0] += 1
@@ -198,14 +226,14 @@ def run(sess, summary: dict, cells: list[str], step=None, reader=None) -> dict:
     rounds = []
     while reader is not None and after.get("zero_roll_off") and len(rounds) < ROUNDS:
         step(f"Round {len(rounds) + 1}: {len(after['zero_roll_off'])} figure(s) far from last year's at last year's date")
-        r = one_round(reader, finder, after, decisions, rows, step)
+        r = one_round(reader, finder, after, decisions, rows, step, sess, summary, cells, notes)
         rounds.append(r)
         if not r["revisited"]:
             break
         step("Checking the figures again")
         after = ovmod.deep(result._gaps, sess, summary, cells) or {}
         r["still_off"] = [x["label"] for x in after.get("zero_roll_off") or []]
-    return {"decisions": decisions, "open_before": len(rows), "open_after": len(open_rows(after)),
+    return {"decisions": decisions, "open_before": len(rows), "open_after": len(open_rows(after)), "notes": notes,
             "reliable_after": after.get("reliable"), "rounds": rounds,
             "zero_roll_off": after.get("zero_roll_off") or []}
 
@@ -248,7 +276,9 @@ What was decided so far:
 {decisions}
 
 Name at most {n} rows to look at again ("Sheet!rN" as above), the most likely cause first, each with why and what
-to look for in this year's model. Say done if none of them could explain the gap."""
+to look for in this year's model: the row that means what last year's row meant (the same line item, case, share and
+basis), not the row whose numbers are closest. A row far from last year's may be right (a real revision); one equal
+to last year's, in a revised model, may be a copy. Say done if none of them could explain the gap."""
 _ADVICE = {"type": "json_schema", "name": "row_advice", "strict": True, "schema": {
     "type": "object", "additionalProperties": False, "required": ["rows", "done"],
     "properties": {"done": {"type": "boolean"}, "rows": {"type": "array", "items": {
@@ -256,7 +286,8 @@ _ADVICE = {"type": "json_schema", "name": "row_advice", "strict": True, "schema"
         "properties": {"row": {"type": "string"}, "why": {"type": "string"}, "look_for": {"type": "string"}}}}}}}
 
 
-def one_round(reader, finder, gaps: dict, decisions: list[dict], rows: list[dict], step) -> dict:
+def one_round(reader, finder, gaps: dict, decisions: list[dict], rows: list[dict], step, sess=None, summary=None,
+              cells=None, notes=None) -> dict:
     """Sol advises which rows to look at again for the figures still off; luna looks again at each with the advice."""
     sus = ovmod.deep(suspects, finder, gaps)
     figs = "\n".join(f"- {x['label']}: {x['value']} at last year's date, {x['ratio']}x last year's" for x in gaps["zero_roll_off"])
@@ -285,8 +316,9 @@ def one_round(reader, finder, gaps: dict, decisions: list[dict], rows: list[dict
         note = (f"A first pass didn't reproduce last year's figures at last year's date ({figs.strip()}). "
                 f"A reviewer advises looking again at this row: {a['why']} Look for: {a['look_for']}"
                 + (f" It was matched to {before[0]}!r{before[1]}." if before else ""))
+        x["role"] = ovmod.deep(role_of, sess, summary, cells, k[0], k[1]) if sess is not None and cells else None
         try:
-            got = agent_row(reader, finder, x, note)
+            got = agent_row(reader, finder, x, note, notes)
         except Exception as e:
             got = {"decision": None, "why": f"the models couldn't be asked: {type(e).__name__}: {e}"[:300]}
         rec = {"row": a["row"], "advice": a["why"], "why": got.get("why"), "review": got.get("review"),
@@ -313,50 +345,61 @@ def one_round(reader, finder, gaps: dict, decisions: list[dict], rows: list[dict
 # ---- the models ----------------------------------------------------------------------------------------------
 
 LUNA = """You find, in this year's version of a client's financial model, the row that is the same line item as a
-row of last year's model. The versions can differ a lot: rows moved, renamed, split, restructured, sheets renamed
-or rebuilt, and a row may have no label (a block of figures under a heading). Forecasts are revised between
-valuations, not replaced: the same line item carries numbers close to last year's in the periods both models have,
-and its actual years usually equal. Beware of lookalikes: a reconciliation sheet of pasted values (rows like
-"LINKED ...", typed values where last year's row was formulas) copies last year's numbers but isn't the model's own
-row; an actuals sheet has the history and nothing after it; a total or subtotal is not its parts.
+row of last year's model: the same thing, measured the same way, on the same basis. Judge by what it means: its
+label and its block's heading, where it sits, what it's worked out from and what it feeds, and its role in the
+valuation. Its numbers are a sanity check, not the answer: forecasts are revised between valuations, so the right row
+is usually close to last year's but rarely the closest. The rows closest to last year's are often lookalikes: a
+prior-forecast or reconciliation block holding last year's figures, another scenario or case (a downside block, a
+management case column), the same line at 100% where last year's was a share (or the reverse), nominal against real,
+an actuals-only row, a total of it or a part of it. The versions can differ a lot: rows moved, renamed, split,
+sheets renamed or rebuilt, and a row may have no label.
 
 Last year's row:
 {row}
-
+{role}
 This year's candidates so far, each checked against last year's numbers:
 {candidates}
-{context}{history}
+{notes}{context}{history}
 Reply with one action:
 - "search": rows of this year's model with these words in their label or section (query: a few words)
 - "inspect": one row of this year's model in full, checked against last year's (row: "Sheet!rN")
-- "propose": this is the row (row: "Sheet!rN"): why, and how confident you are
+- "propose": this is the row (row: "Sheet!rN"): why it means the same, and how confident you are
 - "not_in_this_model": this year's model has no such line item (why)
+and, in note, anything you've learned about how this year's model is built that would help find other rows (a sheet
+renamed or split, a new case block, quarterly with an annual summary, units changed), else null.
 {left} action(s) left{must}."""
 
 SOL = """You review a proposed match between a row of last year's client model and a row of this year's version of
-the model, before the valuation is rolled forward on it. Accept only if it is the same line item: the same thing,
-measured the same way, on the same basis (not a total of it, a part of it, a pasted copy, or an actuals-only row).
-The numbers check compares the two over the periods both models have, with no roll: forecasts are revised, not
-replaced, so a large median difference needs a reason you can see (a sign convention, units), or it's a reject.
+the model, before the valuation is rolled forward on it. Accept only if it means the same: the same line item,
+measured the same way, on the same basis (the same case or scenario, the same share or 100%, nominal or real, the
+same period's), with the same role (worked out from the same things, feeding the same place). Its numbers are a
+sanity check: forecasts are revised, so a moderate difference is expected; a large one needs a reason you can see
+(a sign convention, units). A row with last year's figures exactly, in a model whose other rows were revised, is
+likely a copy of last year's figures, not this year's line item. Reject a total of it, a part of it, a pasted copy,
+an actuals-only row, another case's row.
 
 Last year's row:
 {row}
-
+{role}
 Proposed this year: {proposed}
 The numbers check: {check}
 Why it was proposed: {why}
 
+How it was found (the searcher's steps):
+{trail}
+
 The other candidates:
 {candidates}
-
+{notes}
 Reply with your verdict (accept or reject), why in one or two sentences, and better_row ("Sheet!rN") if one of the
 other candidates is clearly the right one, else null."""
 
 _S, _N = {"type": "string"}, {"type": ["string", "null"]}
 _ACTION = {"type": "json_schema", "name": "row_action", "strict": True, "schema": {
-    "type": "object", "additionalProperties": False, "required": ["action", "query", "row", "why", "confidence"],
+    "type": "object", "additionalProperties": False, "required": ["action", "query", "row", "why", "confidence", "note"],
     "properties": {"action": {"type": "string", "enum": ["search", "inspect", "propose", "not_in_this_model"]},
-                   "query": _N, "row": _N, "why": _S, "confidence": {"type": "string", "enum": ["high", "medium", "low"]}}}}
+                   "query": _N, "row": _N, "why": _S, "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                   "note": _N}}}
 _VERDICT = {"type": "json_schema", "name": "row_verdict", "strict": True, "schema": {
     "type": "object", "additionalProperties": False, "required": ["verdict", "why", "better_row"],
     "properties": {"verdict": {"type": "string", "enum": ["accept", "reject"]}, "why": _S, "better_row": _N}}}
@@ -382,6 +425,15 @@ def describe(finder, wb, s: str, r: int, which: int) -> str:
     name = lambda k: f"{k[0]}!r{k[1]} {labels.get(k, '')}".strip()
     L = [f"{s}!r{r} label: '{labels.get((s, r), '')}'" + (f"; section: {section}" if section else "")
          + (f"; units: {units}" if units else "")]
+    try:
+        import structure
+        st = finder._structure(wb)
+        b = structure.block_of(st["blocks"], s, r)
+        kind = st["info"].get((s, r), {}).get("kind")
+        L.append(f"kind: {kind}" + (f"; in the block headed '{b['heading']}', row {b['rows'].index(r) + 1} of "
+                                     f"{len(b['rows'])}" if b and b.get("heading") else ""))
+    except Exception:
+        pass
     if nf is not None:
         L.append(f"kind: {nf} formula(s), {nc} typed value(s)")
     if around:
@@ -391,8 +443,14 @@ def describe(finder, wb, s: str, r: int, which: int) -> str:
     L.append("values: " + (vals or "none by period"))
     if reads.get((s, r)):
         L.append("reads: " + "; ".join(name(k) for k in sorted(reads[(s, r)])[:8]))
+        two = {y for x in reads[(s, r)] for y in reads.get(x, ())} - set(reads[(s, r)]) - {(s, r)}
+        if two:
+            L.append("  and through them: " + "; ".join(name(k) for k in sorted(two)[:6]))
     if read_by.get((s, r)):
         L.append("read by: " + "; ".join(name(k) for k in sorted(read_by[(s, r)])[:8]))
+        two = {y for x in read_by[(s, r)] for y in read_by.get(x, ())} - set(read_by[(s, r)]) - {(s, r)}
+        if two:
+            L.append("  and on to: " + "; ".join(name(k) for k in sorted(two)[:6]))
     return "\n".join(L)
 
 
@@ -421,48 +479,59 @@ def _row(text: str | None, finder) -> tuple | None:
     return k if finder.current.db.execute("SELECT 1 FROM rows WHERE sheet=? AND row=?", k).fetchone() else None
 
 
-def agent_row(reader, finder, x: dict, note: str | None = None) -> dict:
+def agent_row(reader, finder, x: dict, note: str | None = None, notes: list | None = None) -> dict:
     """Luna finds this year's row for one of last year's, sol checks it: {"decision": (sheet, row) | STAND_IN |
-    None, "why", "review", "check", "calls"}. The session's work goes through overlay.deep."""
+    None, "why", "review", "check", "calls"}. The session's work goes through overlay.deep. notes: what the agents
+    have learned about this year's model so far (shared by every row, kept between runs), read and added to."""
     s, r = x["sheet"], x["r"]
     deep = ovmod.deep
     me = deep(describe, finder, finder.prior, s, r, 0)
+    role = f"Its role in the valuation: {x['role']}\n" if x.get("role") else ""
     cands = deep(lambda: [(k, view(finder, s, r, k)) for k in candidates(finder, s, r)[:8]])
     cand_text = "\n\n".join(v for _, v in cands) or "none found yet"
+    notes = notes if notes is not None else []
+    said = lambda: ("\nWhat's known about this year's model (from the other rows' searches):\n"
+                    + "\n".join(f"- {n}" for n in notes[-12:]) + "\n") if notes else ""
     history, proposals, calls = [], 0, {"luna": 0, "sol": 0}
     for turn in range(MAX_TURNS):
         left = MAX_TURNS - turn
-        prompt = LUNA.format(row=me, candidates=cand_text, left=left, context=f"\nContext: {note}\n" if note else "",
+        prompt = LUNA.format(row=me, role=role, candidates=cand_text, left=left, notes=said(),
+                             context=f"\nContext: {note}\n" if note else "",
                              history=("\nWhat you've done so far:\n" + "\n\n".join(history) + "\n") if history else "",
                              must=": propose a row or say it isn't in this model" if left == 1 else "")
         a = reader._call(reader.model, prompt, None, _ACTION, "row-agent")
         calls["luna"] += 1
-        act = a.get("action")
+        if a.get("note") and a["note"] not in notes:  # learned about the model: every later call sees it
+            notes.append(a["note"][:300])
+        act, why = a.get("action"), a.get("why") or ""
         if act == "search":
             found = deep(lambda: [view(finder, s, r, k) for k in search(finder, a.get("query") or "")[:6]])
-            history.append(f"You searched for '{a.get('query')}':\n" + ("\n\n".join(found) or "nothing found"))
+            history.append(f"You searched for '{a.get('query')}' (because: {why}):\n" + ("\n\n".join(found) or "nothing found"))
         elif act == "inspect":
             k = _row(a.get("row"), finder)
-            history.append(f"You inspected {a.get('row')}:\n" + (deep(view, finder, s, r, k) if k else "no such row"))
+            history.append(f"You inspected {a.get('row')} (because: {why}):\n" + (deep(view, finder, s, r, k) if k else "no such row"))
         elif act == "not_in_this_model":
-            return {"decision": rowfind.STAND_IN, "why": a.get("why"), "confidence": a.get("confidence"), "calls": calls}
+            return {"decision": rowfind.STAND_IN, "why": why, "confidence": a.get("confidence"), "calls": calls}
         elif act == "propose":
             k = _row(a.get("row"), finder)
             if not k:
                 history.append(f"You proposed {a.get('row')}, which isn't a row of this year's model.")
                 continue
             chk = deep(finder.check, s, r, k)
+            copy = deep(finder.suspect_copy, s, r, k)
             others = "\n\n".join(v for kk, v in cands if kk != k) or "none"
-            v = reader._call(reader.reviewer_model, SOL.format(row=me, proposed=deep(view, finder, s, r, k),
-                                                               check=chk["text"], why=a.get("why"), candidates=others)
+            trail = "\n".join(h.split("\n")[0] for h in history) or "proposed straight away"
+            v = reader._call(reader.reviewer_model, SOL.format(row=me, role=role, proposed=deep(view, finder, s, r, k),
+                                                               check=chk["text"] + (f"; {copy}" if copy else ""), why=why,
+                                                               trail=trail, candidates=others, notes=said())
                              + (f"\n\nContext: {note}" if note else ""),
                              None, _VERDICT, "row-review")
             calls["sol"] += 1
             if v.get("verdict") == "accept":
-                return {"decision": k, "why": a.get("why"), "confidence": a.get("confidence"), "review": v.get("why"),
+                return {"decision": k, "why": why, "confidence": a.get("confidence"), "review": v.get("why"),
                         "check": chk, "calls": calls}
             proposals += 1
-            history.append(f"You proposed {a.get('row')}; the reviewer rejected it: {v.get('why')}"
+            history.append(f"You proposed {a.get('row')} (because: {why}); the reviewer rejected it: {v.get('why')}"
                            + (f" It suggests {v['better_row']}." if v.get("better_row") else ""))
             if proposals >= MAX_PROPOSALS:
                 return {"decision": None, "why": f"the reviewer rejected {proposals} proposals: {v.get('why')}",
