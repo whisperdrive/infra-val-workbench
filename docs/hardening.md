@@ -137,9 +137,11 @@ reviewer's own session.
   whose rows reach the row of the model's own valuation last year's row reached (the equity value, the NPV), else it's
   left in doubt for the models or a person; the agents' first pass leaves it too; a pick card in copies needs its place
   and figures. Measured: the review's copy cases right; copies nothing tells apart left open; the pack's 134 rows
-  unchanged; the reproduction (a downside 0.93× above the base) now held, not 10.6% low. **Left:** the same number of
-  copies both years, run together under no heading, swapped this year, no valuation row of the model's own, and
-  figures too close to tell: still matched by their order. Was (re-run): A downside or P90 case inserted above the base, the
+  unchanged; the reproduction (a downside 0.93× above the base) now held, not 10.6% low. **Left** (in
+  `variants.KNOWN_WRONG`): copies too small to be seen as copies of a block (fewer than three rows, a line and its
+  total), the same number of them both years, swapped this year, with no heading and no valuation row of the model's
+  own: still matched by their order, whatever their figures. Closing it means doubting every label repeated as often
+  both years where nothing tells the repeats apart, which in real models could leave many rows to pick. Was (re-run): A downside or P90 case inserted above the base, the
   base's heading renamed ("Management forecast" shares "case" with "Downside case"), no headings, or the base moved to
   another sheet: every row settled on the copy at confidence 1.0, identity, place and role all agreeing; this year's
   value 10.6% low, the zero roll inside the silent band. `structure.which_copy` takes any heading sharing a word;

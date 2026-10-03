@@ -26,23 +26,23 @@ import build_map  # noqa: E402
 ENDS = [date(2026 + k, 6, 30) for k in range(8)]
 # kinds of change the row tools still settle wrongly (the second review, 3 October 2026; docs/hardening.md S1, S9):
 # taken off as each is fixed, so the measure stays honest and a new wrong row anywhere else fails the check
-KNOWN_WRONG = {"rebuilt, low case beside a revised central", "costs and tax merged"}
+KNOWN_WRONG = {"rebuilt, low case beside a revised central", "costs and tax merged", "small copies swapped, close figures"}
 # kinds where leaving the rows open (for the models or a person) is the right answer: nothing in the model says which
 OPEN_OK = {"downside above, no headings, no value row", "downside above, base renamed, the value reads both",
-           "copies swapped, no headings, no value row"}
+           "copies swapped, no headings, no value row", "copies swapped, close figures"}
 LINES = (("Revenue", 100.0), ("Operating costs", -40.0), ("Tax paid", -15.0))  # then Distributions, their sum
 
 
 def _book(path: Path, sheet="CF", blocks=(("Base case", 1.0, None),), prior_block=False, order=None, drop=None,
-          merge=None, value="base") -> dict:
+          merge=None, value="base", lines=LINES) -> dict:
     """A client model: blocks of lines under headings, each ending in Distributions (the sum), and an Equity value
     reading the base case's. blocks: (key, growth on last year's, labels {line: label} or None[, heading shown (None:
     no heading; default the key)[, sheet (default the model's sheet)]]). merge: (line, line, label): the two lines as
-    one. value: the Equity value reads the base case's distributions ("base"), every block's ("both"), or there's none
+    one. lines: the block's lines (before Distributions). value: the Equity value reads the base case's distributions ("base"), every block's ("both"), or there's none
     (None). -> {(key, line): (sheet, row)} (1-based)."""
     wb = xlsxwriter.Workbook(path)
     dt = wb.add_format({"num_format": "dd-mmm-yy"})
-    sheets, next_row = {}, {}
+    sheets, next_row, lines_ = {}, {}, lines
 
     def ws_for(name):
         if name not in sheets:
@@ -62,7 +62,7 @@ def _book(path: Path, sheet="CF", blocks=(("Base case", 1.0, None),), prior_bloc
         if heading:
             ws.write(r, 0, heading)
         top = r + 1
-        lines = [x for x in LINES if x[0] != drop]
+        lines = [x for x in lines_ if x[0] != drop]
         if merge:
             a, b2, label = merge
             both = sum(v for n, v in lines if n in (a, b2))
@@ -84,8 +84,7 @@ def _book(path: Path, sheet="CF", blocks=(("Base case", 1.0, None),), prior_bloc
     ws, r = sheets[sheet], next_row[sheet]
     reads = [where[(b[0], "Distributions")] for b in blocks if value == "both" or b[0] == "Base case"] if value else []
     if reads:
-        refs = ",".join(f"{'' if bs == sheet else repr(bs).replace(chr(34), chr(39))+'!'}D{bd}:"
-                        f"{'' if bs == sheet else repr(bs).replace(chr(34), chr(39))+'!'}{COL(3 + len(ENDS) - 1)}{bd}"
+        refs = ",".join(f"{'' if bs == sheet else chr(39) + bs + chr(39) + '!'}D{bd}:{COL(3 + len(ENDS) - 1)}{bd}"
                         for bs, bd in reads)
         ws.write(r, 1, "Equity value")
         ws.write_formula(r, 2, f"=SUM({refs})", None, 1.0)
@@ -132,6 +131,12 @@ def pairs(out: Path) -> list[dict]:
             ("Base case", 1.20, {**renames, "Revenue": "Sales"}, "Central"))}),
         ("costs and tax merged", {"blocks": (("Base case", 1.04, None),),
                                   "merge": ("Operating costs", "Tax paid", "Operating costs and tax")}),
+        # a summary sheet repeating the lines under a heading of its own: the base case's heading names it
+        ("a summary sheet repeats the lines", {"blocks": (("Summary", 1.04, None, "Key figures", "Summary"),
+                                                          ("Base case", 1.04, None))}),
+        # the base moved to a sheet of its own, no headings: the sheet's name doesn't decide; the model's value does
+        ("base moved to its own sheet, no headings", {"blocks": (("Downside case", 0.93, None, None),
+                                                                  ("Base case", 1.04, None, None, "Base"))}),
         # copies nothing in the model tells apart (no heading names a case; no value, or every copy feeds it): left
         # open for the models or a person, never the first copy (OPEN_OK)
         ("downside above, no headings, no value row", {"blocks": (("Downside case", 0.93, None, None),
@@ -145,6 +150,19 @@ def pairs(out: Path) -> list[dict]:
                                                         "last": {"blocks": (("Base case", 1.0, None, None),
                                                                             ("Downside case", 0.9, None, None)),
                                                                  "value": None}}),
+        # ... and with copies too small to be seen as copies of a block (a line and its total): matched by their
+        # order, the residual of S1
+        ("small copies swapped, close figures", {"blocks": (("Downside case", 0.9995, None, None),
+                                                            ("Base case", 1.0, None, None)), "value": None,
+                                                 "lines": (("Revenue", 100.0),),
+                                                 "last": {"blocks": (("Base case", 1.0, None, None),
+                                                                     ("Downside case", 0.999, None, None)), "value": None,
+                                                          "lines": (("Revenue", 100.0),)}}),
+        # ... and swapped with figures too close to tell apart, the copies seen as copies: left open
+        ("copies swapped, close figures", {"blocks": (("Downside case", 0.9995, None, None),
+                                                      ("Base case", 1.0, None, None)), "value": None,
+                                           "last": {"blocks": (("Base case", 1.0, None, None),
+                                                               ("Downside case", 0.999, None, None)), "value": None}}),
     ]
     out_pairs = []
     for name, kw in specs:

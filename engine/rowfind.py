@@ -843,10 +843,12 @@ class RowFinder:
             return  # as often as last year (and no copies of a block): the occurrences match in order
         res["in_place"] = False  # its place may be the copy's: a decider below, or doubt
         info = cur["info"]
-        heading = lambda x: (blocks.get(x) or {}).get("heading") or info.get(x, {}).get("section") or x[0]
+        # a heading is the block's, else the row's section: never the sheet's name, which says where a copy is, not
+        # which case (the base moved to a sheet of its own, the downside left on last year's sheet)
+        heading = lambda x: (blocks.get(x) or {}).get("heading") or info.get(x, {}).get("section") or ""
         mine = structure.block_of(pri["blocks"], s, r)
-        want_bl = [{**mine, "heading": mine.get("heading") or pri["info"].get((s, r), {}).get("section") or s}] if mine \
-            else [{"sheet": s, "rows": [r], "heading": pri["info"].get((s, r), {}).get("section") or s}]
+        want_bl = [{**mine, "heading": mine.get("heading") or pri["info"].get((s, r), {}).get("section") or ""}] if mine \
+            else [{"sheet": s, "rows": [r], "heading": pri["info"].get((s, r), {}).get("section") or ""}]
         w = structure.which_copy(want_bl, cur["blocks"], cur["copies"], (s, r), cands, heading_of=heading)
         pick, why, how = w["pick"], w["why"], "block"
         if not pick:
@@ -876,11 +878,14 @@ class RowFinder:
                                          + "): neither the headings nor the model's own value say which is last year's"))
 
     def _prior_count(self, lab: str) -> int:
-        """How many of last year's rows have this label, on the sheets this year's are counted on."""
+        """How many of last year's rows have this label, on the sheets this year's are counted on (where the finder
+        looks only in some of this year's sheets, last year's of the same names; all of them where none has)."""
         if not hasattr(self, "_pcount"):
             self._pcount = defaultdict(int)
-            for (s_, _r), l_ in self.prior.labels().items():
-                if l_:
+            labels = self.prior.labels()
+            pool = {s_ for s_, _r in labels} & self.only if self.only is not None else None
+            for (s_, _r), l_ in labels.items():
+                if l_ and (not pool or s_ in pool):
                     self._pcount[_norm(l_)] += 1
         return self._pcount.get(lab, 0)
 
