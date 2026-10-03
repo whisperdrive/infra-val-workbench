@@ -550,7 +550,17 @@ def _roles_job(eid: int, key: str):
     if len(rl) == 4 and all(r["confirmed"] and r.get("by") == "you" for r in rl.values()):
         # a person's roles are checked in code too (this year's model not last year's, dates the right way round):
         # what fails holds, until the person says why it's right
-        bad = verify_roles(eid, {k: {"kind": r["kind"], "id": r["id"], "sheets": r["sheets"]} for k, r in rl.items()})
+        mine = {k: {"kind": r["kind"], "id": r["id"], "sheets": r["sheets"]} for k, r in rl.items()}
+        bad = verify_roles(eid, mine)
+        if bad and any(m["sheets"] is None for m in mine.values()):
+            # files placed by hand (an upload's slot) with no sheets named: the suggestion's sheets, where it picked the
+            # same file (the overlay inside a copy of the client model, the same file in two slots), then the checks again
+            a = _assignment(wb.suggest_roles(eid))
+            filled = {k: {**m, "sheets": a[k]["sheets"]} for k, m in mine.items()
+                      if m["sheets"] is None and (a.get(k) or {}).get("id") == m["id"] and a[k].get("sheets")}
+            if filled and not verify_roles(eid, {**mine, **filled}):
+                wb.confirm_roles(eid, filled, by="you")
+                return "done", "confirmed by you, the sheets named from the suggestion", {}
         if bad:
             import result
             n = _acked({"id": "role-check", "stage": "roles", "severity": "block",

@@ -206,6 +206,26 @@ takes it from there:
    prefer is this year's value, with a bridge step of its own for the move from the default. Where a
    discounting under the value can't be read here, the roll-forward is one step, not its unwind landed in the new
    forecast. A chart compares the undiscounted forecast cash flows, last year's and this year's.
+
+   **This year's cash flows are checked against last year's in code** (`cashflows.py`): every discounting under the
+   value, period by period, on last year's model and on this year's. Held: this year's discounted cash flows the same
+   as last year's while the client rows behind them were revised (a link on last year's file, a row matched wrongly);
+   a zero roll of exactly 1 while they were revised; the new-forecast step not being the cash flows' change (split
+   into revisions, periods added and dropped, the terminal value, and what moves outside the discountings: over 2% of
+   last year's value outside, held; over 0.5%, a point to check); a terminal value reading nil; this year's model
+   forecasting past the overlay's last period; last year's figures standing in. A discounting the app can't
+   recompute (XNPV, NPV, factors of its own) is time-checked from the factors the overlay works out, and held where it
+   still discounts a period ending on or before the new date, or an XNPV counts from last year's date. The interest
+   valued (the report's `interest_valued`) is checked against the share the overlay applies, and the basis of the
+   overlay cell (ex or cum, from its label or formula) against the report's. The overlay's value not rounding to the
+   report's, the rebuild more than 0.1% from what Excel saved, the roll's months assumed, another linked workbook read
+   at last year's figures, and roles you confirmed that fail the checks hold too.
+
+   **A hold can be acknowledged with a reason**: the value then goes through, the check stays listed with the reason,
+   and the workpaper's Review sheet records it with those still open. If the figures it found change, it holds again.
+   The Result page has **the models side by side** (`specs.py`): the report, the overlay as saved, the rebuild, both
+   client models and this year, row by row, last year's flagged where they don't agree. What's checked and what's left
+   to harden: `docs/hardening.md`.
 8. **Has gpt-sol review the run end to end** and says what looks implausible: once per result, like any other
    decision (a try again, or a rerun that works out the same result, keeps the points; a changed result is reviewed
    again, with the earlier points in view so the ones that still stand keep their titles).
@@ -215,7 +235,7 @@ takes it from there:
   discounts free cash flows at a WACC and deducts net debt works the same way here).
 - The conclusion is the **equity value**, low / mid / high, where the mid is the midpoint of the low and the high.
 - **Ex-distribution** by default, unless the report is overwhelmingly cum-distribution or only the cum-distribution
-  figure is in the model.
+  figure is in the model. A cum value keeps the period ending on this year's date, as a method with its own step.
 - This year's discount rate is **last year's** unless you set this year's on the Result page.
 
 ## The orchestrator
@@ -328,6 +348,9 @@ uv run python tests/check_xlruntime.py  # Excel functions in the Python runtime
   - `sourced.py`: the discount rate, terminal growth and franking credit utilisation, sourced and checked.
   - `forward.py`: an assumption traced up to the equity value, through the formulas that read it.
   - `methods.py`: this year's value worked out other ways, against the default; the preferred one.
+  - `cashflows.py`: this year's cash flows against last year's, period by period, and the checks on them.
+  - `interest.py`: the interest valued, the report's against the share the overlay applies.
+  - `specs.py`: the models side by side.
   - `scenarios.py`: the scenario each client model was saved on, this year's next to last year's, and when each was
     saved.
   - `workpaper.py`: the Excel workpaper, built in memory from the engagement's result.

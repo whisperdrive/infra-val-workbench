@@ -1106,6 +1106,53 @@ def loose_roll_check() -> None:
     assert tc["hold"] and tc["discountings"][0]["loose"] and abs(tc["discountings"][0]["off"] + rate) < 1e-6, tc
     tc, h = got["days"]
     assert tc["ok"] and h["cf-uncut"]["severity"] == "block" and "2026-06-30" in h["cf-uncut"]["detail"], (tc, h)
+    # an XNPV over the client's dates on a fixed horizon: its first date stays last year's, so this year's value is
+    # discounted to it: held
+    out = Path(tempfile.mkdtemp(prefix="xnpv_"))
+    xends = [date(2025 + k, 6, 30) for k in range(8)]
+    paths = {}
+    for which in ("prior", "current"):
+        wb = xlsxwriter.Workbook(out / f"{which}.xlsx")
+        dt = wb.add_format({"num_format": "dd-mmm-yy"})
+        cl = wb.add_worksheet("Client")
+        cl.write(5, 1, "Period ending")
+        cl.write(9, 1, "Distributions to equity")
+        for k, e in enumerate(xends):
+            cl.write_datetime(5, 3 + k, e, dt)
+            cl.write_number(9, 3 + k, 0.0 if k == 0 else (100.0 if which == "prior" else 104.0) + 5 * k)
+        if which == "prior":
+            va = wb.add_worksheet("Val")
+            va.write(4, 1, "Discount rate")
+            va.write_number(4, 2, rate)
+            va.write(5, 1, "Period ending")
+            va.write(9, 1, "Cash flow")
+            va.write(15, 1, "Equity value")
+            pv = 0.0
+            for k, e in enumerate(xends):
+                c = COL(3 + k)
+                va.write_formula(f"{c}6", f"=Client!{c}6", dt, (e - date(1899, 12, 30)).days)
+                cf = 0.0 if k == 0 else 100.0 + 5 * k
+                va.write_formula(f"{c}10", f"=Client!{c}10", None, cf)
+                pv += cf / (1 + rate) ** ((e - xends[0]).days / 365)
+            last = COL(3 + len(xends) - 1)
+            va.write_formula("C16", f"=XNPV(C5,D10:{last}10,D6:{last}6)", None, pv)
+        wb.close()
+        paths[which] = build_map.main(str(out / f"{which}.xlsx"), str(out / f"db_{which}"))["db"]
+    src, _ = xlcompile.compile_overlay(paths["prior"], ["Val"])
+    (out / "overlay_mod.py").write_text(src)
+    sess = ov.Session(str(out / "overlay_mod.py"), paths["prior"], ["Val"], None, paths["current"], None, ["Client"])
+    roll = ov.plan_roll(sess, None, {"sheets": ["Val"]}, True, vd.isoformat(), None, new.isoformat())
+    roll.setdefault("current_valuation_date", new.isoformat())
+    summary = {"wiring": {"overlay": {"db_path": paths["prior"]}}, "sheets": ["Val"], "roll": roll, "held_values": {},
+               "outputs": [{"cell": "Val!C16"}], "acks": {}}
+    figs = {"feeds": {"rebuilt": "workbook"}, "roll": {"valuation_date": new.isoformat()}, "this_year": {"Val!C16": 1.0},
+            "time": None, "gaps": {}}
+    fl = ov.deep(cashflows.layer, sess, summary, {"low": "Val!C16", "high": "Val!C16"}, figs)
+    assert fl["cores"] and fl["cores"][0]["kind"] == "xnpv" and fl["cores"][0].get("this"), fl["cores"]
+    sess.rowmap = None
+    h = {x.get("check") or x["id"]: x for x in
+         cashflows.checks(sess, summary, {"low": "Val!C16", "high": "Val!C16"}, figs, fl, lambda v: v)["holds"]}
+    assert h["cf-xnpv"]["severity"] == "block" and "2025-06-30" in h["cf-xnpv"]["title"], h
     # quarterly factors 1 / (1 + q) ^ quarter, q worked out from the annual rate in a cell of its own: the step between
     # quarters is a quarter's rate, read at the annual rate and sourced to the annual input, not the quarter's cell
     out = Path(tempfile.mkdtemp(prefix="quarters_"))
@@ -1144,7 +1191,8 @@ def loose_roll_check() -> None:
         abs(loose["period_rate"] - q) < 1e-6, loose
     print("loose roll: ok (typed period counters that don't move: the time check measures 0% a year against 8.5%, "
           "held; factors that read the date roll right but keep the period ending on the new date: held as uncut; "
-          "a quarter's rate read at the annual rate, sourced to the annual input)")
+          "a quarter's rate read at the annual rate, sourced to the annual input; an XNPV still counting from last year's "
+          "date held)")
 
 
 def interest_check() -> None:

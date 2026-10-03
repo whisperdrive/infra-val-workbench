@@ -230,8 +230,11 @@ def checks(sess, summary: dict, where: dict, figs: dict, fl: dict, unit) -> dict
     same_cores = []
     for c in have:
         lp, tp = c["last"]["periods"], c["this"]["periods"]
-        shared = [e for e in tp if e in lp and (not vd1 or e > vd1[:10]) and (abs(lp[e]["cf"]) > EXACT or abs(tp[e]["cf"]) > EXACT)]
-        if len(shared) >= MIN_PERIODS and all(_same(lp[e]["cf"], tp[e]["cf"]) for e in shared):
+        # the discrete cash flows, the terminal value left out: on a rolling horizon it moves a column, and a forecast
+        # left wholly at last year's would never look the same with it in
+        d = lambda p: p["cf"] - p["tv"]
+        shared = [e for e in tp if e in lp and (not vd1 or e > vd1[:10]) and (abs(d(lp[e])) > EXACT or abs(d(tp[e])) > EXACT)]
+        if len(shared) >= MIN_PERIODS and all(_same(d(lp[e]), d(tp[e])) for e in shared):
             same_cores.append((c, len(shared)))
     if same_cores and rows["changed"]:
         c, n = same_cores[0]
@@ -270,6 +273,9 @@ def checks(sess, summary: dict, where: dict, figs: dict, fl: dict, unit) -> dict
         if (c.get("form") or {}).get("recomputed") or not vd1:
             continue
         raw, fn = c.get("raw") or {}, (c.get("form") or {}).get("function") or "a discounting"
+        if not raw and c.get("this"):  # read period by period (an XNPV has exact inputs): this year's as the layer has it
+            raw = {"periods": {e: {"cf": p["cf"], "factor": None} for e, p in c["this"]["periods"].items()},
+                   "first_date": c["this"].get("valuation_date") if c.get("kind") == "xnpv" else None}
         ps = raw.get("periods") or {}
         past = {e: p for e, p in ps.items() if e <= vd1[:10] and abs(p["cf"]) > EXACT
                 and (p["factor"] is None or abs(p["factor"]) > EXACT)}
